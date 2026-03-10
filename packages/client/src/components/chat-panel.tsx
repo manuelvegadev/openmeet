@@ -1,5 +1,5 @@
 import type { ChatMessage } from '@openmeet/shared';
-import { Paperclip, Send } from 'lucide-react';
+import { Paperclip, Send, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,9 +10,10 @@ interface ChatPanelProps {
   messages: ChatMessage[];
   onSendText: (content: string) => void;
   onSendFile: (file: File) => void;
+  onClose?: () => void;
 }
 
-export function ChatPanel({ messages, onSendText, onSendFile }: ChatPanelProps) {
+export function ChatPanel({ messages, onSendText, onSendFile, onClose }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -51,8 +52,15 @@ export function ChatPanel({ messages, onSendText, onSendFile }: ChatPanelProps) 
   };
 
   return (
-    <div className="w-80 flex flex-col border-l bg-card">
-      <div className="p-3 font-semibold border-b">Chat</div>
+    <div className="fixed inset-0 z-50 flex flex-col bg-card md:static md:inset-auto md:z-auto md:w-80 md:border-l">
+      <div className="p-3 font-semibold border-b flex items-center justify-between">
+        <span>Chat</span>
+        {onClose && (
+          <Button variant="ghost" size="icon" className="h-7 w-7 md:hidden" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
 
       <ScrollArea className="flex-1 p-3" ref={scrollRef}>
         <div className="space-y-3">

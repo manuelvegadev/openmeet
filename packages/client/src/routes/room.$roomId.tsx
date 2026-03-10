@@ -207,7 +207,14 @@ function RoomPage() {
           onToggleEchoCancellation={media.toggleEchoCancellation}
         />
       </div>
-      {isChatOpen && <ChatPanel messages={chatMessages} onSendText={handleSendText} onSendFile={handleSendFile} />}
+      {isChatOpen && (
+        <ChatPanel
+          messages={chatMessages}
+          onSendText={handleSendText}
+          onSendFile={handleSendFile}
+          onClose={() => setIsChatOpen(false)}
+        />
+      )}
     </div>
   );
 }

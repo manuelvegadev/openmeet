@@ -84,7 +84,12 @@ export function ControlsBar({
 
       <Tooltip>
         <TooltipTrigger>
-          <Button variant={isScreenSharing ? 'secondary' : 'outline'} size="icon" onClick={onToggleScreenShare}>
+          <Button
+            variant={isScreenSharing ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={onToggleScreenShare}
+            className="hidden md:inline-flex"
+          >
             {isScreenSharing ? <MonitorOff className="h-5 w-5" /> : <Monitor className="h-5 w-5" />}
           </Button>
         </TooltipTrigger>
@@ -93,7 +98,12 @@ export function ControlsBar({
 
       <Tooltip>
         <TooltipTrigger>
-          <Button variant={isSystemAudioSharing ? 'secondary' : 'outline'} size="icon" onClick={onToggleSystemAudio}>
+          <Button
+            variant={isSystemAudioSharing ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={onToggleSystemAudio}
+            className="hidden md:inline-flex"
+          >
             {isSystemAudioSharing ? <Music2 className="h-5 w-5" /> : <Music className="h-5 w-5" />}
           </Button>
         </TooltipTrigger>
@@ -111,7 +121,12 @@ export function ControlsBar({
 
       <Tooltip>
         <TooltipTrigger>
-          <Button variant={isDebugEnabled ? 'secondary' : 'outline'} size="icon" onClick={onToggleDebug}>
+          <Button
+            variant={isDebugEnabled ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={onToggleDebug}
+            className="hidden md:inline-flex"
+          >
             <Bug className="h-5 w-5" />
           </Button>
         </TooltipTrigger>

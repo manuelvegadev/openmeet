@@ -416,9 +416,9 @@ export function useMedia() {
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 60 },
+          width: { ideal: 4096 },
+          height: { ideal: 2160 },
+          frameRate: { ideal: 144 },
         },
         audio: true,
       });
