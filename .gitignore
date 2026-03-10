@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+uploads/
+*.tsbuildinfo
+.turbo/
+.DS_Store
+.idea/
