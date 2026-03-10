@@ -36,7 +36,7 @@ function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="min-h-dvh bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-xs space-y-6">
         <div className="text-center space-y-2">
           <div className="flex items-center justify-center gap-2">

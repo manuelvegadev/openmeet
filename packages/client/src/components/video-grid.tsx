@@ -50,15 +50,15 @@ export function VideoGrid({
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const portrait = useIsPortrait();
 
-  // Auto-spotlight when a screen share starts
+  // Auto-spotlight when a screen share starts (only when the actual stream is available)
   useEffect(() => {
     if (isScreenSharing) {
       setSpotlightId('local-screen');
       return;
     }
-    for (const [peerId, sharing] of Object.entries(remoteScreenShareStates)) {
-      if (sharing) {
-        setSpotlightId(`screen-${peerId}`);
+    for (const rs of remoteStreams) {
+      if (remoteScreenShareStates[rs.peerId] && rs.screenStream) {
+        setSpotlightId(`screen-${rs.peerId}`);
         return;
       }
     }
@@ -68,11 +68,12 @@ export function VideoGrid({
       if (prev === 'local-screen' && !isScreenSharing) return null;
       if (prev.startsWith('screen-')) {
         const peerId = prev.replace('screen-', '');
-        if (!remoteScreenShareStates[peerId]) return null;
+        const rs = remoteStreams.find((s) => s.peerId === peerId);
+        if (!remoteScreenShareStates[peerId] || !rs?.screenStream) return null;
       }
       return prev;
     });
-  }, [isScreenSharing, remoteScreenShareStates]);
+  }, [isScreenSharing, remoteScreenShareStates, remoteStreams]);
 
   // Build the list of all tiles
   // Each remote peer with screen share gets 2 tiles: webcam + screen
@@ -81,7 +82,7 @@ export function VideoGrid({
   if (isScreenSharing) tileCount++; // local screen share
   for (const rs of remoteStreams) {
     tileCount++; // webcam tile
-    if (remoteScreenShareStates[rs.peerId]) tileCount++; // screen tile
+    if (remoteScreenShareStates[rs.peerId] && rs.screenStream) tileCount++; // screen tile
   }
 
   const localPeerConnection = remoteStreams.length > 0 ? getConnection?.(remoteStreams[0].peerId) : undefined;
@@ -228,7 +229,9 @@ export function VideoGrid({
               ))}
             {/* Remote screen share thumbnails (when not in spotlight) */}
             {remoteStreams
-              .filter((s) => remoteScreenShareStates[s.peerId] && spotlightId !== `screen-${s.peerId}`)
+              .filter(
+                (s) => remoteScreenShareStates[s.peerId] && s.screenStream && spotlightId !== `screen-${s.peerId}`,
+              )
               .map(({ peerId, username: peerUsername, screenStream }) => (
                 <div key={`screen-${peerId}`} className={thumbSize}>
                   <VideoTile
@@ -289,7 +292,7 @@ export function VideoGrid({
             peerConnection={getConnection?.(peerId)}
             showDebug={showDebug}
           />
-          {remoteScreenShareStates[peerId] && (
+          {remoteScreenShareStates[peerId] && screenStream && (
             <VideoTile
               stream={screenStream}
               username={`${peerUsername}'s screen`}

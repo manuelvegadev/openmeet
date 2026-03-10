@@ -76,7 +76,19 @@ export function useWebRTC(
       onRemoteScreenStream: (peerId, stream) => {
         setRemoteStreams((prev) => {
           const existing = prev.find((s) => s.peerId === peerId);
-          if (!existing) return prev;
+          if (!existing) {
+            // Screen track arrived before webcam — create entry with placeholder webcam stream
+            const participant = participantsRef.current.find((p) => p.id === peerId);
+            return [
+              ...prev,
+              {
+                peerId,
+                username: participant?.username ?? 'Unknown',
+                webcamStream: new MediaStream(),
+                screenStream: stream,
+              },
+            ];
+          }
           return [...prev.filter((s) => s.peerId !== peerId), { ...existing, screenStream: stream }];
         });
       },

@@ -19,6 +19,7 @@ export class PeerConnectionManager {
   private connections = new Map<string, RTCPeerConnection>();
   private remoteStreams = new Map<string, MediaStream>();
   private remoteScreenStreams = new Map<string, MediaStream>();
+  private screenTransceiverMap = new Map<string, RTCRtpTransceiver>();
   private localStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
   private sendSignal: (message: WSMessage) => void;
@@ -46,12 +47,13 @@ export class PeerConnectionManager {
     this.localStream = stream;
     for (const [peerId, pc] of this.connections) {
       let needsRenegotiation = false;
-      const transceivers = pc.getTransceivers();
+      const screenTransceiver = this.screenTransceiverMap.get(peerId);
 
       for (const track of stream.getTracks()) {
-        // Target transceiver index 0 for audio, index 1 for webcam video
-        const targetIndex = track.kind === 'audio' ? 0 : 1;
-        const transceiver = transceivers[targetIndex];
+        // Find the right transceiver: for audio, find audio transceiver; for video, find webcam video transceiver (not the screen one)
+        const transceiver = pc
+          .getTransceivers()
+          .find((t) => t.receiver.track.kind === track.kind && t !== screenTransceiver);
 
         if (transceiver) {
           const currentTrack = transceiver.sender.track;
@@ -81,8 +83,7 @@ export class PeerConnectionManager {
     const screenTrack = stream?.getVideoTracks()[0] ?? null;
 
     for (const [peerId, pc] of this.connections) {
-      const transceivers = pc.getTransceivers();
-      const screenTransceiver = transceivers[2]; // Index 2 = screen video
+      const screenTransceiver = this.screenTransceiverMap.get(peerId);
       if (!screenTransceiver) continue;
 
       screenTransceiver.sender.replaceTrack(screenTrack);
@@ -185,6 +186,7 @@ export class PeerConnectionManager {
       this.connections.delete(peerId);
       this.remoteStreams.delete(peerId);
       this.remoteScreenStreams.delete(peerId);
+      this.screenTransceiverMap.delete(peerId);
       this.makingOffer.delete(peerId);
       this.onRemoteStreamRemoved(peerId);
     }
@@ -237,10 +239,13 @@ export class PeerConnectionManager {
       pc.addTransceiver('video', { direction: 'recvonly' });
     }
 
-    pc.ontrack = (event) => {
-      const transceiverIndex = pc.getTransceivers().indexOf(event.transceiver);
+    // Store a reference to the screen transceiver (the last video transceiver we created)
+    const allTransceivers = pc.getTransceivers();
+    const screenTransceiver = allTransceivers[allTransceivers.length - 1];
+    this.screenTransceiverMap.set(peerId, screenTransceiver);
 
-      if (transceiverIndex === 2) {
+    pc.ontrack = (event) => {
+      if (event.transceiver === this.screenTransceiverMap.get(peerId)) {
         // Screen share track
         let screenStream = this.remoteScreenStreams.get(peerId);
         if (!screenStream) {
