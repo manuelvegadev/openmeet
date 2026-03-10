@@ -92,6 +92,13 @@ function RoomPage() {
     };
   }, []);
 
+  // Reset joined state when connection drops so we re-join on reconnect
+  useEffect(() => {
+    if (!connected) {
+      setJoined(false);
+    }
+  }, [connected]);
+
   // Join room when connected
   useEffect(() => {
     if (connected && username && !joined) {

@@ -2,7 +2,7 @@ import type { WSMessage } from '@openmeet/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { WebSocketClient } from '@/lib/websocket';
 
-const WS_URL = import.meta.env.VITE_WS_URL ?? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+const WS_URL = import.meta.env.VITE_WS_URL ?? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
 
 export function useWebSocket(onMessage: (msg: WSMessage) => void) {
   const clientRef = useRef<WebSocketClient | null>(null);
@@ -19,15 +19,15 @@ export function useWebSocket(onMessage: (msg: WSMessage) => void) {
       onMessageRef.current(msg);
     });
 
+    const unsubConnection = client.onConnectionChange((isConnected) => {
+      setConnected(isConnected);
+    });
+
     client.connect();
 
-    const checkConnection = setInterval(() => {
-      setConnected(client.connected);
-    }, 500);
-
     return () => {
-      clearInterval(checkConnection);
       unsubscribe();
+      unsubConnection();
       client.disconnect();
     };
   }, []);

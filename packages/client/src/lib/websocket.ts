@@ -1,12 +1,14 @@
 import type { WSMessage } from '@openmeet/shared';
 
 type MessageHandler = (message: WSMessage) => void;
+type ConnectionHandler = (connected: boolean) => void;
 
 export class WebSocketClient {
   private ws: WebSocket | null = null;
   private handlers = new Set<MessageHandler>();
+  private connectionHandlers = new Set<ConnectionHandler>();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
+  private maxReconnectAttempts = 10;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private url: string;
   private _connected = false;
@@ -25,6 +27,9 @@ export class WebSocketClient {
     this.ws.onopen = () => {
       this._connected = true;
       this.reconnectAttempts = 0;
+      for (const handler of this.connectionHandlers) {
+        handler(true);
+      }
     };
 
     this.ws.onmessage = (event) => {
@@ -40,6 +45,9 @@ export class WebSocketClient {
 
     this.ws.onclose = () => {
       this._connected = false;
+      for (const handler of this.connectionHandlers) {
+        handler(false);
+      }
       this.scheduleReconnect();
     };
 
@@ -57,6 +65,11 @@ export class WebSocketClient {
   subscribe(handler: MessageHandler): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  onConnectionChange(handler: ConnectionHandler): () => void {
+    this.connectionHandlers.add(handler);
+    return () => this.connectionHandlers.delete(handler);
   }
 
   disconnect(): void {

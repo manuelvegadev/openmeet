@@ -8,7 +8,7 @@ import { addParticipant, ensureRoom, getParticipants, getRoomState, removePartic
 import type { ConnectedClient } from './types.js';
 
 export function setupSignaling(server: Server): void {
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', (ws) => {
     let client: ConnectedClient | null = null;
