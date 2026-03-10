@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express from 'express';
 import { config } from './config.js';
-import { initDb } from './db.js';
 import { uploadRouter } from './file-upload.js';
 import { createRoom, getRoom, listRooms } from './room-manager.js';
 import { setupSignaling } from './signaling.js';
@@ -64,9 +63,6 @@ if (process.env.NODE_ENV === 'production') {
     }
   });
 }
-
-// Initialize database
-initDb();
 
 // Setup WebSocket signaling
 setupSignaling(server);
