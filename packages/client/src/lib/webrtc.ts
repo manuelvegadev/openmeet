@@ -241,27 +241,34 @@ export class PeerConnectionManager {
     const webcamTrack = this.localStream?.getVideoTracks()[0];
     const screenTrack = this.screenStream?.getVideoTracks()[0];
 
-    // Transceiver 0: Audio
-    if (audioTrack && this.localStream) {
-      pc.addTrack(audioTrack, this.localStream);
-    } else {
-      pc.addTransceiver('audio', { direction: 'sendrecv' });
+    // Transceiver 0: Audio — high priority (always preserved first)
+    pc.addTransceiver('audio', {
+      direction: 'sendrecv',
+      sendEncodings: [{ priority: 'high', networkPriority: 'high' }],
+    });
+    if (audioTrack) {
+      pc.getTransceivers()[0].sender.replaceTrack(audioTrack);
     }
 
-    // Transceiver 1: Webcam video — always sendrecv so ontrack fires on the
-    // remote immediately and replaceTrack works without renegotiation when the
-    // camera stream arrives late (e.g. after a page reload).
-    if (webcamTrack && this.localStream) {
-      pc.addTrack(webcamTrack, this.localStream);
-    } else {
-      pc.addTransceiver('video', { direction: 'sendrecv' });
+    // Transceiver 1: Webcam video — low priority, capped at 30fps
+    // Always sendrecv so ontrack fires on the remote immediately and
+    // replaceTrack works without renegotiation when the camera stream
+    // arrives late (e.g. after a page reload).
+    pc.addTransceiver('video', {
+      direction: 'sendrecv',
+      sendEncodings: [{ priority: 'low', networkPriority: 'low', maxFramerate: 30 }],
+    });
+    if (webcamTrack) {
+      pc.getTransceivers()[1].sender.replaceTrack(webcamTrack);
     }
 
-    // Transceiver 2: Screen share video
-    if (screenTrack && this.screenStream) {
-      pc.addTrack(screenTrack, this.screenStream);
-    } else {
-      pc.addTransceiver('video', { direction: 'recvonly' });
+    // Transceiver 2: Screen share video — medium priority, capped at 60fps
+    pc.addTransceiver('video', {
+      direction: screenTrack ? 'sendrecv' : 'recvonly',
+      sendEncodings: [{ priority: 'medium', networkPriority: 'medium', maxFramerate: 60 }],
+    });
+    if (screenTrack) {
+      pc.getTransceivers()[2].sender.replaceTrack(screenTrack);
     }
 
     // Fallback: listen for the screen receiver track's unmute event.

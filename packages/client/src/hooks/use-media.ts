@@ -156,6 +156,7 @@ export function useMedia() {
     }
 
     const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) videoTrack.contentHint = 'motion';
     const videoDeviceId = videoTrack?.getSettings().deviceId ?? '';
     if (videoDeviceId) setSavedVideoDevice(videoDeviceId);
     setState((s) => ({ ...s, stream, isAudioEnabled: false, isVideoEnabled: true, videoDeviceId }));
@@ -295,6 +296,7 @@ export function useMedia() {
           },
         });
         const newTrack = videoStream.getVideoTracks()[0];
+        if (newTrack) newTrack.contentHint = 'motion';
 
         // Stop old video tracks
         for (const t of stream.getVideoTracks()) {
@@ -416,14 +418,17 @@ export function useMedia() {
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
-          width: { ideal: 4096 },
-          height: { ideal: 2160 },
-          frameRate: { ideal: 144 },
+          width: { ideal: 2560 },
+          height: { ideal: 1440 },
+          frameRate: { ideal: 60 },
         },
         audio: true,
       });
 
-      screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+      const screenVideoTrack = screenStream.getVideoTracks()[0];
+      if (screenVideoTrack) screenVideoTrack.contentHint = 'detail';
+
+      screenVideoTrack.addEventListener('ended', () => {
         setState((s) => ({ ...s, screenStream: null, isScreenSharing: false }));
       });
 
