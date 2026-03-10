@@ -1,14 +1,19 @@
 services:
   openmeet:
     build: .
-    ports:
-      - "3001:3001"
     environment:
       - NODE_ENV=production
       - PORT=3001
+      - CORS_ORIGIN=https://openmeet.mvega.pro
     volumes:
       - uploads:/app/uploads
     restart: unless-stopped
+    networks:
+      - dokploy-network
 
 volumes:
   uploads:
+
+networks:
+  dokploy-network:
+    external: true
