@@ -10,7 +10,21 @@ import type { ConnectedClient } from './types.js';
 export function setupSignaling(server: Server): void {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
+  console.log('WebSocket server listening on path /ws');
+
+  // Ping all clients every 25s to keep connections alive through reverse proxies
+  const pingInterval = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }
+  }, 25_000);
+
+  wss.on('close', () => clearInterval(pingInterval));
+
   wss.on('connection', (ws) => {
+    console.log('WebSocket client connected');
     let client: ConnectedClient | null = null;
 
     ws.on('message', (raw) => {
@@ -19,6 +33,7 @@ export function setupSignaling(server: Server): void {
 
         switch (message.type) {
           case 'join-room': {
+            console.log(`join-room: roomId=${message.roomId}, username=${message.username}`);
             const room = ensureRoom(message.roomId, message.roomId);
 
             // Check participant limit
@@ -41,12 +56,17 @@ export function setupSignaling(server: Server): void {
             // Get current participants (excluding self)
             const participants = getParticipants(message.roomId);
 
+            const otherParticipants = participants.filter((p) => p.id !== participantId);
+            console.log(
+              `room-joined: ${participantId} joined ${message.roomId}, ${otherParticipants.length} existing participants`,
+            );
+
             ws.send(
               JSON.stringify({
                 type: 'room-joined',
                 roomId: message.roomId,
                 yourId: participantId,
-                participants: participants.filter((p) => p.id !== participantId),
+                participants: otherParticipants,
               }),
             );
 
@@ -104,6 +124,7 @@ export function setupSignaling(server: Server): void {
     });
 
     ws.on('close', () => {
+      console.log(`WebSocket closed: ${client?.participantId ?? 'unknown'} in room ${client?.roomId ?? 'unknown'}`);
       if (!client) return;
 
       // Get room before removing so we can broadcast

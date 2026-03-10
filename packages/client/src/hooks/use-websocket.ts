@@ -2,7 +2,11 @@ import type { WSMessage } from '@openmeet/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { WebSocketClient } from '@/lib/websocket';
 
-const WS_URL = import.meta.env.VITE_WS_URL ?? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
+const WS_URL =
+  import.meta.env.VITE_WS_URL ??
+  (import.meta.env.DEV
+    ? `ws://${location.hostname}:3001/ws`
+    : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
 
 export function useWebSocket(onMessage: (msg: WSMessage) => void) {
   const clientRef = useRef<WebSocketClient | null>(null);

@@ -56,7 +56,7 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(indexPath);
   });
   app.get('{*path}', (req, res, next) => {
-    if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
+    if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads') && !req.path.startsWith('/ws')) {
       res.sendFile(indexPath);
     } else {
       next();

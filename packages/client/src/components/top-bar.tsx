@@ -8,10 +8,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 interface TopBarProps {
   roomId: string;
   participantCount: number;
+  connected?: boolean;
   onLeave: () => void;
 }
 
-export function TopBar({ roomId, participantCount, onLeave }: TopBarProps) {
+export function TopBar({ roomId, participantCount, connected, onLeave }: TopBarProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -58,7 +59,11 @@ export function TopBar({ roomId, participantCount, onLeave }: TopBarProps) {
       </div>
 
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
+          <span
+            className={`h-2 w-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`}
+            title={connected ? 'Connected' : 'Disconnected'}
+          />
           <Users className="h-4 w-4 text-muted-foreground" />
           <Badge variant="secondary">{participantCount}</Badge>
         </div>
