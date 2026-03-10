@@ -76,14 +76,15 @@ export function setupSignaling(server: Server): void {
             break;
           }
 
-          case 'mute-state': {
+          case 'mute-state':
+          case 'screen-share-state': {
             if (!client) return;
             const room = getRoomState(client.roomId);
             if (!room) return;
-            const muteMsg = JSON.stringify(message);
+            const broadcastMsg = JSON.stringify(message);
             for (const [id, c] of room.clients) {
               if (id !== client.participantId && c.ws.readyState === WebSocket.OPEN) {
-                c.ws.send(muteMsg);
+                c.ws.send(broadcastMsg);
               }
             }
             break;

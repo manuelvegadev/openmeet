@@ -5,7 +5,8 @@ import { PeerConnectionManager } from '@/lib/webrtc';
 export interface RemoteStream {
   peerId: string;
   username: string;
-  stream: MediaStream;
+  webcamStream: MediaStream;
+  screenStream: MediaStream | null;
 }
 
 export function useWebRTC(
@@ -15,6 +16,7 @@ export function useWebRTC(
 ) {
   const [remoteStreams, setRemoteStreams] = useState<RemoteStream[]>([]);
   const [participants, setParticipants] = useState<Participant[]>([]);
+  const [screenShareStates, setScreenShareStates] = useState<Record<string, boolean>>({});
   const managerRef = useRef<PeerConnectionManager | null>(null);
   const participantsRef = useRef<Participant[]>([]);
   const sendRef = useRef(send);
@@ -57,13 +59,26 @@ export function useWebRTC(
       sendSignal: (msg) => sendRef.current(msg),
       onRemoteStream: (peerId, stream) => {
         const participant = participantsRef.current.find((p) => p.id === peerId);
-        // Wrap in a new MediaStream so React sees a new reference and
-        // re-runs effects (useAudioLevel, mute detection) when tracks change
         const wrappedStream = new MediaStream(stream.getTracks());
-        setRemoteStreams((prev) => [
-          ...prev.filter((s) => s.peerId !== peerId),
-          { peerId, username: participant?.username ?? 'Unknown', stream: wrappedStream },
-        ]);
+        setRemoteStreams((prev) => {
+          const existing = prev.find((s) => s.peerId === peerId);
+          return [
+            ...prev.filter((s) => s.peerId !== peerId),
+            {
+              peerId,
+              username: participant?.username ?? 'Unknown',
+              webcamStream: wrappedStream,
+              screenStream: existing?.screenStream ?? null,
+            },
+          ];
+        });
+      },
+      onRemoteScreenStream: (peerId, stream) => {
+        setRemoteStreams((prev) => {
+          const existing = prev.find((s) => s.peerId === peerId);
+          if (!existing) return prev;
+          return [...prev.filter((s) => s.peerId !== peerId), { ...existing, screenStream: stream }];
+        });
       },
       onRemoteStreamRemoved: (peerId) => {
         setRemoteStreams((prev) => prev.filter((s) => s.peerId !== peerId));
@@ -107,6 +122,11 @@ export function useWebRTC(
         case 'participant-left': {
           setParticipants((prev) => prev.filter((p) => p.id !== message.participantId));
           managerRef.current?.removeConnection(message.participantId);
+          setScreenShareStates((prev) => {
+            const next = { ...prev };
+            delete next[message.participantId];
+            return next;
+          });
           break;
         }
 
@@ -124,6 +144,11 @@ export function useWebRTC(
           managerRef.current?.handleIceCandidate(message.fromId, message.candidate);
           break;
         }
+
+        case 'screen-share-state': {
+          setScreenShareStates((prev) => ({ ...prev, [message.fromId]: message.isScreenSharing }));
+          break;
+        }
       }
     },
     [createManager],
@@ -133,5 +158,5 @@ export function useWebRTC(
     return managerRef.current?.getConnection(peerId);
   }, []);
 
-  return { remoteStreams, participants, handleSignalingMessage, getConnection };
+  return { remoteStreams, participants, screenShareStates, handleSignalingMessage, getConnection };
 }

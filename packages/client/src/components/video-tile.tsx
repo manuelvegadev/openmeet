@@ -1,4 +1,4 @@
-import { Maximize, Mic, MicOff, Minimize } from 'lucide-react';
+import { Maximize, Mic, MicOff, Minimize, Monitor } from 'lucide-react';
 import { useCallback, useEffect, useRef } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,7 @@ interface VideoTileProps {
   onClick?: () => void;
   isSpotlight?: boolean;
   isScreenShare?: boolean;
+  isPresenting?: boolean;
 }
 
 export function VideoTile({
@@ -32,6 +33,7 @@ export function VideoTile({
   onClick,
   isSpotlight,
   isScreenShare,
+  isPresenting,
 }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -41,10 +43,12 @@ export function VideoTile({
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-    if (stream) {
+    if (stream && !isPresenting) {
       el.srcObject = stream;
+    } else {
+      el.srcObject = null;
     }
-  }, [stream]);
+  }, [stream, isPresenting]);
 
   const isSpeaking = audioLevel > 0.05;
   const shadowSpread = isSpeaking ? Math.min(1 + audioLevel * 5, 4) : 0;
@@ -83,19 +87,28 @@ export function VideoTile({
           : undefined
       }
     >
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={muted}
-        className={`w-full h-full ${useContain ? 'object-contain' : 'object-cover'} ${!isVideoEnabled || !stream ? 'hidden' : ''} ${isLocal && !useContain ? 'scale-x-[-1]' : ''}`}
-      />
-      {(!isVideoEnabled || !stream) && (
-        <Avatar className="w-24 h-24 sm:w-32 sm:h-32">
-          <AvatarFallback className="text-5xl sm:text-7xl bg-primary text-primary-foreground">
-            {username}
-          </AvatarFallback>
-        </Avatar>
+      {isPresenting ? (
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+          <Monitor className="h-16 w-16" />
+          <span className="text-lg font-medium">You are presenting</span>
+        </div>
+      ) : (
+        <>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={muted}
+            className={`w-full h-full ${useContain ? 'object-contain' : 'object-cover'} ${!isVideoEnabled || !stream ? 'hidden' : ''} ${isLocal && !useContain ? 'scale-x-[-1]' : ''}`}
+          />
+          {(!isVideoEnabled || !stream) && (
+            <Avatar className="w-24 h-24 sm:w-32 sm:h-32">
+              <AvatarFallback className="text-5xl sm:text-7xl bg-primary text-primary-foreground">
+                {username}
+              </AvatarFallback>
+            </Avatar>
+          )}
+        </>
       )}
       {/* Speaking glow overlay */}
       <div
@@ -116,7 +129,7 @@ export function VideoTile({
         </div>
       </div>
       {/* Fullscreen button for screen share */}
-      {isScreenShare && isVideoEnabled && stream && (
+      {isScreenShare && isVideoEnabled && stream && !isPresenting && (
         <div className="absolute top-2 left-2">
           <Tooltip>
             <TooltipTrigger>

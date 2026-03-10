@@ -102,6 +102,15 @@ function RoomPage() {
     }
   }, [media.isAudioEnabled, myId, joined, send, webrtc.participants.length]);
 
+  // Broadcast screen share state: after joining, on screen share toggle, and when
+  // participants change (so newcomers learn our state)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: participants.length is an intentional trigger
+  useEffect(() => {
+    if (myId && joined) {
+      send({ type: 'screen-share-state', fromId: myId, isScreenSharing: media.isScreenSharing });
+    }
+  }, [media.isScreenSharing, myId, joined, send, webrtc.participants.length]);
+
   const handleToggleScreenShare = useCallback(async () => {
     if (media.isScreenSharing) {
       media.stopScreenShare();
@@ -174,15 +183,17 @@ function RoomPage() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         <TopBar roomId={roomId} participantCount={webrtc.participants.length + 1} onLeave={handleLeave} />
         <VideoGrid
-          localStream={media.screenStream ?? media.stream}
+          localWebcamStream={media.stream}
+          localScreenStream={media.screenStream}
           remoteStreams={webrtc.remoteStreams}
           username={username}
-          isVideoEnabled={media.isVideoEnabled || media.isScreenSharing}
+          isVideoEnabled={media.isVideoEnabled}
           isScreenSharing={media.isScreenSharing}
           isAudioMuted={!media.isAudioEnabled}
           showDebug={isDebugEnabled}
           getConnection={webrtc.getConnection}
           remoteMuteStates={remoteMuteStates}
+          remoteScreenShareStates={webrtc.screenShareStates}
         />
         <ControlsBar
           isAudioEnabled={media.isAudioEnabled}

@@ -18,11 +18,13 @@ function enableStereoOpus(sdp: string): string {
 export class PeerConnectionManager {
   private connections = new Map<string, RTCPeerConnection>();
   private remoteStreams = new Map<string, MediaStream>();
+  private remoteScreenStreams = new Map<string, MediaStream>();
   private localStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
   private sendSignal: (message: WSMessage) => void;
   private myId: string;
   private onRemoteStream: (peerId: string, stream: MediaStream) => void;
+  private onRemoteScreenStream: (peerId: string, stream: MediaStream | null) => void;
   private onRemoteStreamRemoved: (peerId: string) => void;
   private makingOffer = new Set<string>();
 
@@ -30,11 +32,13 @@ export class PeerConnectionManager {
     myId: string;
     sendSignal: (msg: WSMessage) => void;
     onRemoteStream: (peerId: string, stream: MediaStream) => void;
+    onRemoteScreenStream: (peerId: string, stream: MediaStream | null) => void;
     onRemoteStreamRemoved: (peerId: string) => void;
   }) {
     this.myId = options.myId;
     this.sendSignal = options.sendSignal;
     this.onRemoteStream = options.onRemoteStream;
+    this.onRemoteScreenStream = options.onRemoteScreenStream;
     this.onRemoteStreamRemoved = options.onRemoteStreamRemoved;
   }
 
@@ -42,27 +46,28 @@ export class PeerConnectionManager {
     this.localStream = stream;
     for (const [peerId, pc] of this.connections) {
       let needsRenegotiation = false;
+      const transceivers = pc.getTransceivers();
 
       for (const track of stream.getTracks()) {
-        // Find an existing sender already sending this kind
-        const existingSender = pc.getSenders().find((s) => s.track?.kind === track.kind);
-        if (existingSender) {
-          existingSender.replaceTrack(track);
-          continue;
-        }
+        // Target transceiver index 0 for audio, index 1 for webcam video
+        const targetIndex = track.kind === 'audio' ? 0 : 1;
+        const transceiver = transceivers[targetIndex];
 
-        // Find a recvonly transceiver placeholder for this kind and upgrade it
-        const transceiver = pc.getTransceivers().find((t) => t.receiver.track?.kind === track.kind && !t.sender.track);
         if (transceiver) {
-          transceiver.sender.replaceTrack(track);
-          transceiver.direction = 'sendrecv';
+          const currentTrack = transceiver.sender.track;
+          if (currentTrack && currentTrack !== track) {
+            transceiver.sender.replaceTrack(track);
+          } else if (!currentTrack) {
+            transceiver.sender.replaceTrack(track);
+            if (transceiver.direction === 'recvonly') {
+              transceiver.direction = 'sendrecv';
+              needsRenegotiation = true;
+            }
+          }
+        } else {
+          pc.addTrack(track, stream);
           needsRenegotiation = true;
-          continue;
         }
-
-        // Fallback: add new track (creates new transceiver)
-        pc.addTrack(track, stream);
-        needsRenegotiation = true;
       }
 
       if (needsRenegotiation) {
@@ -71,26 +76,21 @@ export class PeerConnectionManager {
     }
   }
 
-  replaceVideoTrack(newTrack: MediaStreamTrack): void {
-    for (const [, pc] of this.connections) {
-      const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
-      if (sender) {
-        sender.replaceTrack(newTrack);
-      }
-    }
-  }
-
   setScreenStream(stream: MediaStream | null): void {
     this.screenStream = stream;
-    if (stream) {
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        this.replaceVideoTrack(videoTrack);
-      }
-    } else if (this.localStream) {
-      const webcamTrack = this.localStream.getVideoTracks()[0];
-      if (webcamTrack) {
-        this.replaceVideoTrack(webcamTrack);
+    const screenTrack = stream?.getVideoTracks()[0] ?? null;
+
+    for (const [peerId, pc] of this.connections) {
+      const transceivers = pc.getTransceivers();
+      const screenTransceiver = transceivers[2]; // Index 2 = screen video
+      if (!screenTransceiver) continue;
+
+      screenTransceiver.sender.replaceTrack(screenTrack);
+
+      const newDirection = screenTrack ? 'sendrecv' : 'recvonly';
+      if (screenTransceiver.direction !== newDirection) {
+        screenTransceiver.direction = newDirection;
+        this.renegotiate(peerId, pc);
       }
     }
   }
@@ -184,6 +184,7 @@ export class PeerConnectionManager {
       pc.close();
       this.connections.delete(peerId);
       this.remoteStreams.delete(peerId);
+      this.remoteScreenStreams.delete(peerId);
       this.makingOffer.delete(peerId);
       this.onRemoteStreamRemoved(peerId);
     }
@@ -211,47 +212,65 @@ export class PeerConnectionManager {
     const pc = new RTCPeerConnection(ICE_SERVERS);
     this.connections.set(peerId, pc);
 
-    const activeStream = this.screenStream ?? this.localStream;
     const audioTrack = this.localStream?.getAudioTracks()[0];
-    const videoTrack = activeStream?.getVideoTracks()[0];
+    const webcamTrack = this.localStream?.getVideoTracks()[0];
+    const screenTrack = this.screenStream?.getVideoTracks()[0];
 
-    // Always create both audio and video transceivers so the initial SDP
-    // has m=audio and m=video lines. This avoids needing to add new m-lines
-    // later (which requires complex renegotiation).
+    // Transceiver 0: Audio
     if (audioTrack && this.localStream) {
       pc.addTrack(audioTrack, this.localStream);
     } else {
-      // Use sendrecv so the remote side fires ontrack for audio immediately,
-      // even though we're not sending a real track yet. This ensures the
-      // remote stream has an audio track from the start, enabling audio
-      // level detection and speaking indicators once we unmute.
       pc.addTransceiver('audio', { direction: 'sendrecv' });
     }
 
-    if (videoTrack && activeStream) {
-      pc.addTrack(videoTrack, activeStream);
+    // Transceiver 1: Webcam video
+    if (webcamTrack && this.localStream) {
+      pc.addTrack(webcamTrack, this.localStream);
+    } else {
+      pc.addTransceiver('video', { direction: 'recvonly' });
+    }
+
+    // Transceiver 2: Screen share video
+    if (screenTrack && this.screenStream) {
+      pc.addTrack(screenTrack, this.screenStream);
     } else {
       pc.addTransceiver('video', { direction: 'recvonly' });
     }
 
     pc.ontrack = (event) => {
-      // Accumulate tracks into a single managed stream per peer.
-      // This handles the case where audio/video arrive via separate
-      // ontrack events (especially when using addTransceiver without a stream).
-      let remoteStream = this.remoteStreams.get(peerId);
-      if (!remoteStream) {
-        remoteStream = new MediaStream();
-        this.remoteStreams.set(peerId, remoteStream);
+      const transceiverIndex = pc.getTransceivers().indexOf(event.transceiver);
+
+      if (transceiverIndex === 2) {
+        // Screen share track
+        let screenStream = this.remoteScreenStreams.get(peerId);
+        if (!screenStream) {
+          screenStream = new MediaStream();
+          this.remoteScreenStreams.set(peerId, screenStream);
+        }
+        const existingTrack = screenStream.getTracks().find((t) => t.kind === event.track.kind);
+        if (existingTrack && existingTrack !== event.track) {
+          screenStream.removeTrack(existingTrack);
+        }
+        if (!screenStream.getTracks().includes(event.track)) {
+          screenStream.addTrack(event.track);
+        }
+        this.onRemoteScreenStream(peerId, new MediaStream(screenStream.getTracks()));
+      } else {
+        // Audio (index 0) or webcam video (index 1) → webcam stream
+        let remoteStream = this.remoteStreams.get(peerId);
+        if (!remoteStream) {
+          remoteStream = new MediaStream();
+          this.remoteStreams.set(peerId, remoteStream);
+        }
+        const existingTrack = remoteStream.getTracks().find((t) => t.kind === event.track.kind);
+        if (existingTrack && existingTrack !== event.track) {
+          remoteStream.removeTrack(existingTrack);
+        }
+        if (!remoteStream.getTracks().includes(event.track)) {
+          remoteStream.addTrack(event.track);
+        }
+        this.onRemoteStream(peerId, new MediaStream(remoteStream.getTracks()));
       }
-      // Replace existing track of same kind to avoid duplicates on renegotiation
-      const existingTrack = remoteStream.getTracks().find((t) => t.kind === event.track.kind);
-      if (existingTrack && existingTrack !== event.track) {
-        remoteStream.removeTrack(existingTrack);
-      }
-      if (!remoteStream.getTracks().includes(event.track)) {
-        remoteStream.addTrack(event.track);
-      }
-      this.onRemoteStream(peerId, remoteStream);
     };
 
     pc.onicecandidate = (event) => {

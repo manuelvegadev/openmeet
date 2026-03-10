@@ -86,6 +86,12 @@ export interface MuteStateMessage {
   isAudioMuted: boolean;
 }
 
+export interface ScreenShareStateMessage {
+  type: 'screen-share-state';
+  fromId: string;
+  isScreenSharing: boolean;
+}
+
 // === Error Messages ===
 
 export interface ErrorMessage {
@@ -104,6 +110,7 @@ export type WSMessage =
   | AnswerMessage
   | IceCandidateMessage
   | MuteStateMessage
+  | ScreenShareStateMessage
   | ChatMessage
   | ChatBroadcastMessage
   | ErrorMessage;
