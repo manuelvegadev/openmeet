@@ -176,7 +176,7 @@ Vite + React 19 + TanStack Router (file-based) + shadcn/ui (Base UI). Installabl
 
 2. **Audio transceiver direction**: Uses `sendrecv` (not `recvonly`) even when no audio track exists. This ensures `ontrack` fires on the remote side, enabling audio level detection and mute state indicators.
 
-3. **Track routing by transceiver index**: `ontrack` handler uses `pc.getTransceivers().indexOf(event.transceiver)` to route tracks. Index 0/1 → `remoteStreams` (webcam+audio). Index 2 → `remoteScreenStreams`.
+3. **Track routing by arrival order**: `ontrack` handler routes video tracks by checking if a webcam video already exists in the remote stream — if yes, any new video track is the screen share. This is more robust than transceiver index/reference comparison, which can fail during renegotiation. Backed by `onunmute` fallback on the screen receiver track.
 
 4. **Glare handling**: If both peers send offers simultaneously (`signalingState === 'have-local-offer'`), the receiver rolls back its own offer before processing the remote offer.
 
@@ -186,7 +186,9 @@ Vite + React 19 + TanStack Router (file-based) + shadcn/ui (Base UI). Installabl
 
 7. **Webcam stream targeting**: `setLocalStream()` explicitly targets transceiver index 0 (audio) and index 1 (webcam video) to avoid accidentally touching the screen transceiver.
 
-8. **Screen share state signaling**: `screen-share-state` WebSocket message broadcasts who is screen sharing. Re-broadcasts on `participants.length` change so newcomers learn current state.
+8. **Screen share state signaling**: `screen-share-state` WebSocket message broadcasts who is screen sharing. Re-broadcasts on `participants.length` change so newcomers learn current state. When `isScreenSharing: false` is received, the screen stream is immediately set to `null` to prevent showing the last decoded frame.
+
+9. **Screen track `onunmute` fallback**: The screen receiver track's `onunmute` event is used as a fallback for `ontrack` — during renegotiation, `ontrack` may not fire for an existing transceiver whose direction changed from `inactive` to `sendrecv`, but the track's `unmute` event reliably signals the remote started sending.
 
 ### Remote mute detection
 
@@ -254,4 +256,6 @@ interface RemoteStream {
 7. **STUN servers**: Uses Google public STUN servers. TURN server needed for restrictive NATs.
 8. **Transceiver ordering**: Both sides must create 3 transceivers in identical order (audio, webcam, screen) before SDP exchange. Do not reorder or skip.
 9. **Screen share state re-broadcast**: Must re-broadcast on `participants.length` change so newcomers learn the current screen share state.
+10. **Screen track routing**: Do NOT use transceiver reference equality (`===`) or `.mid` comparison to identify screen tracks in `ontrack` — browsers may return different wrapper objects during renegotiation. Use arrival-order logic instead (first video = webcam, second video = screen).
+11. **Screen track renegotiation**: `ontrack` may not fire when the screen transceiver direction changes from `inactive` to `sendrecv`. Always set up an `onunmute` listener on the screen receiver track as a fallback.
 10. **Chat panel mobile**: Uses `fixed inset-0` on mobile (fullscreen overlay). Width via CSS variable only applies at `md:` breakpoint.

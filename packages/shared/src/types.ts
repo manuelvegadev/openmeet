@@ -84,6 +84,7 @@ export interface MuteStateMessage {
   type: 'mute-state';
   fromId: string;
   isAudioMuted: boolean;
+  isVideoMuted?: boolean;
 }
 
 export interface ScreenShareStateMessage {

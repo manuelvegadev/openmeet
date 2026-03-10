@@ -159,6 +159,13 @@ export function useWebRTC(
 
         case 'screen-share-state': {
           setScreenShareStates((prev) => ({ ...prev, [message.fromId]: message.isScreenSharing }));
+          // When screen sharing stops, immediately clear the screen stream to
+          // avoid showing the last decoded frame in the video element.
+          if (!message.isScreenSharing) {
+            setRemoteStreams((prev) =>
+              prev.map((s) => (s.peerId === message.fromId ? { ...s, screenStream: null } : s)),
+            );
+          }
           break;
         }
       }

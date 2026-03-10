@@ -13,6 +13,7 @@ interface VideoGridProps {
   showDebug: boolean;
   getConnection?: (peerId: string) => RTCPeerConnection | undefined;
   remoteMuteStates?: Record<string, boolean>;
+  remoteVideoMuteStates?: Record<string, boolean>;
   remoteScreenShareStates?: Record<string, boolean>;
 }
 
@@ -45,6 +46,7 @@ export function VideoGrid({
   showDebug,
   getConnection,
   remoteMuteStates = {},
+  remoteVideoMuteStates = {},
   remoteScreenShareStates = {},
 }: VideoGridProps) {
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
@@ -160,6 +162,7 @@ export function VideoGrid({
           <VideoTile
             stream={spotlightRemote.webcamStream}
             username={spotlightRemote.username}
+            isVideoEnabled={!remoteVideoMuteStates[spotlightRemote.peerId]}
             isAudioMuted={remoteMuteStates[spotlightRemote.peerId]}
             peerConnection={getConnection?.(spotlightRemote.peerId)}
             showDebug={showDebug}
@@ -221,6 +224,7 @@ export function VideoGrid({
                   <VideoTile
                     stream={webcamStream}
                     username={peerUsername}
+                    isVideoEnabled={!remoteVideoMuteStates[peerId]}
                     isAudioMuted={remoteMuteStates[peerId]}
                     peerConnection={getConnection?.(peerId)}
                     showDebug={showDebug}
@@ -288,6 +292,7 @@ export function VideoGrid({
           <VideoTile
             stream={webcamStream}
             username={peerUsername}
+            isVideoEnabled={!remoteVideoMuteStates[peerId]}
             isAudioMuted={remoteMuteStates[peerId]}
             peerConnection={getConnection?.(peerId)}
             showDebug={showDebug}

@@ -12,6 +12,7 @@ export class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private url: string;
   private _connected = false;
+  private disposed = false;
 
   constructor(url: string) {
     this.url = url;
@@ -44,6 +45,7 @@ export class WebSocketClient {
     };
 
     this.ws.onclose = () => {
+      if (this.disposed) return;
       this._connected = false;
       for (const handler of this.connectionHandlers) {
         handler(false);
@@ -51,8 +53,9 @@ export class WebSocketClient {
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
+    this.ws.onerror = () => {
+      if (this.disposed) return;
+      console.error('WebSocket connection error');
     };
   }
 
@@ -73,6 +76,7 @@ export class WebSocketClient {
   }
 
   disconnect(): void {
+    this.disposed = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

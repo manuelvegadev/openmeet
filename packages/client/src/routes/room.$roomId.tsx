@@ -25,6 +25,7 @@ function RoomPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [myId, setMyId] = useState<string | null>(null);
   const [remoteMuteStates, setRemoteMuteStates] = useState<Record<string, boolean>>({});
+  const [remoteVideoMuteStates, setRemoteVideoMuteStates] = useState<Record<string, boolean>>({});
   const [unreadCount, setUnreadCount] = useState(0);
   const isChatOpenRef = useRef(isChatOpen);
   isChatOpenRef.current = isChatOpen;
@@ -57,9 +58,17 @@ function RoomPage() {
             delete next[msg.participantId];
             return next;
           });
+          setRemoteVideoMuteStates((prev) => {
+            const next = { ...prev };
+            delete next[msg.participantId];
+            return next;
+          });
           break;
         case 'mute-state':
           setRemoteMuteStates((prev) => ({ ...prev, [msg.fromId]: msg.isAudioMuted }));
+          if (msg.isVideoMuted !== undefined) {
+            setRemoteVideoMuteStates((prev) => ({ ...prev, [msg.fromId]: msg.isVideoMuted as boolean }));
+          }
           break;
         case 'chat-broadcast':
           setChatMessages((prev) => [...prev, msg.message]);
@@ -106,14 +115,19 @@ function RoomPage() {
     }
   }, [connected, username, roomId, send, joined]);
 
-  // Broadcast mute state: after joining, on audio toggle, and when
+  // Broadcast mute state: after joining, on audio/video toggle, and when
   // participants change (so newcomers learn our state)
   // biome-ignore lint/correctness/useExhaustiveDependencies: participants.length is an intentional trigger
   useEffect(() => {
     if (myId && joined) {
-      send({ type: 'mute-state', fromId: myId, isAudioMuted: !media.isAudioEnabled });
+      send({
+        type: 'mute-state',
+        fromId: myId,
+        isAudioMuted: !media.isAudioEnabled,
+        isVideoMuted: !media.isVideoEnabled,
+      });
     }
-  }, [media.isAudioEnabled, myId, joined, send, webrtc.participants.length]);
+  }, [media.isAudioEnabled, media.isVideoEnabled, myId, joined, send, webrtc.participants.length]);
 
   // Broadcast screen share state: after joining, on screen share toggle, and when
   // participants change (so newcomers learn our state)
@@ -212,6 +226,7 @@ function RoomPage() {
           showDebug={isDebugEnabled}
           getConnection={webrtc.getConnection}
           remoteMuteStates={remoteMuteStates}
+          remoteVideoMuteStates={remoteVideoMuteStates}
           remoteScreenShareStates={webrtc.screenShareStates}
         />
         <ControlsBar

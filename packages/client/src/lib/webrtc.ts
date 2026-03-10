@@ -4,6 +4,11 @@ const ICE_SERVERS: RTCConfiguration = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }],
 };
 
+// Screen share is always the 3rd transceiver (index 2).
+// Both sides create transceivers in the same order: audio (0), webcam (1), screen (2).
+// After SDP exchange, getTransceivers() preserves m-line order.
+const SCREEN_TRANSCEIVER_INDEX = 2;
+
 function enableStereoOpus(sdp: string): string {
   return sdp.replace(/a=fmtp:(\d+) (.+)/g, (match, pt, params) => {
     if (params.includes('minptime')) {
@@ -15,11 +20,14 @@ function enableStereoOpus(sdp: string): string {
   });
 }
 
+function getScreenTransceiver(pc: RTCPeerConnection): RTCRtpTransceiver | undefined {
+  return pc.getTransceivers()[SCREEN_TRANSCEIVER_INDEX];
+}
+
 export class PeerConnectionManager {
   private connections = new Map<string, RTCPeerConnection>();
   private remoteStreams = new Map<string, MediaStream>();
   private remoteScreenStreams = new Map<string, MediaStream>();
-  private screenTransceiverMap = new Map<string, RTCRtpTransceiver>();
   private localStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
   private sendSignal: (message: WSMessage) => void;
@@ -47,7 +55,7 @@ export class PeerConnectionManager {
     this.localStream = stream;
     for (const [peerId, pc] of this.connections) {
       let needsRenegotiation = false;
-      const screenTransceiver = this.screenTransceiverMap.get(peerId);
+      const screenTransceiver = getScreenTransceiver(pc);
 
       for (const track of stream.getTracks()) {
         // Find the right transceiver: for audio, find audio transceiver; for video, find webcam video transceiver (not the screen one)
@@ -83,7 +91,7 @@ export class PeerConnectionManager {
     const screenTrack = stream?.getVideoTracks()[0] ?? null;
 
     for (const [peerId, pc] of this.connections) {
-      const screenTransceiver = this.screenTransceiverMap.get(peerId);
+      const screenTransceiver = getScreenTransceiver(pc);
       if (!screenTransceiver) continue;
 
       screenTransceiver.sender.replaceTrack(screenTrack);
@@ -186,7 +194,6 @@ export class PeerConnectionManager {
       this.connections.delete(peerId);
       this.remoteStreams.delete(peerId);
       this.remoteScreenStreams.delete(peerId);
-      this.screenTransceiverMap.delete(peerId);
       this.makingOffer.delete(peerId);
       this.onRemoteStreamRemoved(peerId);
     }
@@ -204,6 +211,22 @@ export class PeerConnectionManager {
 
   getAllPeerIds(): string[] {
     return [...this.connections.keys()];
+  }
+
+  private handleScreenTrack(peerId: string, track: MediaStreamTrack): void {
+    let screenStream = this.remoteScreenStreams.get(peerId);
+    if (!screenStream) {
+      screenStream = new MediaStream();
+      this.remoteScreenStreams.set(peerId, screenStream);
+    }
+    const existingTrack = screenStream.getTracks().find((t) => t.kind === track.kind);
+    if (existingTrack && existingTrack !== track) {
+      screenStream.removeTrack(existingTrack);
+    }
+    if (!screenStream.getTracks().includes(track)) {
+      screenStream.addTrack(track);
+    }
+    this.onRemoteScreenStream(peerId, new MediaStream(screenStream.getTracks()));
   }
 
   private createPeerConnection(peerId: string): RTCPeerConnection {
@@ -225,11 +248,13 @@ export class PeerConnectionManager {
       pc.addTransceiver('audio', { direction: 'sendrecv' });
     }
 
-    // Transceiver 1: Webcam video
+    // Transceiver 1: Webcam video — always sendrecv so ontrack fires on the
+    // remote immediately and replaceTrack works without renegotiation when the
+    // camera stream arrives late (e.g. after a page reload).
     if (webcamTrack && this.localStream) {
       pc.addTrack(webcamTrack, this.localStream);
     } else {
-      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('video', { direction: 'sendrecv' });
     }
 
     // Transceiver 2: Screen share video
@@ -239,43 +264,43 @@ export class PeerConnectionManager {
       pc.addTransceiver('video', { direction: 'recvonly' });
     }
 
-    // Store a reference to the screen transceiver (the last video transceiver we created)
-    const allTransceivers = pc.getTransceivers();
-    const screenTransceiver = allTransceivers[allTransceivers.length - 1];
-    this.screenTransceiverMap.set(peerId, screenTransceiver);
+    // Fallback: listen for the screen receiver track's unmute event.
+    // During renegotiation ontrack may not fire for an existing transceiver
+    // whose direction changed from inactive → sendrecv. The track's unmute
+    // event reliably signals the remote started sending screen content.
+    const screenReceiverTrack = getScreenTransceiver(pc)?.receiver?.track;
+    if (screenReceiverTrack) {
+      screenReceiverTrack.onunmute = () => {
+        this.handleScreenTrack(peerId, screenReceiverTrack);
+      };
+    }
 
     pc.ontrack = (event) => {
-      if (event.transceiver === this.screenTransceiverMap.get(peerId)) {
-        // Screen share track
-        let screenStream = this.remoteScreenStreams.get(peerId);
-        if (!screenStream) {
-          screenStream = new MediaStream();
-          this.remoteScreenStreams.set(peerId, screenStream);
+      // Route video tracks by arrival order instead of transceiver identification.
+      // ontrack fires in m-line order: audio (0), webcam video (1), screen video (2).
+      // If we already have a webcam video track, any new video track is the screen.
+      if (event.track.kind === 'video') {
+        const remoteStream = this.remoteStreams.get(peerId);
+        if (remoteStream && remoteStream.getVideoTracks().length > 0) {
+          this.handleScreenTrack(peerId, event.track);
+          return;
         }
-        const existingTrack = screenStream.getTracks().find((t) => t.kind === event.track.kind);
-        if (existingTrack && existingTrack !== event.track) {
-          screenStream.removeTrack(existingTrack);
-        }
-        if (!screenStream.getTracks().includes(event.track)) {
-          screenStream.addTrack(event.track);
-        }
-        this.onRemoteScreenStream(peerId, new MediaStream(screenStream.getTracks()));
-      } else {
-        // Audio (index 0) or webcam video (index 1) → webcam stream
-        let remoteStream = this.remoteStreams.get(peerId);
-        if (!remoteStream) {
-          remoteStream = new MediaStream();
-          this.remoteStreams.set(peerId, remoteStream);
-        }
-        const existingTrack = remoteStream.getTracks().find((t) => t.kind === event.track.kind);
-        if (existingTrack && existingTrack !== event.track) {
-          remoteStream.removeTrack(existingTrack);
-        }
-        if (!remoteStream.getTracks().includes(event.track)) {
-          remoteStream.addTrack(event.track);
-        }
-        this.onRemoteStream(peerId, new MediaStream(remoteStream.getTracks()));
       }
+
+      // Audio or first webcam video → webcam stream
+      let remoteStream = this.remoteStreams.get(peerId);
+      if (!remoteStream) {
+        remoteStream = new MediaStream();
+        this.remoteStreams.set(peerId, remoteStream);
+      }
+      const existingTrack = remoteStream.getTracks().find((t) => t.kind === event.track.kind);
+      if (existingTrack && existingTrack !== event.track) {
+        remoteStream.removeTrack(existingTrack);
+      }
+      if (!remoteStream.getTracks().includes(event.track)) {
+        remoteStream.addTrack(event.track);
+      }
+      this.onRemoteStream(peerId, new MediaStream(remoteStream.getTracks()));
     };
 
     pc.onicecandidate = (event) => {

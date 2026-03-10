@@ -8,7 +8,17 @@ function Popover({ ...props }: PopoverPrimitive.Root.Props) {
 }
 
 function PopoverTrigger({ ...props }: PopoverPrimitive.Trigger.Props) {
-  return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
+  // Render as a span instead of the default <button> to avoid nested <button>
+  // when wrapping Button components. Using inline-flex so it has a real
+  // bounding box for positioning.
+  return (
+    <PopoverPrimitive.Trigger
+      data-slot="popover-trigger"
+      nativeButton={false}
+      render={<span className="inline-flex" />}
+      {...props}
+    />
+  );
 }
 
 function PopoverContent({
