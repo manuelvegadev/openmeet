@@ -35,7 +35,7 @@ export function TopBar({ roomId, participantCount, onLeave }: TopBarProps) {
   };
 
   return (
-    <div className="flex items-center justify-between px-3 py-2 bg-card border-b">
+    <div className="h-12 flex items-center justify-between px-3 bg-card border-b">
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground text-xs">Room:</span>
         <span className="font-mono font-medium text-sm">{roomId}</span>

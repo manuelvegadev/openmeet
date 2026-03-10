@@ -25,6 +25,9 @@ function RoomPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [myId, setMyId] = useState<string | null>(null);
   const [remoteMuteStates, setRemoteMuteStates] = useState<Record<string, boolean>>({});
+  const [unreadCount, setUnreadCount] = useState(0);
+  const isChatOpenRef = useRef(isChatOpen);
+  isChatOpenRef.current = isChatOpen;
 
   const media = useMedia();
 
@@ -60,6 +63,9 @@ function RoomPage() {
           break;
         case 'chat-broadcast':
           setChatMessages((prev) => [...prev, msg.message]);
+          if (!isChatOpenRef.current) {
+            setUnreadCount((prev) => prev + 1);
+          }
           break;
         case 'error':
           toast.error(msg.message);
@@ -152,6 +158,7 @@ function RoomPage() {
     async (file: File) => {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('roomId', roomId);
 
       try {
         const response = await fetch('/api/upload', { method: 'POST', body: formData });
@@ -206,7 +213,13 @@ function RoomPage() {
           onToggleVideo={media.toggleVideo}
           onToggleScreenShare={handleToggleScreenShare}
           onToggleSystemAudio={handleToggleSystemAudio}
-          onToggleChat={() => setIsChatOpen((prev) => !prev)}
+          unreadCount={unreadCount}
+          onToggleChat={() => {
+            setIsChatOpen((prev) => {
+              if (!prev) setUnreadCount(0);
+              return !prev;
+            });
+          }}
           onToggleDebug={() => setIsDebugEnabled((prev) => !prev)}
           audioDevices={media.audioDevices}
           videoDevices={media.videoDevices}

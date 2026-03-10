@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -53,7 +52,7 @@ export function ChatPanel({ messages, onSendText, onSendFile, onClose }: ChatPan
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-card md:static md:inset-auto md:z-auto md:w-80 md:border-l">
-      <div className="p-3 font-semibold border-b flex items-center justify-between">
+      <div className="h-12 px-3 font-semibold border-b flex items-center justify-between">
         <span>Chat</span>
         {onClose && (
           <Button variant="ghost" size="icon" className="h-7 w-7 md:hidden" onClick={onClose}>
@@ -98,9 +97,7 @@ export function ChatPanel({ messages, onSendText, onSendFile, onClose }: ChatPan
         </div>
       </ScrollArea>
 
-      <Separator />
-
-      <div className="p-3 flex gap-2">
+      <div className="h-14 px-3 flex items-center gap-2 border-t">
         <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
         <Button variant="ghost" size="icon" className="shrink-0" onClick={() => fileInputRef.current?.click()}>
           <Paperclip className="h-4 w-4" />

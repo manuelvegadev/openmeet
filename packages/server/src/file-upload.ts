@@ -4,6 +4,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { config } from './config.js';
+import { addRoomUpload } from './room-manager.js';
 
 // Ensure uploads directory exists
 if (!fs.existsSync(config.uploadDir)) {
@@ -31,6 +32,11 @@ uploadRouter.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: 'No file provided' });
     return;
+  }
+
+  const roomId = req.body?.roomId;
+  if (roomId && typeof roomId === 'string') {
+    addRoomUpload(roomId, req.file.filename);
   }
 
   res.json({
