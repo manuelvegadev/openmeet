@@ -42,6 +42,11 @@ Client A <──WebRTC P2P──> Client B
 | Markdown | react-markdown | v10 |
 | Linting/Formatting | Biome | v2.4+ |
 | TypeScript | typescript | v5.7+ |
+| Terminal TUI | Ink | v5 |
+| Node WebRTC | @roamhq/wrtc | v0.8 |
+| Audio I/O | sox (rec/play) | system |
+| Terminal Bundler | esbuild | v0.27 |
+| CI/CD | GitHub Actions | — |
 
 ## Monorepo Structure
 
@@ -53,10 +58,13 @@ openmeet/
 ├── biome.json                # Shared Biome config
 ├── Dockerfile                # Multi-stage build
 ├── docker-compose.yml        # Single service, port 3001
+├── .github/workflows/        # CI/CD workflows
+│   └── publish-terminal.yml  # npm publish on terminal-v* tags
 └── packages/
     ├── shared/               # @openmeet/shared - WS message types
     ├── server/               # @openmeet/server - Express + ws + in-memory Maps
-    └── client/               # @openmeet/client - Vite + React + shadcn (PWA)
+    ├── client/               # @openmeet/client - Vite + React + shadcn (PWA)
+    └── terminal/             # openmeet-terminal - TUI client (npm package)
 ```
 
 ## Package: shared (`packages/shared`)
@@ -219,6 +227,95 @@ interface RemoteStream {
 - **Controls bar layout**: Left (debug button), center (main controls), right (spacer). Unread badge on chat button.
 - **"You are presenting" placeholder**: Shown on local screen share tile instead of live capture to prevent infinite mirror.
 
+## Package: terminal (`packages/terminal`)
+
+Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messaging from the terminal. Published to npm as `openmeet-terminal`.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `src/index.tsx` | CLI entry point: arg parsing, sox/mic checks, Ink `render()` |
+| `src/app.tsx` | App shell: screen routing (home → device picker → room), room creation |
+| `build.mjs` | esbuild bundler: ESM, Node 22, bundles source + shared, externals for deps |
+| `install.sh` | Curl-pipe installer script (checks Node 22, sox, then `npm install -g`) |
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| `home-screen.tsx` | Create/join room, server URL display |
+| `device-picker.tsx` | Audio input/output device selection (remembers preferences) |
+| `room-view.tsx` | Main room: audio, chat, participant list, status bar |
+| `chat-input.tsx` | Text input for chat messages |
+| `chat-log.tsx` | Scrollable chat message history |
+| `participant-list.tsx` | Connected participants with mute indicators |
+| `status-bar.tsx` | Connection status, room info |
+| `room-log.tsx` | Room event log (joins, leaves, errors) |
+
+### Hooks
+
+| Hook | Purpose |
+|------|---------|
+| `use-room.ts` | WebSocket + WebRTC orchestration, audio pipeline, chat state |
+
+### Lib modules
+
+| Module | Purpose |
+|--------|---------|
+| `websocket.ts` | WebSocket client for signaling |
+| `webrtc.ts` | Peer connection management with `@roamhq/wrtc` |
+| `audio.ts` | sox-based audio capture/playback pipelines |
+| `audio-test.ts` | Audio device testing utilities |
+| `devices.ts` | Audio device enumeration and preference persistence |
+| `sdp.ts` | SDP manipulation (stereo Opus) |
+| `emoji.ts` | Random emoji username generation |
+
+### Tech stack
+
+- **Runtime**: Node.js >= 22
+- **TUI framework**: Ink v5 (React for terminal)
+- **WebRTC**: `@roamhq/wrtc` (native WebRTC bindings for Node.js)
+- **Audio**: sox (`rec` for capture, `play` for playback)
+- **Bundler**: esbuild (single-file ESM bundle with shebang)
+
+### CLI usage
+
+```bash
+openmeet [options]
+  --server <url>         WebSocket URL (default: ws://localhost:3001/ws)
+  --room <id>            Room ID to join directly
+  --input-device <name>  Input device name (skip device picker)
+  --output-device <name> Output device name (skip device picker)
+  -h, --help             Show help
+```
+
+### Publishing
+
+Published to npm via GitHub Actions. See [CI/CD](#cicd) section.
+
+## CI/CD
+
+### Workflow: `publish-terminal.yml`
+
+Automates npm publishing of `openmeet-terminal` via GitHub Actions.
+
+- **Trigger**: Push tags matching `terminal-v*` (e.g. `terminal-v0.1.0`)
+- **Steps**: checkout → pnpm + Node 22 setup → install → build shared → build terminal → publish to npm → create GitHub Release
+- **Secret**: `NPM_TOKEN` (npm automation token, stored in GitHub repo secrets)
+
+### How to publish a new version
+
+```bash
+# 1. Bump version in packages/terminal/package.json
+# 2. Commit and tag
+git add packages/terminal/package.json
+git commit -m "Release openmeet-terminal v0.2.0"
+git tag terminal-v0.2.0
+git push && git push --tags
+# GitHub Actions builds, publishes to npm, creates a GitHub Release
+```
+
 ## Code Style & Conventions
 
 - **Linter/Formatter**: Biome v2.4+ (not ESLint). Config at root `biome.json`.
@@ -259,3 +356,6 @@ interface RemoteStream {
 10. **Screen track routing**: Do NOT use transceiver reference equality (`===`) or `.mid` comparison to identify screen tracks in `ontrack` — browsers may return different wrapper objects during renegotiation. Use arrival-order logic instead (first video = webcam, second video = screen).
 11. **Screen track renegotiation**: `ontrack` may not fire when the screen transceiver direction changes from `inactive` to `sendrecv`. Always set up an `onunmute` listener on the screen receiver track as a fallback.
 10. **Chat panel mobile**: Uses `fixed inset-0` on mobile (fullscreen overlay). Width via CSS variable only applies at `md:` breakpoint.
+13. **Terminal npm publish**: Requires `NPM_TOKEN` secret in GitHub repo settings. Tags must match `terminal-v*` pattern to trigger the workflow.
+14. **Terminal sox dependency**: `sox` must be installed on the user's system for audio. The CLI checks for `rec` and `play` on startup and exits with instructions if missing.
+15. **Terminal esbuild bundle**: `@openmeet/shared` is aliased and inlined; all npm dependencies are kept external (`packages: 'external'`). The output is a single ESM file with a `#!/usr/bin/env node` shebang.
