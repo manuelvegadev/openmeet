@@ -49,7 +49,7 @@ function checkMicPermission(): 'granted' | 'denied' | 'unknown' {
 
 const { values } = parseArgs({
   options: {
-    server: { type: 'string', default: 'ws://localhost:3001/ws' },
+    server: { type: 'string', default: 'wss://openmeet.mvega.pro/ws' },
     room: { type: 'string' },
     'input-device': { type: 'string' },
     'output-device': { type: 'string' },
@@ -60,7 +60,7 @@ const { values } = parseArgs({
 if (values.help) {
   process.stdout.write(`Usage: openmeet [options]
 
-  --server <url>         WebSocket URL (default: ws://localhost:3001/ws)
+  --server <url>         WebSocket URL (default: wss://openmeet.mvega.pro/ws)
   --room <id>            Room ID to join
   --input-device <name>  Input device name (skip device picker)
   --output-device <name> Output device name (skip device picker)
@@ -107,7 +107,7 @@ process.on('exit', () => {
 
 render(
   <App
-    serverUrl={values.server ?? 'ws://localhost:3001/ws'}
+    serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
     emoji={emoji}
     initialRoom={values.room}
     inputDevice={values['input-device']}
