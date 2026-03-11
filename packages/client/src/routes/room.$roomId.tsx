@@ -228,6 +228,7 @@ function RoomPage() {
           remoteMuteStates={remoteMuteStates}
           remoteVideoMuteStates={remoteVideoMuteStates}
           remoteScreenShareStates={webrtc.screenShareStates}
+          audioOutputDeviceId={media.audioOutputDeviceId}
         />
         <ControlsBar
           isAudioEnabled={media.isAudioEnabled}
@@ -250,12 +251,16 @@ function RoomPage() {
           onToggleDebug={() => setIsDebugEnabled((prev) => !prev)}
           audioDevices={media.audioDevices}
           videoDevices={media.videoDevices}
+          audioOutputDevices={media.audioOutputDevices}
           audioDeviceId={media.audioDeviceId}
           videoDeviceId={media.videoDeviceId}
+          audioOutputDeviceId={media.audioOutputDeviceId}
           echoCancellation={media.echoCancellation}
           onSwitchAudio={media.switchAudioDevice}
           onSwitchVideo={media.switchVideoDevice}
+          onSwitchAudioOutput={media.switchAudioOutputDevice}
           onToggleEchoCancellation={media.toggleEchoCancellation}
+          onRequestDevicePermission={media.requestDevicePermission}
         />
       </div>
       {isChatOpen && (

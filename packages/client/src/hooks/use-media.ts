@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   getSavedAudioDevice,
+  getSavedAudioOutputDevice,
   getSavedEchoCancellation,
   getSavedVideoDevice,
   setSavedAudioDevice,
+  setSavedAudioOutputDevice,
   setSavedEchoCancellation,
   setSavedVideoDevice,
 } from '@/lib/utils';
@@ -19,8 +21,10 @@ interface MediaState {
   echoCancellation: boolean;
   audioDeviceId: string;
   videoDeviceId: string;
+  audioOutputDeviceId: string;
   audioDevices: MediaDeviceInfo[];
   videoDevices: MediaDeviceInfo[];
+  audioOutputDevices: MediaDeviceInfo[];
 }
 
 interface Mixer {
@@ -51,8 +55,10 @@ export function useMedia() {
     echoCancellation: getSavedEchoCancellation() ?? true,
     audioDeviceId: '',
     videoDeviceId: '',
+    audioOutputDeviceId: getSavedAudioOutputDevice() ?? '',
     audioDevices: [],
     videoDevices: [],
+    audioOutputDevices: [],
   });
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -68,11 +74,26 @@ export function useMedia() {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const audioDevices = devices.filter((d) => d.kind === 'audioinput' && d.deviceId);
       const videoDevices = devices.filter((d) => d.kind === 'videoinput' && d.deviceId);
-      setState((s) => ({ ...s, audioDevices, videoDevices }));
+      const audioOutputDevices = devices.filter((d) => d.kind === 'audiooutput' && d.deviceId);
+      setState((s) => ({ ...s, audioDevices, videoDevices, audioOutputDevices }));
     } catch (err) {
       console.error('Failed to enumerate devices:', err);
     }
   }, []);
+
+  // Request mic permission so browsers reveal device labels, then re-enumerate.
+  // The temporary stream is stopped immediately — we only need the permission grant.
+  const requestDevicePermission = useCallback(async () => {
+    const hasLabels = stateRef.current.audioDevices.some((d) => d.label);
+    if (hasLabels) return;
+    try {
+      const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      for (const t of tempStream.getTracks()) t.stop();
+      await enumerateDevices();
+    } catch {
+      // Permission denied — labels stay hidden
+    }
+  }, [enumerateDevices]);
 
   useEffect(() => {
     enumerateDevices();
@@ -316,6 +337,11 @@ export function useMedia() {
     [getOutputAudioTrack],
   );
 
+  const switchAudioOutputDevice = useCallback((deviceId: string) => {
+    setSavedAudioOutputDevice(deviceId);
+    setState((s) => ({ ...s, audioOutputDeviceId: deviceId }));
+  }, []);
+
   const toggleEchoCancellation = useCallback(async () => {
     const { echoCancellation } = stateRef.current;
     const newValue = !echoCancellation;
@@ -483,11 +509,13 @@ export function useMedia() {
       isVideoEnabled: false,
       isScreenSharing: false,
       isSystemAudioSharing: false,
-      echoCancellation: true,
+      echoCancellation: getSavedEchoCancellation() ?? true,
       audioDeviceId: '',
       videoDeviceId: '',
+      audioOutputDeviceId: '',
       audioDevices: [],
       videoDevices: [],
+      audioOutputDevices: [],
     });
   }, []);
 
@@ -499,6 +527,8 @@ export function useMedia() {
     toggleVideo,
     switchAudioDevice,
     switchVideoDevice,
+    switchAudioOutputDevice,
+    requestDevicePermission,
     toggleEchoCancellation,
     startSystemAudio,
     stopSystemAudio,

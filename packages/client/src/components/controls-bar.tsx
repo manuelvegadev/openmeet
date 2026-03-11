@@ -19,12 +19,16 @@ interface ControlsBarProps {
   onToggleDebug: () => void;
   audioDevices: MediaDeviceInfo[];
   videoDevices: MediaDeviceInfo[];
+  audioOutputDevices: MediaDeviceInfo[];
   audioDeviceId: string;
   videoDeviceId: string;
+  audioOutputDeviceId: string;
   echoCancellation: boolean;
   onSwitchAudio: (deviceId: string) => void;
   onSwitchVideo: (deviceId: string) => void;
+  onSwitchAudioOutput: (deviceId: string) => void;
   onToggleEchoCancellation: () => void;
+  onRequestDevicePermission: () => void;
 }
 
 export function ControlsBar({
@@ -43,12 +47,16 @@ export function ControlsBar({
   onToggleDebug,
   audioDevices,
   videoDevices,
+  audioOutputDevices,
   audioDeviceId,
   videoDeviceId,
+  audioOutputDeviceId,
   echoCancellation,
   onSwitchAudio,
   onSwitchVideo,
+  onSwitchAudioOutput,
   onToggleEchoCancellation,
+  onRequestDevicePermission,
 }: ControlsBarProps) {
   return (
     <div className="h-14 flex items-center px-3 bg-card border-t">
@@ -93,13 +101,16 @@ export function ControlsBar({
           <DeviceSelector
             audioDevices={audioDevices}
             videoDevices={videoDevices}
+            audioOutputDevices={audioOutputDevices}
             audioDeviceId={audioDeviceId}
             videoDeviceId={videoDeviceId}
-            isAudioEnabled={isAudioEnabled}
+            audioOutputDeviceId={audioOutputDeviceId}
             echoCancellation={echoCancellation}
             onSwitchAudio={onSwitchAudio}
             onSwitchVideo={onSwitchVideo}
+            onSwitchAudioOutput={onSwitchAudioOutput}
             onToggleEchoCancellation={onToggleEchoCancellation}
+            onOpen={onRequestDevicePermission}
           />
         </div>
 

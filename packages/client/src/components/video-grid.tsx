@@ -15,6 +15,7 @@ interface VideoGridProps {
   remoteMuteStates?: Record<string, boolean>;
   remoteVideoMuteStates?: Record<string, boolean>;
   remoteScreenShareStates?: Record<string, boolean>;
+  audioOutputDeviceId?: string;
 }
 
 function useIsPortrait() {
@@ -48,6 +49,7 @@ export function VideoGrid({
   remoteMuteStates = {},
   remoteVideoMuteStates = {},
   remoteScreenShareStates = {},
+  audioOutputDeviceId,
 }: VideoGridProps) {
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const portrait = useIsPortrait();
@@ -134,6 +136,7 @@ export function VideoGrid({
               isScreenShare
               onClick={() => setSpotlightId(null)}
               isSpotlight
+              audioOutputDeviceId={audioOutputDeviceId}
             />
           );
         }
@@ -168,6 +171,7 @@ export function VideoGrid({
             showDebug={showDebug}
             onClick={() => setSpotlightId(null)}
             isSpotlight
+            audioOutputDeviceId={audioOutputDeviceId}
           />
         );
       }
@@ -228,6 +232,7 @@ export function VideoGrid({
                     isAudioMuted={remoteMuteStates[peerId]}
                     peerConnection={getConnection?.(peerId)}
                     showDebug={showDebug}
+                    audioOutputDeviceId={audioOutputDeviceId}
                   />
                 </div>
               ))}
@@ -245,6 +250,7 @@ export function VideoGrid({
                     peerConnection={getConnection?.(peerId)}
                     showDebug={showDebug}
                     onClick={() => toggleSpotlight(`screen-${peerId}`)}
+                    audioOutputDeviceId={audioOutputDeviceId}
                   />
                 </div>
               ))}
@@ -296,6 +302,7 @@ export function VideoGrid({
             isAudioMuted={remoteMuteStates[peerId]}
             peerConnection={getConnection?.(peerId)}
             showDebug={showDebug}
+            audioOutputDeviceId={audioOutputDeviceId}
           />
           {remoteScreenShareStates[peerId] && screenStream && (
             <VideoTile
@@ -305,6 +312,7 @@ export function VideoGrid({
               peerConnection={getConnection?.(peerId)}
               showDebug={showDebug}
               onClick={() => toggleSpotlight(`screen-${peerId}`)}
+              audioOutputDeviceId={audioOutputDeviceId}
             />
           )}
         </Fragment>

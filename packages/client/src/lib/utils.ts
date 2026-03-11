@@ -96,6 +96,16 @@ export function setSavedVideoDevice(deviceId: string): void {
   localStorage.setItem(VIDEO_DEVICE_KEY, deviceId);
 }
 
+const AUDIO_OUTPUT_DEVICE_KEY = 'openmeet-audio-output-device';
+
+export function getSavedAudioOutputDevice(): string | null {
+  return localStorage.getItem(AUDIO_OUTPUT_DEVICE_KEY);
+}
+
+export function setSavedAudioOutputDevice(deviceId: string): void {
+  localStorage.setItem(AUDIO_OUTPUT_DEVICE_KEY, deviceId);
+}
+
 const ECHO_CANCELLATION_KEY = 'openmeet-echo-cancellation';
 
 export function getSavedEchoCancellation(): boolean | null {
