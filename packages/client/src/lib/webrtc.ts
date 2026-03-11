@@ -4,10 +4,10 @@ const ICE_SERVERS: RTCConfiguration = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }],
 };
 
-// Screen share is always the 3rd transceiver (index 2).
-// Both sides create transceivers in the same order: audio (0), webcam (1), screen (2).
-// After SDP exchange, getTransceivers() preserves m-line order.
-const SCREEN_TRANSCEIVER_INDEX = 2;
+// Fixed transceiver indices — both peers create m-lines in this order.
+const AUDIO_INDEX = 0;
+const WEBCAM_INDEX = 1;
+const SCREEN_INDEX = 2;
 
 function enableStereoOpus(sdp: string): string {
   return sdp.replace(/a=fmtp:(\d+) (.+)/g, (match, pt, params) => {
@@ -18,10 +18,6 @@ function enableStereoOpus(sdp: string): string {
     }
     return match;
   });
-}
-
-function getScreenTransceiver(pc: RTCPeerConnection): RTCRtpTransceiver | undefined {
-  return pc.getTransceivers()[SCREEN_TRANSCEIVER_INDEX];
 }
 
 export class PeerConnectionManager {
@@ -36,6 +32,7 @@ export class PeerConnectionManager {
   private onRemoteScreenStream: (peerId: string, stream: MediaStream | null) => void;
   private onRemoteStreamRemoved: (peerId: string) => void;
   private makingOffer = new Set<string>();
+  private pendingRenegotiation = new Set<string>();
 
   constructor(options: {
     myId: string;
@@ -51,36 +48,76 @@ export class PeerConnectionManager {
     this.onRemoteStreamRemoved = options.onRemoteStreamRemoved;
   }
 
+  // ---------------------------------------------------------------------------
+  // Core track synchronisation
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Ensures the correct local tracks are attached to the correct transceivers
+   * using fixed indices (0 = audio, 1 = webcam, 2 = screen).
+   *
+   * replaceTrack() is always safe — it works without renegotiation.
+   * Returns true only when a transceiver *direction* changed, which requires
+   * a new offer/answer exchange.
+   */
+  private syncLocalTracks(pc: RTCPeerConnection): boolean {
+    const transceivers = pc.getTransceivers();
+    if (transceivers.length < 3) return false;
+
+    let directionChanged = false;
+
+    // Audio (index 0): always sendrecv so ontrack fires on the remote
+    const audioTrack = this.localStream?.getAudioTracks()[0] ?? null;
+    if (transceivers[AUDIO_INDEX].sender.track !== audioTrack) {
+      transceivers[AUDIO_INDEX].sender.replaceTrack(audioTrack);
+    }
+    if (transceivers[AUDIO_INDEX].direction !== 'sendrecv') {
+      transceivers[AUDIO_INDEX].direction = 'sendrecv';
+      directionChanged = true;
+    }
+
+    // Webcam video (index 1): always sendrecv
+    const videoTrack = this.localStream?.getVideoTracks()[0] ?? null;
+    if (transceivers[WEBCAM_INDEX].sender.track !== videoTrack) {
+      transceivers[WEBCAM_INDEX].sender.replaceTrack(videoTrack);
+    }
+    if (transceivers[WEBCAM_INDEX].direction !== 'sendrecv') {
+      transceivers[WEBCAM_INDEX].direction = 'sendrecv';
+      directionChanged = true;
+    }
+
+    // Screen video (index 2): sendrecv when sharing, recvonly otherwise
+    const screenTrack = this.screenStream?.getVideoTracks()[0] ?? null;
+    if (transceivers[SCREEN_INDEX].sender.track !== screenTrack) {
+      transceivers[SCREEN_INDEX].sender.replaceTrack(screenTrack);
+    }
+    const wantedDir = screenTrack ? 'sendrecv' : 'recvonly';
+    if (transceivers[SCREEN_INDEX].direction !== wantedDir) {
+      transceivers[SCREEN_INDEX].direction = wantedDir;
+      directionChanged = true;
+    }
+
+    return directionChanged;
+  }
+
+  /** Set up onunmute listener on the screen receiver track. */
+  private setupScreenTrackListener(peerId: string, pc: RTCPeerConnection): void {
+    const screenReceiverTrack = pc.getTransceivers()[SCREEN_INDEX]?.receiver?.track;
+    if (screenReceiverTrack) {
+      screenReceiverTrack.onunmute = () => {
+        this.handleScreenTrack(peerId, screenReceiverTrack);
+      };
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public API — local stream management
+  // ---------------------------------------------------------------------------
+
   setLocalStream(stream: MediaStream): void {
     this.localStream = stream;
     for (const [peerId, pc] of this.connections) {
-      let needsRenegotiation = false;
-      const screenTransceiver = getScreenTransceiver(pc);
-
-      for (const track of stream.getTracks()) {
-        // Find the right transceiver: for audio, find audio transceiver; for video, find webcam video transceiver (not the screen one)
-        const transceiver = pc
-          .getTransceivers()
-          .find((t) => t.receiver.track.kind === track.kind && t !== screenTransceiver);
-
-        if (transceiver) {
-          const currentTrack = transceiver.sender.track;
-          if (currentTrack && currentTrack !== track) {
-            transceiver.sender.replaceTrack(track);
-          } else if (!currentTrack) {
-            transceiver.sender.replaceTrack(track);
-            if (transceiver.direction === 'recvonly') {
-              transceiver.direction = 'sendrecv';
-              needsRenegotiation = true;
-            }
-          }
-        } else {
-          pc.addTrack(track, stream);
-          needsRenegotiation = true;
-        }
-      }
-
-      if (needsRenegotiation) {
+      if (this.syncLocalTracks(pc)) {
         this.renegotiate(peerId, pc);
       }
     }
@@ -88,50 +125,72 @@ export class PeerConnectionManager {
 
   setScreenStream(stream: MediaStream | null): void {
     this.screenStream = stream;
-    const screenTrack = stream?.getVideoTracks()[0] ?? null;
-
     for (const [peerId, pc] of this.connections) {
-      const screenTransceiver = getScreenTransceiver(pc);
-      if (!screenTransceiver) continue;
-
-      screenTransceiver.sender.replaceTrack(screenTrack);
-
-      const newDirection = screenTrack ? 'sendrecv' : 'recvonly';
-      if (screenTransceiver.direction !== newDirection) {
-        screenTransceiver.direction = newDirection;
+      if (this.syncLocalTracks(pc)) {
         this.renegotiate(peerId, pc);
       }
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Public API — connection lifecycle
+  // ---------------------------------------------------------------------------
+
   async createConnection(peerId: string): Promise<void> {
-    const pc = this.createPeerConnection(peerId);
+    const pc = this.createOffererConnection(peerId);
 
-    const offer = await pc.createOffer();
-    const modifiedSdp = enableStereoOpus(offer.sdp ?? '');
-    await pc.setLocalDescription({ ...offer, sdp: modifiedSdp });
-
-    this.sendSignal({
-      type: 'offer',
-      fromId: this.myId,
-      toId: peerId,
-      sdp: pc.localDescription!,
-    });
+    this.makingOffer.add(peerId);
+    try {
+      const offer = await pc.createOffer();
+      const modifiedSdp = enableStereoOpus(offer.sdp ?? '');
+      await pc.setLocalDescription({ ...offer, sdp: modifiedSdp });
+      this.sendSignal({
+        type: 'offer',
+        fromId: this.myId,
+        toId: peerId,
+        sdp: pc.localDescription!,
+      });
+    } catch (err) {
+      console.error(`createConnection to ${peerId} failed:`, err);
+    } finally {
+      this.makingOffer.delete(peerId);
+      this.flushPendingRenegotiation(peerId);
+    }
   }
 
   async handleOffer(peerId: string, sdp: RTCSessionDescriptionInit): Promise<void> {
     let pc = this.connections.get(peerId);
     if (!pc) {
-      pc = this.createPeerConnection(peerId);
+      // Answerer path: bare connection, NO transceivers yet.
+      pc = this.setupPeerConnection(peerId);
+    }
+
+    // Perfect negotiation — detect offer collision (glare)
+    const offerCollision = this.makingOffer.has(peerId) || pc.signalingState !== 'stable';
+    // Lexicographically smaller ID is the "polite" peer that yields
+    const polite = this.myId < peerId;
+
+    if (!polite && offerCollision) {
+      // Impolite: ignore incoming offer — remote (polite) will process ours
+      return;
     }
 
     try {
-      // Handle glare: if we also sent an offer, rollback ours (be polite)
-      if (pc.signalingState === 'have-local-offer') {
+      if (offerCollision) {
+        // Polite: rollback our own offer to accept theirs
         await pc.setLocalDescription({ type: 'rollback' });
       }
 
+      // Process offer FIRST — this creates transceivers from the offer's m-lines
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+      // Attach local tracks to the transceivers the offer defined.
+      // Direction changes are absorbed by the answer SDP below.
+      this.syncLocalTracks(pc);
+
+      // Screen receiver fallback listener
+      this.setupScreenTrackListener(peerId, pc);
+
       const answer = await pc.createAnswer();
       const modifiedSdp = enableStereoOpus(answer.sdp ?? '');
       await pc.setLocalDescription({ ...answer, sdp: modifiedSdp });
@@ -152,6 +211,10 @@ export class PeerConnectionManager {
     if (!pc) return;
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      // Verify tracks — local state may have changed during negotiation
+      if (this.syncLocalTracks(pc)) {
+        this.renegotiate(peerId, pc);
+      }
     } catch (err) {
       console.error(`handleAnswer from ${peerId} failed:`, err);
     }
@@ -167,26 +230,6 @@ export class PeerConnectionManager {
     }
   }
 
-  private async renegotiate(peerId: string, pc: RTCPeerConnection): Promise<void> {
-    if (this.makingOffer.has(peerId)) return;
-    this.makingOffer.add(peerId);
-    try {
-      const offer = await pc.createOffer();
-      const modifiedSdp = enableStereoOpus(offer.sdp ?? '');
-      await pc.setLocalDescription({ ...offer, sdp: modifiedSdp });
-      this.sendSignal({
-        type: 'offer',
-        fromId: this.myId,
-        toId: peerId,
-        sdp: pc.localDescription!,
-      });
-    } catch (err) {
-      console.error(`Renegotiation with ${peerId} failed:`, err);
-    } finally {
-      this.makingOffer.delete(peerId);
-    }
-  }
-
   removeConnection(peerId: string): void {
     const pc = this.connections.get(peerId);
     if (pc) {
@@ -195,6 +238,7 @@ export class PeerConnectionManager {
       this.remoteStreams.delete(peerId);
       this.remoteScreenStreams.delete(peerId);
       this.makingOffer.delete(peerId);
+      this.pendingRenegotiation.delete(peerId);
       this.onRemoteStreamRemoved(peerId);
     }
   }
@@ -213,6 +257,49 @@ export class PeerConnectionManager {
     return [...this.connections.keys()];
   }
 
+  // ---------------------------------------------------------------------------
+  // Renegotiation with concurrency guard
+  // ---------------------------------------------------------------------------
+
+  private async renegotiate(peerId: string, pc: RTCPeerConnection): Promise<void> {
+    if (this.makingOffer.has(peerId)) {
+      this.pendingRenegotiation.add(peerId);
+      return;
+    }
+    this.makingOffer.add(peerId);
+    try {
+      // Re-sync tracks right before creating the offer so the SDP is fresh
+      this.syncLocalTracks(pc);
+
+      const offer = await pc.createOffer();
+      const modifiedSdp = enableStereoOpus(offer.sdp ?? '');
+      await pc.setLocalDescription({ ...offer, sdp: modifiedSdp });
+      this.sendSignal({
+        type: 'offer',
+        fromId: this.myId,
+        toId: peerId,
+        sdp: pc.localDescription!,
+      });
+    } catch (err) {
+      console.error(`Renegotiation with ${peerId} failed:`, err);
+    } finally {
+      this.makingOffer.delete(peerId);
+      this.flushPendingRenegotiation(peerId);
+    }
+  }
+
+  private flushPendingRenegotiation(peerId: string): void {
+    if (this.pendingRenegotiation.has(peerId)) {
+      this.pendingRenegotiation.delete(peerId);
+      const pc = this.connections.get(peerId);
+      if (pc) this.renegotiate(peerId, pc);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Remote track handling
+  // ---------------------------------------------------------------------------
+
   private handleScreenTrack(peerId: string, track: MediaStreamTrack): void {
     let screenStream = this.remoteScreenStreams.get(peerId);
     if (!screenStream) {
@@ -229,7 +316,12 @@ export class PeerConnectionManager {
     this.onRemoteScreenStream(peerId, new MediaStream(screenStream.getTracks()));
   }
 
-  private createPeerConnection(peerId: string): RTCPeerConnection {
+  // ---------------------------------------------------------------------------
+  // Peer connection setup
+  // ---------------------------------------------------------------------------
+
+  /** Create a bare RTCPeerConnection with event handlers but NO transceivers. */
+  private setupPeerConnection(peerId: string): RTCPeerConnection {
     if (this.connections.has(peerId)) {
       this.connections.get(peerId)!.close();
     }
@@ -237,56 +329,17 @@ export class PeerConnectionManager {
     const pc = new RTCPeerConnection(ICE_SERVERS);
     this.connections.set(peerId, pc);
 
-    const audioTrack = this.localStream?.getAudioTracks()[0];
-    const webcamTrack = this.localStream?.getVideoTracks()[0];
-    const screenTrack = this.screenStream?.getVideoTracks()[0];
-
-    // Transceiver 0: Audio — high priority (always preserved first)
-    pc.addTransceiver('audio', {
-      direction: 'sendrecv',
-      sendEncodings: [{ priority: 'high', networkPriority: 'high' }],
-    });
-    if (audioTrack) {
-      pc.getTransceivers()[0].sender.replaceTrack(audioTrack);
-    }
-
-    // Transceiver 1: Webcam video — low priority, capped at 30fps
-    // Always sendrecv so ontrack fires on the remote immediately and
-    // replaceTrack works without renegotiation when the camera stream
-    // arrives late (e.g. after a page reload).
-    pc.addTransceiver('video', {
-      direction: 'sendrecv',
-      sendEncodings: [{ priority: 'low', networkPriority: 'low', maxFramerate: 30 }],
-    });
-    if (webcamTrack) {
-      pc.getTransceivers()[1].sender.replaceTrack(webcamTrack);
-    }
-
-    // Transceiver 2: Screen share video — medium priority, capped at 60fps
-    pc.addTransceiver('video', {
-      direction: screenTrack ? 'sendrecv' : 'recvonly',
-      sendEncodings: [{ priority: 'medium', networkPriority: 'medium', maxFramerate: 60 }],
-    });
-    if (screenTrack) {
-      pc.getTransceivers()[2].sender.replaceTrack(screenTrack);
-    }
-
-    // Fallback: listen for the screen receiver track's unmute event.
-    // During renegotiation ontrack may not fire for an existing transceiver
-    // whose direction changed from inactive → sendrecv. The track's unmute
-    // event reliably signals the remote started sending screen content.
-    const screenReceiverTrack = getScreenTransceiver(pc)?.receiver?.track;
-    if (screenReceiverTrack) {
-      screenReceiverTrack.onunmute = () => {
-        this.handleScreenTrack(peerId, screenReceiverTrack);
-      };
-    }
-
     pc.ontrack = (event) => {
-      // Route video tracks by arrival order instead of transceiver identification.
-      // ontrack fires in m-line order: audio (0), webcam video (1), screen video (2).
-      // If we already have a webcam video track, any new video track is the screen.
-      if (event.track.kind === 'video') {
+      // Identify track by transceiver index — deterministic, not arrival-order.
+      const idx = pc.getTransceivers().indexOf(event.transceiver);
+
+      if (idx === SCREEN_INDEX) {
+        this.handleScreenTrack(peerId, event.track);
+        return;
+      }
+
+      // Fallback for unrecognised transceiver (should not happen in practice)
+      if (idx === -1 && event.track.kind === 'video') {
         const remoteStream = this.remoteStreams.get(peerId);
         if (remoteStream && remoteStream.getVideoTracks().length > 0) {
           this.handleScreenTrack(peerId, event.track);
@@ -294,7 +347,7 @@ export class PeerConnectionManager {
         }
       }
 
-      // Audio or first webcam video → webcam stream
+      // Audio (index 0) or webcam video (index 1) → webcam stream
       let remoteStream = this.remoteStreams.get(peerId);
       if (!remoteStream) {
         remoteStream = new MediaStream();
@@ -326,7 +379,36 @@ export class PeerConnectionManager {
         console.warn(`Connection to ${peerId} failed`);
         this.removeConnection(peerId);
       }
+      // Safety net: verify tracks when connection is established
+      if (pc.connectionState === 'connected') {
+        this.syncLocalTracks(pc);
+      }
     };
+
+    return pc;
+  }
+
+  /** Create a peer connection WITH 3 transceivers (offerer path). */
+  private createOffererConnection(peerId: string): RTCPeerConnection {
+    const pc = this.setupPeerConnection(peerId);
+
+    // Create 3 transceivers in fixed order with encoding priorities
+    pc.addTransceiver('audio', {
+      direction: 'sendrecv',
+      sendEncodings: [{ priority: 'high', networkPriority: 'high' }],
+    });
+    pc.addTransceiver('video', {
+      direction: 'sendrecv',
+      sendEncodings: [{ priority: 'low', networkPriority: 'low', maxFramerate: 30 }],
+    });
+    pc.addTransceiver('video', {
+      direction: this.screenStream?.getVideoTracks()[0] ? 'sendrecv' : 'recvonly',
+      sendEncodings: [{ priority: 'medium', networkPriority: 'medium', maxFramerate: 60 }],
+    });
+
+    // Attach local tracks and set up screen listener
+    this.syncLocalTracks(pc);
+    this.setupScreenTrackListener(peerId, pc);
 
     return pc;
   }
