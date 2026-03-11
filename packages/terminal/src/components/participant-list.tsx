@@ -1,0 +1,97 @@
+import type { Participant } from '@openmeet/shared';
+import { Box, Text } from 'ink';
+
+const BAR_COUNT = 20;
+const MAX_RMS = 8000;
+
+function vuColor(level: number, volume: number): string {
+  const normalized = Math.min(level / MAX_RMS, 1) * volume;
+  if (normalized > 0.75) return 'red';
+  if (normalized > 0.4) return 'yellow';
+  return 'green';
+}
+
+function VuMeter({ level, volume = 1 }: { level: number; volume?: number }) {
+  const activeBars = Math.round(volume * BAR_COUNT);
+  const normalized = Math.min(level / MAX_RMS, 1);
+  const filled = Math.round(normalized * activeBars);
+  const emptyActive = activeBars - filled;
+  const inactive = BAR_COUNT - activeBars;
+  const color = vuColor(level, volume);
+
+  return (
+    <Text>
+      <Text color={color}>{'\u2588'.repeat(filled)}</Text>
+      <Text color="green">{'\u2591'.repeat(emptyActive)}</Text>
+      <Text dimColor>{'\u2591'.repeat(inactive)}</Text>
+    </Text>
+  );
+}
+
+interface ParticipantListProps {
+  participants: Participant[];
+  myId: string | null;
+  username: string;
+  isMuted: boolean;
+  remoteMuteStates: Record<string, boolean>;
+  remoteScreenShareStates: Record<string, boolean>;
+  speakingStates: Record<string, boolean>;
+  audioLevels: Record<string, number>;
+  peerVolumes: Record<string, number>;
+  selectedPeerIdx: number;
+}
+
+export function ParticipantList({
+  participants,
+  username,
+  isMuted,
+  remoteMuteStates,
+  remoteScreenShareStates,
+  speakingStates,
+  audioLevels,
+  peerVolumes,
+  selectedPeerIdx,
+}: ParticipantListProps) {
+  const localSpeaking = speakingStates.__local__ && !isMuted;
+
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Text bold>Participants:</Text>
+      <Box paddingLeft={1} justifyContent="space-between">
+        <Text>
+          <Text color={localSpeaking ? 'green' : undefined}>{localSpeaking ? '● ' : '○ '}</Text>
+          <Text>{username} (you)</Text>
+          {isMuted && <Text color="yellow"> [muted]</Text>}
+        </Text>
+        <VuMeter level={audioLevels.__local__ ?? 0} />
+      </Box>
+      {participants.map((p, idx) => {
+        const speaking = speakingStates[p.id] && !remoteMuteStates[p.id];
+        const isSelected = idx === selectedPeerIdx;
+        const level = audioLevels[p.id] ?? 0;
+        const vol = peerVolumes[p.id] ?? 1;
+        return (
+          <Box key={p.id} paddingLeft={1} justifyContent="space-between">
+            <Text>
+              <Text color={speaking ? 'green' : undefined}>{speaking ? '● ' : '○ '}</Text>
+              <Text color="cyan">{isSelected ? '> ' : '  '}</Text>
+              <Text>{p.username}</Text>
+              {remoteMuteStates[p.id] && <Text color="yellow"> [muted]</Text>}
+              {remoteScreenShareStates[p.id] && <Text color="cyan"> [scr]</Text>}
+            </Text>
+            <Box>
+              <Text>
+                vol:
+                {Math.round(vol * 100)
+                  .toString()
+                  .padStart(3)}
+                %{' '}
+              </Text>
+              <VuMeter level={level} volume={vol} />
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}

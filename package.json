@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "pnpm -r --parallel dev",
-    "build": "pnpm --filter @openmeet/shared build && pnpm --filter @openmeet/client build && pnpm --filter @openmeet/server build",
+    "build": "pnpm --filter @openmeet/shared build && pnpm --filter @openmeet/client build && pnpm --filter @openmeet/server build && pnpm --filter openmeet-terminal build",
     "clean": "pnpm -r clean",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -15,7 +15,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3",
-      "esbuild"
+      "esbuild",
+      "@roamhq/wrtc"
     ]
   },
   "devDependencies": {
