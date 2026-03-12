@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import { render } from 'ink';
 import { App } from './app.js';
 import { getOrCreateEmoji } from './lib/emoji.js';
+import { APP_VERSION } from './version.js';
 
 function checkSox(): boolean {
   try {
@@ -54,11 +55,14 @@ const { values } = parseArgs({
     'input-device': { type: 'string' },
     'output-device': { type: 'string' },
     help: { type: 'boolean', short: 'h' },
+    debug: { type: 'boolean', default: false },
   },
 });
 
 if (values.help) {
-  process.stdout.write(`Usage: openmeet [options]
+  process.stdout.write(`openmeet-terminal v${APP_VERSION}
+
+Usage: openmeet [options]
 
   --server <url>         WebSocket URL (default: wss://openmeet.mvega.pro/ws)
   --room <id>            Room ID to join
@@ -99,18 +103,39 @@ console.log = () => {};
 console.error = () => {};
 console.warn = () => {};
 
-// Enter alternate screen buffer so the TUI is the only visible content
+// Enter alternate screen buffer (like nano/vim) — restores terminal on exit
 process.stdout.write('\x1b[?1049h');
-process.on('exit', () => {
-  process.stdout.write('\x1b[?1049l');
-});
 
-render(
+// Ink uses ansiEscapes.clearTerminal (\x1b[2J\x1b[3J\x1b[H]) when output fills the screen.
+// \x1b[3J clears the scrollback buffer, which on macOS leaks through to the main buffer
+// even when inside the alt screen. Strip it so the user's terminal history is preserved.
+const origStdoutWrite = process.stdout.write;
+process.stdout.write = function (chunk, ...args: any[]) {
+  if (typeof chunk === 'string') {
+    chunk = chunk.replaceAll('\x1b[3J', '');
+  }
+  return origStdoutWrite.call(this, chunk, ...args);
+} as typeof process.stdout.write;
+
+const instance = render(
   <App
     serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
     emoji={emoji}
+    version={APP_VERSION}
     initialRoom={values.room}
     inputDevice={values['input-device']}
     outputDevice={values['output-device']}
+    debug={values.debug ?? false}
   />,
 );
+
+// After Ink unmounts, trigger process exit
+instance.waitUntilExit().then(() => {
+  process.exit(0);
+});
+
+// Registered AFTER render() so this runs AFTER Ink's own exit handler.
+// Ink's cleanup writes to the alt buffer, then we leave it — normal buffer untouched.
+process.on('exit', () => {
+  process.stdout.write('\x1b[?1049l');
+});

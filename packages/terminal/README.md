@@ -6,12 +6,12 @@ No browser needed. Just your terminal, a mic, and speakers.
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ OpenMeet | Room: 123 | 3p                                                            ↑66k ↓27k | RTT:0ms Loss:0% | ● │
+│ OpenMeet v0.1.2 | Room: 123 | 3p                                                            ↑66k ↓27k | RTT:0ms Loss:0% | ● │
 │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│
 │ Participants:                                                                                                        │
 │  ○ 🥝 (you)                                                                                     ░░░░░░░░░░░░░░░░░░░░ │
-│  ○ > 🥸 [muted]                                                                        vol:100% ░░░░░░░░░░░░░░░░░░░░ │
-│  ○   👽                                                                                vol:100% ░░░░░░░░░░░░░░░░░░░░ │
+│  ○ > 🥸 [muted]                                                                vol:100% ↓64k ~45ms ░░░░░░░░░░░░░░░░░░░░ │
+│  ○   👽                                                                        vol:100% ↓32k ~38ms ░░░░░░░░░░░░░░░░░░░░ │
 │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│
 │                                                           │ Room Log                                    in room: 13s │
 │                                                           │                                                          │
@@ -38,7 +38,7 @@ No browser needed. Just your terminal, a mic, and speakers.
 - **Device selection** — pick your mic and speakers, with a built-in audio test step
 - **Per-participant volume** — adjust volume for each remote peer independently
 - **Speaking indicators** — see who's talking with live VU meters
-- **Connection stats** — real-time bitrate, RTT, and packet loss display
+- **Connection stats** — real-time bitrate, RTT, packet loss, and estimated per-peer latency display
 - **Room management** — create new rooms or join existing ones by room code
 - **Emoji identities** — auto-assigned persistent emoji username (e.g., 🐶, 🦊, 🐸)
 - **Cross-platform** — works on macOS and Linux

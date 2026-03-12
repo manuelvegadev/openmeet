@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 
 interface HomeScreenProps {
   emoji: string;
+  version: string;
   loading: boolean;
   error: string | null;
   onCreateRoom: () => void;
@@ -11,7 +12,7 @@ interface HomeScreenProps {
   onQuit: () => void;
 }
 
-export function HomeScreen({ emoji, loading, error, onCreateRoom, onJoinRoom, onQuit }: HomeScreenProps) {
+export function HomeScreen({ emoji, version, loading, error, onCreateRoom, onJoinRoom, onQuit }: HomeScreenProps) {
   const [mode, setMode] = useState<'menu' | 'join'>('menu');
   const [joinCode, setJoinCode] = useState('');
   const [escPressed, setEscPressed] = useState(false);
@@ -74,7 +75,7 @@ export function HomeScreen({ emoji, loading, error, onCreateRoom, onJoinRoom, on
   return (
     <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
       <Text bold color="blue">
-        {'\u{1F3A5}'} OpenMeet Terminal
+        {'\u{1F3A5}'} OpenMeet Terminal <Text dimColor>v{version}</Text>
       </Text>
       <Text dimColor>Lightweight video conferencing</Text>
       <Box height={1} />

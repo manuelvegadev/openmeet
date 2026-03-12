@@ -10,6 +10,8 @@ export interface ConnectionStats {
   recvBitrateKbps: number;
   rttMs: number;
   packetLossPercent: number;
+  peerRecvBitrateKbps: Record<string, number>;
+  peerLatencyMs: Record<string, number>;
 }
 
 interface PrevStatsEntry {
@@ -20,10 +22,15 @@ interface PrevStatsEntry {
   timestamp: number;
 }
 
+interface PeerPrevStats {
+  bytesRecv: number;
+  timestamp: number;
+}
+
 export interface RoomEvent {
   timestamp: number;
   message: string;
-  type: 'join' | 'leave' | 'screen' | 'mute' | 'info';
+  type: 'join' | 'leave' | 'screen' | 'mute' | 'info' | 'debug';
 }
 
 interface UseRoomOptions {
@@ -31,6 +38,7 @@ interface UseRoomOptions {
   roomId: string;
   username: string;
   deviceEnvs: DeviceEnvs;
+  debug?: boolean;
 }
 
 interface UseRoomReturn {
@@ -49,15 +57,17 @@ interface UseRoomReturn {
   joinedAt: number | null;
   isMuted: boolean;
   error: string | null;
+  debugMode: boolean;
   sendMessage: (content: string) => void;
   toggleMute: () => void;
   setPeerVolume: (peerId: string, volume: number) => void;
   updateDevices: (envs: DeviceEnvs) => void;
+  toggleDebug: () => void;
   leave: () => void;
 }
 
 export function useRoom(options: UseRoomOptions): UseRoomReturn {
-  const { serverUrl, roomId, username, deviceEnvs } = options;
+  const { serverUrl, roomId, username, deviceEnvs, debug = false } = options;
 
   const [connected, setConnected] = useState(false);
   const [joined, setJoined] = useState(false);
@@ -74,10 +84,39 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   const [joinedAt, setJoinedAt] = useState<number | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [debugMode, setDebugMode] = useState(debug);
+
+  const debugModeRef = useRef(debug);
 
   const addEvent = useCallback((message: string, type: RoomEvent['type']) => {
     setRoomEvents((prev) => [...prev, { timestamp: Date.now(), message, type }]);
   }, []);
+
+  const addDebugEvent = useCallback((message: string) => {
+    if (debugModeRef.current) {
+      setRoomEvents((prev) => [...prev, { timestamp: Date.now(), message, type: 'debug' }]);
+    }
+  }, []);
+
+  const toggleDebug = useCallback(() => {
+    setDebugMode((prev) => {
+      const next = !prev;
+      debugModeRef.current = next;
+      setRoomEvents((events) => [
+        ...events,
+        { timestamp: Date.now(), message: `Debug mode ${next ? 'enabled' : 'disabled'}`, type: 'info' },
+      ]);
+      // Update onDebug callbacks on managers
+      const ws = wsRef.current;
+      const pm = peerManagerRef.current;
+      const am = audioManagerRef.current;
+      const debugFn = next ? (msg: string) => addDebugEvent(msg) : undefined;
+      if (ws) ws.onDebug = debugFn;
+      if (pm) pm.onDebug = debugFn;
+      if (am) am.onDebug = debugFn;
+      return next;
+    });
+  }, [addDebugEvent]);
 
   const resolveName = useCallback((peerId: string) => {
     return participantsRef.current.find((p) => p.id === peerId)?.username ?? peerId.slice(0, 6);
@@ -146,11 +185,13 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
 
   // Main effect: connect WS, set up WebRTC + audio
   useEffect(() => {
-    const ws = new WebSocketClient(serverUrl);
+    const debugFn = debugModeRef.current ? (msg: string) => addDebugEvent(msg) : undefined;
+
+    const ws = new WebSocketClient(serverUrl, { onDebug: debugFn });
     wsRef.current = ws;
 
     const { source, track } = createAudioSource();
-    const audioManager = new AudioManager(source, deviceEnvs);
+    const audioManager = new AudioManager(source, deviceEnvs, { onDebug: debugFn });
     audioManager.setSpeakingCallback((id, speaking) => {
       setSpeakingStates((prev) => ({ ...prev, [id]: speaking }));
     });
@@ -166,6 +207,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
       onPeerDisconnected: (peerId) => {
         audioManager.removeRemotePeer(peerId);
       },
+      onDebug: debugFn,
     });
     peerManagerRef.current = peerManager;
 
@@ -313,7 +355,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
       peerManager.closeAll();
       ws.disconnect();
     };
-  }, [serverUrl, roomId, username, deviceEnvs, addEvent, resolveName]);
+  }, [serverUrl, roomId, username, deviceEnvs, addEvent, addDebugEvent, resolveName]);
 
   // Re-broadcast mute state when participants change (so newcomers learn our state)
   // biome-ignore lint/correctness/useExhaustiveDependencies: participants.length is an intentional trigger
@@ -346,6 +388,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   // Poll WebRTC connection stats every 2 seconds
   useEffect(() => {
     let prev: PrevStatsEntry | null = null;
+    const peerPrevStats = new Map<string, PeerPrevStats>();
 
     const poll = async () => {
       const pm = peerManagerRef.current;
@@ -355,6 +398,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
       if (peerIds.length === 0) {
         setConnectionStats(null);
         prev = null;
+        peerPrevStats.clear();
         return;
       }
 
@@ -364,10 +408,17 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
       let totalPacketsLost = 0;
       let rttSum = 0;
       let rttCount = 0;
+      const peerBytesRecv: Record<string, number> = {};
+      const peerLatencyMs: Record<string, number> = {};
 
       for (const peerId of peerIds) {
         const pc = pm.getConnection(peerId);
         if (!pc || typeof pc.getStats !== 'function') continue;
+
+        let peerRecv = 0;
+        let peerRttSum = 0;
+        let peerRttCount = 0;
+        let jitterSec = 0;
 
         try {
           const report = await pc.getStats();
@@ -378,28 +429,49 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
               totalAudioBytesSent += stat.bytesSent ?? 0;
             }
             if (stat.type === 'inbound-rtp' && stat.kind === 'audio') {
-              totalAudioBytesRecv += stat.bytesReceived ?? 0;
+              const bytes = stat.bytesReceived ?? 0;
+              totalAudioBytesRecv += bytes;
+              peerRecv += bytes;
               totalPacketsRecv += stat.packetsReceived ?? 0;
               totalPacketsLost += stat.packetsLost ?? 0;
+              if (stat.jitter != null) {
+                jitterSec = stat.jitter;
+              }
             }
             if (stat.type === 'candidate-pair' && stat.state === 'succeeded') {
               if (stat.currentRoundTripTime != null) {
                 rttSum += stat.currentRoundTripTime * 1000;
                 rttCount++;
+                peerRttSum += stat.currentRoundTripTime * 1000;
+                peerRttCount++;
               }
             }
             if (stat.type === 'remote-inbound-rtp' && stat.roundTripTime != null) {
               rttSum += stat.roundTripTime * 1000;
               rttCount++;
+              peerRttSum += stat.roundTripTime * 1000;
+              peerRttCount++;
             }
           }
         } catch {
           // Connection may have closed
         }
+
+        peerBytesRecv[peerId] = peerRecv;
+
+        // Estimated one-way latency: RTT/2 + jitter buffer estimate + processing overhead
+        if (peerRttCount > 0) {
+          const peerRttMs = peerRttSum / peerRttCount;
+          const jitterMs = jitterSec * 1000;
+          peerLatencyMs[peerId] = Math.round(peerRttMs / 2 + Math.max(jitterMs * 2, 20) + 20);
+        }
       }
 
+      const now = Date.now();
+      const peerRecvBitrateKbps: Record<string, number> = {};
+
       if (prev) {
-        const timeDelta = (Date.now() - prev.timestamp) / 1000;
+        const timeDelta = (now - prev.timestamp) / 1000;
         if (timeDelta > 0) {
           const sendBitrate = ((totalAudioBytesSent - prev.audioBytesSent) * 8) / timeDelta / 1000;
           const recvBitrate = ((totalAudioBytesRecv - prev.audioBytesRecv) * 8) / timeDelta / 1000;
@@ -407,12 +479,45 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
           const newPacketsLost = totalPacketsLost - prev.packetsLost;
           const totalNew = newPacketsRecv + newPacketsLost;
 
-          setConnectionStats({
+          // Compute per-peer recv bitrate
+          for (const peerId of peerIds) {
+            const prevPeer = peerPrevStats.get(peerId);
+            if (prevPeer) {
+              const peerTimeDelta = (now - prevPeer.timestamp) / 1000;
+              if (peerTimeDelta > 0) {
+                const peerBitrate = ((peerBytesRecv[peerId] - prevPeer.bytesRecv) * 8) / peerTimeDelta / 1000;
+                peerRecvBitrateKbps[peerId] = Math.max(0, Math.round(peerBitrate));
+              }
+            }
+          }
+
+          const stats: ConnectionStats = {
             sendBitrateKbps: Math.max(0, Math.round(sendBitrate)),
             recvBitrateKbps: Math.max(0, Math.round(recvBitrate)),
             rttMs: rttCount > 0 ? Math.round(rttSum / rttCount) : 0,
             packetLossPercent: totalNew > 0 ? Math.round((newPacketsLost / totalNew) * 1000) / 10 : 0,
-          });
+            peerRecvBitrateKbps,
+            peerLatencyMs,
+          };
+
+          setConnectionStats(stats);
+
+          if (debugModeRef.current) {
+            addDebugEvent(
+              `Stats: ↑${stats.sendBitrateKbps}k ↓${stats.recvBitrateKbps}k RTT:${stats.rttMs}ms Loss:${stats.packetLossPercent}%`,
+            );
+          }
+        }
+      }
+
+      // Update per-peer prev stats
+      for (const peerId of peerIds) {
+        peerPrevStats.set(peerId, { bytesRecv: peerBytesRecv[peerId] ?? 0, timestamp: now });
+      }
+      // Clean up stale peers
+      for (const peerId of peerPrevStats.keys()) {
+        if (!peerIds.includes(peerId)) {
+          peerPrevStats.delete(peerId);
         }
       }
 
@@ -421,13 +526,13 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         audioBytesRecv: totalAudioBytesRecv,
         packetsRecv: totalPacketsRecv,
         packetsLost: totalPacketsLost,
-        timestamp: Date.now(),
+        timestamp: now,
       };
     };
 
     const interval = setInterval(poll, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [addDebugEvent]);
 
   return {
     connected,
@@ -445,10 +550,12 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     joinedAt,
     isMuted,
     error,
+    debugMode,
     sendMessage,
     toggleMute,
     setPeerVolume,
     updateDevices,
+    toggleDebug,
     leave,
   };
 }

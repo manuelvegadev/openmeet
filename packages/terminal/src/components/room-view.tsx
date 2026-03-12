@@ -31,14 +31,16 @@ interface RoomViewProps {
   serverUrl: string;
   roomId: string;
   username: string;
+  version: string;
   deviceEnvs: DeviceEnvs;
+  debug?: boolean;
   onBack: () => void;
 }
 
 type DevicePickerStep = null | 'loading' | 'input' | 'output' | 'test';
 
-export function RoomView({ serverUrl, roomId, username, deviceEnvs, onBack }: RoomViewProps) {
-  const room = useRoom({ serverUrl, roomId, username, deviceEnvs });
+export function RoomView({ serverUrl, roomId, username, version, deviceEnvs, debug = false, onBack }: RoomViewProps) {
+  const room = useRoom({ serverUrl, roomId, username, deviceEnvs, debug });
   const [inputFocused, setInputFocused] = useState(true);
   const [deviceStep, setDeviceStep] = useState<DevicePickerStep>(null);
   const [devices, setDevices] = useState<{ inputs: AudioDevice[]; outputs: AudioDevice[] }>({
@@ -141,6 +143,9 @@ export function RoomView({ serverUrl, roomId, username, deviceEnvs, onBack }: Ro
       }
       if (input === 'd') {
         setDeviceStep('loading');
+      }
+      if (input === 'g') {
+        room.toggleDebug();
       }
       if (key.upArrow) {
         setSelectedPeerIdx((prev) => Math.max(0, prev - 1));
@@ -264,7 +269,7 @@ export function RoomView({ serverUrl, roomId, username, deviceEnvs, onBack }: Ro
       <Box paddingX={1} gap={1} justifyContent="space-between">
         <Box gap={1}>
           <Text bold color="blue">
-            OpenMeet
+            OpenMeet <Text dimColor>v{version}</Text>
           </Text>
           <Text dimColor>|</Text>
           <Text>
@@ -325,6 +330,7 @@ export function RoomView({ serverUrl, roomId, username, deviceEnvs, onBack }: Ro
         audioLevels={room.audioLevels}
         peerVolumes={room.peerVolumes}
         selectedPeerIdx={selectedPeerIdx}
+        connectionStats={room.connectionStats}
       />
       <Box height={1} overflow="hidden">
         <Text dimColor>{'─'.repeat(200)}</Text>
@@ -359,7 +365,7 @@ export function RoomView({ serverUrl, roomId, username, deviceEnvs, onBack }: Ro
       </Box>
 
       {/* Status */}
-      <StatusBar isMuted={room.isMuted} connected={room.connected} />
+      <StatusBar isMuted={room.isMuted} connected={room.connected} debugMode={room.debugMode} />
 
       {/* Error */}
       {room.error && (

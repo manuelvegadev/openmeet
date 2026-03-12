@@ -1,5 +1,6 @@
 import type { Participant } from '@openmeet/shared';
 import { Box, Text } from 'ink';
+import type { ConnectionStats } from '../hooks/use-room.js';
 
 const BAR_COUNT = 20;
 const MAX_RMS = 8000;
@@ -39,6 +40,7 @@ interface ParticipantListProps {
   audioLevels: Record<string, number>;
   peerVolumes: Record<string, number>;
   selectedPeerIdx: number;
+  connectionStats: ConnectionStats | null;
 }
 
 export function ParticipantList({
@@ -51,6 +53,7 @@ export function ParticipantList({
   audioLevels,
   peerVolumes,
   selectedPeerIdx,
+  connectionStats,
 }: ParticipantListProps) {
   const localSpeaking = speakingStates.__local__ && !isMuted;
 
@@ -63,13 +66,20 @@ export function ParticipantList({
           <Text>{username} (you)</Text>
           {isMuted && <Text color="yellow"> [muted]</Text>}
         </Text>
-        <VuMeter level={audioLevels.__local__ ?? 0} />
+        <Box>
+          <Text dimColor>48kHz stereo{connectionStats ? ` ↑${connectionStats.sendBitrateKbps}k` : ''} </Text>
+          <VuMeter level={audioLevels.__local__ ?? 0} />
+        </Box>
       </Box>
       {participants.map((p, idx) => {
         const speaking = speakingStates[p.id] && !remoteMuteStates[p.id];
         const isSelected = idx === selectedPeerIdx;
         const level = audioLevels[p.id] ?? 0;
         const vol = peerVolumes[p.id] ?? 1;
+        const peerRecvKbps = connectionStats?.peerRecvBitrateKbps[p.id];
+        const latency = connectionStats?.peerLatencyMs[p.id];
+        const latencyColor =
+          latency != null ? (latency > 150 ? 'red' : latency > 80 ? 'yellow' : undefined) : undefined;
         return (
           <Box key={p.id} paddingLeft={1} justifyContent="space-between">
             <Text>
@@ -87,6 +97,12 @@ export function ParticipantList({
                   .padStart(3)}
                 %{' '}
               </Text>
+              {peerRecvKbps !== undefined && <Text dimColor>↓{peerRecvKbps}k </Text>}
+              {latency != null && (
+                <Text dimColor={latencyColor == null} color={latencyColor}>
+                  ~{latency}ms{' '}
+                </Text>
+              )}
               <VuMeter level={level} volume={vol} />
             </Box>
           </Box>

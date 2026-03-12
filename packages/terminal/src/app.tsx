@@ -1,5 +1,5 @@
 import type { Room } from '@openmeet/shared';
-import { Box } from 'ink';
+import { Box, useApp } from 'ink';
 import { useEffect, useState } from 'react';
 import { DevicePicker } from './components/device-picker.js';
 import { HomeScreen } from './components/home-screen.js';
@@ -17,9 +17,11 @@ import {
 interface AppProps {
   serverUrl: string;
   emoji: string;
+  version: string;
   initialRoom?: string;
   inputDevice?: string;
   outputDevice?: string;
+  debug?: boolean;
 }
 
 type Screen = 'home' | 'devices' | 'room';
@@ -64,7 +66,8 @@ function FullScreen({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function App({ serverUrl, emoji, initialRoom, inputDevice, outputDevice }: AppProps) {
+export function App({ serverUrl, emoji, version, initialRoom, inputDevice, outputDevice, debug = false }: AppProps) {
+  const { exit } = useApp();
   const [screen, setScreen] = useState<Screen>(initialRoom ? 'devices' : 'home');
   const [roomId, setRoomId] = useState(initialRoom ?? '');
   const [devices, setDevices] = useState<{ inputs: AudioDevice[]; outputs: AudioDevice[] }>({
@@ -146,11 +149,12 @@ export function App({ serverUrl, emoji, initialRoom, inputDevice, outputDevice }
       {screen === 'home' && (
         <HomeScreen
           emoji={emoji}
+          version={version}
           loading={creating}
           error={homeError}
           onCreateRoom={handleCreateRoom}
           onJoinRoom={handleJoinRoom}
-          onQuit={() => process.exit(0)}
+          onQuit={() => exit()}
         />
       )}
       {screen === 'devices' && (
@@ -172,7 +176,9 @@ export function App({ serverUrl, emoji, initialRoom, inputDevice, outputDevice }
           serverUrl={serverUrl}
           roomId={roomId}
           username={emoji}
+          version={version}
           deviceEnvs={deviceEnvs}
+          debug={debug}
           onBack={() => setScreen('home')}
         />
       )}

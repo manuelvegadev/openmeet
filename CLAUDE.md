@@ -198,6 +198,18 @@ Vite + React 19 + TanStack Router (file-based) + shadcn/ui (Base UI). Installabl
 
 9. **Screen track `onunmute` fallback**: The screen receiver track's `onunmute` event is used as a fallback for `ontrack` — during renegotiation, `ontrack` may not fire for an existing transceiver whose direction changed from `inactive` to `sendrecv`, but the track's `unmute` event reliably signals the remote started sending.
 
+### Per-peer latency estimation (terminal)
+
+The terminal client estimates one-way audio latency per peer using WebRTC stats already collected in the stats polling loop:
+
+`estimated_latency ≈ RTT/2 + max(jitter × 2, 20ms) + 20ms`
+
+- **RTT/2**: network one-way delay from `candidate-pair.currentRoundTripTime` and `remote-inbound-rtp.roundTripTime`
+- **jitter × 2**: jitter buffer estimate (floor 20ms) from `inbound-rtp.jitter`
+- **20ms**: fixed processing overhead (capture frame + encode/decode + playback FIFO)
+
+Displayed in participant list as `~Xms` with color coding: dim (≤80ms), yellow (81–150ms), red (>150ms).
+
 ### Remote mute detection
 
 Two complementary strategies:
@@ -235,9 +247,10 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messa
 
 | File | Purpose |
 |------|---------|
-| `src/index.tsx` | CLI entry point: arg parsing, sox/mic checks, Ink `render()` |
+| `src/index.tsx` | CLI entry point: arg parsing, sox/mic checks, alt screen buffer, Ink `render()` |
 | `src/app.tsx` | App shell: screen routing (home → device picker → room), room creation |
-| `build.mjs` | esbuild bundler: ESM, Node 22, bundles source + shared, externals for deps |
+| `src/version.ts` | App version: build-time `__APP_VERSION__` via esbuild `define`, runtime fallback reads `package.json` |
+| `build.mjs` | esbuild bundler: ESM, Node 22, bundles source + shared, externals for deps, injects `__APP_VERSION__` |
 | `install.sh` | Curl-pipe installer script (checks Node 22, sox, then `npm install -g`) |
 
 ### Components
@@ -257,7 +270,7 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messa
 
 | Hook | Purpose |
 |------|---------|
-| `use-room.ts` | WebSocket + WebRTC orchestration, audio pipeline, chat state |
+| `use-room.ts` | WebSocket + WebRTC orchestration, audio pipeline, chat state, per-peer latency estimation (`ConnectionStats.peerLatencyMs`) |
 
 ### Lib modules
 
@@ -358,4 +371,5 @@ git push && git push --tags
 10. **Chat panel mobile**: Uses `fixed inset-0` on mobile (fullscreen overlay). Width via CSS variable only applies at `md:` breakpoint.
 13. **Terminal npm publish**: Requires `NPM_TOKEN` secret in GitHub repo settings. Tags must match `terminal-v*` pattern to trigger the workflow.
 14. **Terminal sox dependency**: `sox` must be installed on the user's system for audio. The CLI checks for `rec` and `play` on startup and exits with instructions if missing.
-15. **Terminal esbuild bundle**: `@openmeet/shared` is aliased and inlined; all npm dependencies are kept external (`packages: 'external'`). The output is a single ESM file with a `#!/usr/bin/env node` shebang.
+15. **Terminal esbuild bundle**: `@openmeet/shared` is aliased and inlined; all npm dependencies are kept external (`packages: 'external'`). The output is a single ESM file with a `#!/usr/bin/env node` shebang. `__APP_VERSION__` is injected via esbuild `define`; `src/version.ts` provides a runtime fallback for `tsx` dev mode.
+16. **Terminal alt screen + Ink clearTerminal**: Ink writes `\x1b[2J\x1b[3J\x1b[H` when output fills the screen. The `\x1b[3J` (clear scrollback) leaks through the alternate screen buffer on macOS, wiping terminal history. `index.tsx` patches `process.stdout.write` to strip `\x1b[3J`.
