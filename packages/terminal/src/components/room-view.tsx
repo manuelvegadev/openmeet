@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useRoom } from '../hooks/use-room.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
 import type { AudioDevice, DeviceEnvs } from '../lib/devices.js';
-import { getDeviceEnv, listAudioDevices, saveDevicePreferences } from '../lib/devices.js';
+import { getDeviceEnv, listAudioDevices } from '../lib/devices.js';
+import { saveSettings } from '../lib/settings.js';
 import { ChatInput } from './chat-input.js';
 import { ChatLog } from './chat-log.js';
 import { ParticipantList } from './participant-list.js';
@@ -33,14 +34,26 @@ interface RoomViewProps {
   username: string;
   version: string;
   deviceEnvs: DeviceEnvs;
+  videoEnabled?: boolean;
+  videoDevice?: string;
   debug?: boolean;
   onBack: () => void;
 }
 
 type DevicePickerStep = null | 'loading' | 'input' | 'output' | 'test';
 
-export function RoomView({ serverUrl, roomId, username, version, deviceEnvs, debug = false, onBack }: RoomViewProps) {
-  const room = useRoom({ serverUrl, roomId, username, deviceEnvs, debug });
+export function RoomView({
+  serverUrl,
+  roomId,
+  username,
+  version,
+  deviceEnvs,
+  videoEnabled,
+  videoDevice,
+  debug = false,
+  onBack,
+}: RoomViewProps) {
+  const room = useRoom({ serverUrl, roomId, username, deviceEnvs, debug, videoEnabled, videoDevice });
   const [inputFocused, setInputFocused] = useState(true);
   const [deviceStep, setDeviceStep] = useState<DevicePickerStep>(null);
   const [devices, setDevices] = useState<{ inputs: AudioDevice[]; outputs: AudioDevice[] }>({
@@ -96,7 +109,11 @@ export function RoomView({ serverUrl, roomId, username, version, deviceEnvs, deb
   }, [deviceStep, selectedInput, selectedOutput]);
 
   const applyDevices = (newInput?: AudioDevice, newOutput?: AudioDevice) => {
-    saveDevicePreferences(newInput, newOutput);
+    saveSettings({
+      audioInputId: newInput?.id ?? null,
+      audioOutputId: newOutput?.id ?? null,
+      devicesConfigured: true,
+    });
     const newEnvs = getDeviceEnv(newInput, newOutput);
     room.updateDevices(newEnvs);
     setDeviceStep(null);
@@ -141,8 +158,20 @@ export function RoomView({ serverUrl, roomId, username, version, deviceEnvs, deb
       if (input === 'm') {
         room.toggleMute();
       }
+      if (input === 'v' && room.videoEnabled) {
+        room.toggleVideo();
+      }
       if (input === 'd') {
         setDeviceStep('loading');
+      }
+      if (input === 'o' && room.videoEnabled) {
+        room.toggleOverlay();
+      }
+      if (input === 'w') {
+        const peerId = room.participants[selectedPeerIdx]?.id;
+        if (peerId) {
+          room.togglePeerVideo(peerId);
+        }
       }
       if (input === 'g') {
         room.toggleDebug();
@@ -325,7 +354,9 @@ export function RoomView({ serverUrl, roomId, username, version, deviceEnvs, deb
         username={username}
         isMuted={room.isMuted}
         remoteMuteStates={room.remoteMuteStates}
+        remoteVideoMuteStates={room.remoteVideoMuteStates}
         remoteScreenShareStates={room.remoteScreenShareStates}
+        peerVideoOpen={room.peerVideoOpen}
         speakingStates={room.speakingStates}
         audioLevels={room.audioLevels}
         peerVolumes={room.peerVolumes}
@@ -365,7 +396,14 @@ export function RoomView({ serverUrl, roomId, username, version, deviceEnvs, deb
       </Box>
 
       {/* Status */}
-      <StatusBar isMuted={room.isMuted} connected={room.connected} debugMode={room.debugMode} />
+      <StatusBar
+        isMuted={room.isMuted}
+        isVideoMuted={room.isVideoMuted}
+        videoEnabled={room.videoEnabled}
+        overlayEnabled={room.overlayEnabled}
+        connected={room.connected}
+        debugMode={room.debugMode}
+      />
 
       {/* Error */}
       {room.error && (

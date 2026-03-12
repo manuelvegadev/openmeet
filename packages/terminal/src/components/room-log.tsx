@@ -8,6 +8,7 @@ const EVENT_COLORS: Record<RoomEvent['type'], string> = {
   screen: 'cyan',
   mute: 'yellow',
   info: 'blue',
+  debug: 'magenta',
 };
 
 const EVENT_ICONS: Record<RoomEvent['type'], string> = {
@@ -16,6 +17,7 @@ const EVENT_ICONS: Record<RoomEvent['type'], string> = {
   screen: '▣',
   mute: '♪',
   info: '·',
+  debug: '·',
 };
 
 function formatTime(timestamp: number): string {
@@ -64,9 +66,15 @@ export function RoomLog({ events, joinedAt }: RoomLogProps) {
           visible.map((event) => (
             <Box key={`${event.timestamp}-${event.message}`}>
               <Text dimColor>[{formatTime(event.timestamp)}] </Text>
-              <Text color={EVENT_COLORS[event.type]}>
-                {EVENT_ICONS[event.type]} {event.message}
-              </Text>
+              {event.type === 'debug' ? (
+                <Text color="magenta" dimColor>
+                  [DBG] {event.message}
+                </Text>
+              ) : (
+                <Text color={EVENT_COLORS[event.type]}>
+                  {EVENT_ICONS[event.type]} {event.message}
+                </Text>
+              )}
             </Box>
           ))
         )}

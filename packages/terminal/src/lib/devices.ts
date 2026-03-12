@@ -1,16 +1,15 @@
-import { execSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
-import { dirname, join } from 'node:path';
-
-const CONFIG_DIR = join(homedir(), '.config', 'openmeet');
-const INPUT_DEVICE_FILE = join(CONFIG_DIR, 'audio-input');
-const OUTPUT_DEVICE_FILE = join(CONFIG_DIR, 'audio-output');
+import { execSync, spawnSync } from 'node:child_process';
+import { platform } from 'node:os';
 
 export interface AudioDevice {
   id: string;
   name: string;
   type: 'input' | 'output';
+}
+
+export interface VideoDevice {
+  id: string; // avfoundation index (e.g., "0") or v4l2 path
+  name: string;
 }
 
 export async function listAudioDevices(): Promise<{ inputs: AudioDevice[]; outputs: AudioDevice[] }> {
@@ -89,34 +88,6 @@ function listLinuxDevices(): { inputs: AudioDevice[]; outputs: AudioDevice[] } {
   return { inputs, outputs };
 }
 
-export function getSavedInputDevice(): string | null {
-  try {
-    const val = readFileSync(INPUT_DEVICE_FILE, 'utf-8').trim();
-    return val || null;
-  } catch {
-    return null;
-  }
-}
-
-export function getSavedOutputDevice(): string | null {
-  try {
-    const val = readFileSync(OUTPUT_DEVICE_FILE, 'utf-8').trim();
-    return val || null;
-  } catch {
-    return null;
-  }
-}
-
-export function saveDevicePreferences(input?: AudioDevice, output?: AudioDevice): void {
-  try {
-    mkdirSync(dirname(INPUT_DEVICE_FILE), { recursive: true });
-    writeFileSync(INPUT_DEVICE_FILE, input?.id ?? '', 'utf-8');
-    writeFileSync(OUTPUT_DEVICE_FILE, output?.id ?? '', 'utf-8');
-  } catch {
-    // Can't persist
-  }
-}
-
 /** Only the extra env vars to override — merged with process.env at spawn time. */
 export interface DeviceEnvs {
   recExtra: Record<string, string>;
@@ -146,4 +117,65 @@ export function getDeviceEnv(input?: AudioDevice, output?: AudioDevice): DeviceE
   }
 
   return { recExtra, playExtra, recDeviceName, playDeviceName };
+}
+
+export function listVideoDevices(): VideoDevice[] {
+  const os = platform();
+
+  if (os === 'darwin') {
+    return listMacOSVideoDevices();
+  }
+  if (os === 'linux') {
+    return listLinuxVideoDevices();
+  }
+
+  return [];
+}
+
+function listMacOSVideoDevices(): VideoDevice[] {
+  const devices: VideoDevice[] = [];
+  try {
+    // ffmpeg outputs device list to stderr and exits non-zero — use spawnSync to avoid throw
+    const result = spawnSync('ffmpeg', ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''], {
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    const output = result.stderr ?? '';
+
+    let inVideoSection = false;
+    for (const line of output.split('\n')) {
+      if (line.includes('AVFoundation video devices:')) {
+        inVideoSection = true;
+        continue;
+      }
+      if (line.includes('AVFoundation audio devices:')) {
+        break;
+      }
+      if (inVideoSection) {
+        const match = line.match(/\[(\d+)] (.+)/);
+        if (match) {
+          devices.push({ id: match[1], name: match[2] });
+        }
+      }
+    }
+  } catch {
+    // ffmpeg not available
+  }
+  return devices;
+}
+
+function listLinuxVideoDevices(): VideoDevice[] {
+  const devices: VideoDevice[] = [];
+  try {
+    const output = execSync('ls /dev/video* 2>/dev/null', { encoding: 'utf-8', timeout: 3000 });
+    for (const line of output.trim().split('\n')) {
+      const path = line.trim();
+      if (path) {
+        devices.push({ id: path, name: path });
+      }
+    }
+  } catch {
+    // No video devices
+  }
+  return devices;
 }

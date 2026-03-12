@@ -4,15 +4,9 @@ import { useEffect, useState } from 'react';
 import { DevicePicker } from './components/device-picker.js';
 import { HomeScreen } from './components/home-screen.js';
 import { RoomView } from './components/room-view.js';
-import {
-  type AudioDevice,
-  type DeviceEnvs,
-  getDeviceEnv,
-  getSavedInputDevice,
-  getSavedOutputDevice,
-  listAudioDevices,
-  saveDevicePreferences,
-} from './lib/devices.js';
+import { SettingsView } from './components/settings-view.js';
+import { type AudioDevice, type DeviceEnvs, getDeviceEnv, listAudioDevices } from './lib/devices.js';
+import { loadSettings, saveSettings } from './lib/settings.js';
 
 interface AppProps {
   serverUrl: string;
@@ -21,10 +15,12 @@ interface AppProps {
   initialRoom?: string;
   inputDevice?: string;
   outputDevice?: string;
+  videoEnabled?: boolean;
+  videoDevice?: string;
   debug?: boolean;
 }
 
-type Screen = 'home' | 'devices' | 'room';
+type Screen = 'home' | 'settings' | 'devices' | 'room';
 
 function wsToHttpUrl(wsUrl: string): string {
   const url = new URL(wsUrl);
@@ -66,7 +62,17 @@ function FullScreen({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function App({ serverUrl, emoji, version, initialRoom, inputDevice, outputDevice, debug = false }: AppProps) {
+export function App({
+  serverUrl,
+  emoji,
+  version,
+  initialRoom,
+  inputDevice,
+  outputDevice,
+  videoEnabled,
+  videoDevice,
+  debug = false,
+}: AppProps) {
   const { exit } = useApp();
   const [screen, setScreen] = useState<Screen>(initialRoom ? 'devices' : 'home');
   const [roomId, setRoomId] = useState(initialRoom ?? '');
@@ -78,8 +84,6 @@ export function App({ serverUrl, emoji, version, initialRoom, inputDevice, outpu
   const [deviceEnvs, setDeviceEnvs] = useState<DeviceEnvs>({ recExtra: {}, playExtra: {} });
   const [creating, setCreating] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
-  const [savedInputId] = useState(() => getSavedInputDevice());
-  const [savedOutputId] = useState(() => getSavedOutputDevice());
 
   // Load audio devices
   useEffect(() => {
@@ -89,9 +93,11 @@ export function App({ serverUrl, emoji, version, initialRoom, inputDevice, outpu
     });
   }, []);
 
-  // Skip device picker if CLI flags or saved preferences match available devices
+  // Resolve device envs from saved settings when transitioning to devices screen
   useEffect(() => {
     if (screen !== 'devices' || !devicesLoaded) return;
+
+    const settings = loadSettings();
 
     // CLI flags take priority
     if (inputDevice && outputDevice) {
@@ -102,18 +108,20 @@ export function App({ serverUrl, emoji, version, initialRoom, inputDevice, outpu
       return;
     }
 
-    // Saved preferences — skip picker if both are still valid (or were system default)
-    if (savedInputId !== null || savedOutputId !== null) {
-      const inputStillExists = !savedInputId || devices.inputs.some((d) => d.id === savedInputId);
-      const outputStillExists = !savedOutputId || devices.outputs.some((d) => d.id === savedOutputId);
+    // Saved preferences — skip picker if user configured before and devices still exist
+    if (settings.devicesConfigured) {
+      const inputStillExists = !settings.audioInputId || devices.inputs.some((d) => d.id === settings.audioInputId);
+      const outputStillExists = !settings.audioOutputId || devices.outputs.some((d) => d.id === settings.audioOutputId);
       if (inputStillExists && outputStillExists) {
-        const input = savedInputId ? devices.inputs.find((d) => d.id === savedInputId) : undefined;
-        const output = savedOutputId ? devices.outputs.find((d) => d.id === savedOutputId) : undefined;
+        const input = settings.audioInputId ? devices.inputs.find((d) => d.id === settings.audioInputId) : undefined;
+        const output = settings.audioOutputId
+          ? devices.outputs.find((d) => d.id === settings.audioOutputId)
+          : undefined;
         setDeviceEnvs(getDeviceEnv(input, output));
         setScreen('room');
       }
     }
-  }, [screen, inputDevice, outputDevice, devices, devicesLoaded, savedInputId, savedOutputId]);
+  }, [screen, inputDevice, outputDevice, devices, devicesLoaded]);
 
   const handleCreateRoom = async () => {
     setCreating(true);
@@ -154,18 +162,24 @@ export function App({ serverUrl, emoji, version, initialRoom, inputDevice, outpu
           error={homeError}
           onCreateRoom={handleCreateRoom}
           onJoinRoom={handleJoinRoom}
+          onSettings={() => setScreen('settings')}
           onQuit={() => exit()}
         />
       )}
+      {screen === 'settings' && <SettingsView onBack={() => setScreen('home')} />}
       {screen === 'devices' && (
         <DevicePicker
           inputs={devices.inputs}
           outputs={devices.outputs}
           loading={!devicesLoaded}
-          savedInputId={savedInputId}
-          savedOutputId={savedOutputId}
+          savedInputId={loadSettings().audioInputId}
+          savedOutputId={loadSettings().audioOutputId}
           onConfirm={(input, output) => {
-            saveDevicePreferences(input, output);
+            saveSettings({
+              audioInputId: input?.id ?? null,
+              audioOutputId: output?.id ?? null,
+              devicesConfigured: true,
+            });
             setDeviceEnvs(getDeviceEnv(input, output));
             setScreen('room');
           }}
@@ -178,6 +192,8 @@ export function App({ serverUrl, emoji, version, initialRoom, inputDevice, outpu
           username={emoji}
           version={version}
           deviceEnvs={deviceEnvs}
+          videoEnabled={videoEnabled}
+          videoDevice={videoDevice}
           debug={debug}
           onBack={() => setScreen('home')}
         />

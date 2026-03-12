@@ -14,9 +14,11 @@ export class WebSocketClient {
   private url: string;
   private _connected = false;
   private disposed = false;
+  onDebug?: (msg: string) => void;
 
-  constructor(url: string) {
+  constructor(url: string, options?: { onDebug?: (msg: string) => void }) {
     this.url = url;
+    this.onDebug = options?.onDebug;
   }
 
   get connected(): boolean {
@@ -29,6 +31,7 @@ export class WebSocketClient {
     this.ws.on('open', () => {
       this._connected = true;
       this.reconnectAttempts = 0;
+      this.onDebug?.('WS connected');
       for (const handler of this.connectionHandlers) {
         handler(true);
       }
@@ -37,6 +40,7 @@ export class WebSocketClient {
     this.ws.on('message', (data) => {
       try {
         const message: WSMessage = JSON.parse(data.toString());
+        this.onDebug?.(`WS recv: ${message.type}`);
         for (const handler of this.handlers) {
           handler(message);
         }
@@ -48,6 +52,7 @@ export class WebSocketClient {
     this.ws.on('close', () => {
       if (this.disposed) return;
       this._connected = false;
+      this.onDebug?.('WS disconnected');
       for (const handler of this.connectionHandlers) {
         handler(false);
       }
@@ -56,11 +61,13 @@ export class WebSocketClient {
 
     this.ws.on('error', () => {
       if (this.disposed) return;
+      this.onDebug?.('WS error');
     });
   }
 
   send(message: WSMessage): void {
     if (this.ws?.readyState === WS.OPEN) {
+      this.onDebug?.(`WS send: ${message.type}`);
       this.ws.send(JSON.stringify(message));
     }
   }
@@ -89,6 +96,7 @@ export class WebSocketClient {
   private scheduleReconnect(): void {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 10000);
+      this.onDebug?.(`WS reconnect attempt ${this.reconnectAttempts + 1} in ${delay}ms`);
       this.reconnectTimer = setTimeout(() => {
         this.reconnectAttempts++;
         this.connect();

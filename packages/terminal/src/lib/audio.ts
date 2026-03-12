@@ -19,7 +19,8 @@ interface AudioSource {
 
 const SAMPLE_RATE = 48000;
 const FRAME_SIZE = 480; // 10ms at 48kHz
-const BYTES_PER_FRAME = FRAME_SIZE * 2; // 16-bit = 2 bytes per sample
+const NUM_CHANNELS = 2;
+const BYTES_PER_FRAME = FRAME_SIZE * 2 * NUM_CHANNELS; // 16-bit stereo = 4 bytes per sample pair
 const RMS_THRESHOLD = 800; // ~2.5% of 32768 — above this = "speaking"
 const SPEAKING_HOLD_MS = 300; // Keep "speaking" for this long after audio drops
 
@@ -62,13 +63,15 @@ export class AudioManager {
   private speakingStates = new Map<string, boolean>();
   private volumes = new Map<string, number>();
   private audioLevels = new Map<string, number>();
+  onDebug?: (msg: string) => void;
 
-  constructor(audioSource: AudioSource, envs: DeviceEnvs) {
+  constructor(audioSource: AudioSource, envs: DeviceEnvs, options?: { onDebug?: (msg: string) => void }) {
     this.audioSource = audioSource;
     this.recExtra = envs.recExtra;
     this.playExtra = envs.playExtra;
     this.recDeviceName = envs.recDeviceName;
     this.playDeviceName = envs.playDeviceName;
+    this.onDebug = options?.onDebug;
   }
 
   setSpeakingCallback(cb: SpeakingCallback): void {
@@ -126,6 +129,7 @@ export class AudioManager {
   startCapture(): void {
     if (this.capturing) return;
     this.capturing = true;
+    this.onDebug?.('Audio capture started (stereo 48kHz)');
 
     // macOS: sox -t coreaudio "DeviceName" for per-device selection
     // Linux: rec with PULSE_SOURCE env var
@@ -143,12 +147,25 @@ export class AudioManager {
           '-e',
           'signed-integer',
           '-c',
-          '1',
+          String(NUM_CHANNELS),
           '-r',
           String(SAMPLE_RATE),
           '-',
         ]
-      : ['-q', '-t', 'raw', '-b', '16', '-e', 'signed-integer', '-c', '1', '-r', String(SAMPLE_RATE), '-'];
+      : [
+          '-q',
+          '-t',
+          'raw',
+          '-b',
+          '16',
+          '-e',
+          'signed-integer',
+          '-c',
+          String(NUM_CHANNELS),
+          '-r',
+          String(SAMPLE_RATE),
+          '-',
+        ];
 
     this.recProcess = spawn(cmd, args, {
       env: buildEnv(this.recExtra),
@@ -156,19 +173,38 @@ export class AudioManager {
     });
 
     let buffer = Buffer.alloc(0);
+    let captureStartMs = Date.now();
+    let framesPushed = 0;
+    const MAX_BUFFER_FRAMES = 8; // 80ms — drop stale audio beyond this
+    const MAX_DRIFT_MS = 50; // Skip pushing if we're >50ms ahead of real-time
 
     this.recProcess.stdout?.on('data', (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
+
+      // Guard against event loop stalls: when the event loop is blocked (TUI renders,
+      // WS processing), sox continues writing to the pipe buffer. When the loop resumes,
+      // we read a burst of audio. Without this check, all frames would be pushed to
+      // RTCAudioSource instantly (faster than real-time), causing the WebRTC engine to
+      // queue them — delay that never recovers and compounds over time.
+      const bufferedFrames = Math.floor(buffer.length / BYTES_PER_FRAME);
+      if (bufferedFrames > MAX_BUFFER_FRAMES) {
+        const keepFrames = 2; // Keep most recent ~20ms
+        buffer = buffer.subarray((bufferedFrames - keepFrames) * BYTES_PER_FRAME);
+        // Reset drift baseline since we jumped ahead in the audio stream
+        captureStartMs = Date.now();
+        framesPushed = 0;
+        this.onDebug?.(`Audio buffer overflow, dropped ${bufferedFrames - keepFrames} frames`);
+      }
 
       while (buffer.length >= BYTES_PER_FRAME) {
         const frameBuffer = buffer.subarray(0, BYTES_PER_FRAME);
         buffer = buffer.subarray(BYTES_PER_FRAME);
 
-        // RTCAudioSource.onData requires samples.buffer.byteLength === exactly 960.
+        // RTCAudioSource.onData requires samples.buffer.byteLength to match exactly.
         // Buffer.from() uses Node's pool allocator (8KB shared ArrayBuffer), so we
         // must copy into a dedicated Int16Array with its own ArrayBuffer.
-        const realSamples = new Int16Array(FRAME_SIZE);
-        for (let i = 0; i < FRAME_SIZE; i++) {
+        const realSamples = new Int16Array(FRAME_SIZE * NUM_CHANNELS);
+        for (let i = 0; i < FRAME_SIZE * NUM_CHANNELS; i++) {
           realSamples[i] = frameBuffer.readInt16LE(i * 2);
         }
 
@@ -176,13 +212,24 @@ export class AudioManager {
         this.updateSpeaking('__local__', localRms);
         this.audioLevels.set('__local__', localRms);
 
-        const samples = this._isMuted ? new Int16Array(FRAME_SIZE) : realSamples;
+        // Clock drift guard: if hardware capture clock runs slightly faster than
+        // WebRTC's consumption rate, frames accumulate in the internal buffer.
+        // Skip pushing when we're ahead of real-time to prevent slow drift buildup.
+        framesPushed++;
+        const audioMs = ((framesPushed * FRAME_SIZE) / SAMPLE_RATE) * 1000;
+        const elapsedMs = Date.now() - captureStartMs;
+        if (audioMs - elapsedMs > MAX_DRIFT_MS) {
+          this.onDebug?.('Audio drift guard: skipping frame');
+          continue;
+        }
+
+        const samples = this._isMuted ? new Int16Array(FRAME_SIZE * NUM_CHANNELS) : realSamples;
 
         this.audioSource.onData({
           samples,
           sampleRate: SAMPLE_RATE,
           bitsPerSample: 16,
-          channelCount: 1,
+          channelCount: NUM_CHANNELS,
           numberOfFrames: FRAME_SIZE,
         });
       }
@@ -194,6 +241,7 @@ export class AudioManager {
 
     this.recProcess.on('close', () => {
       this.capturing = false;
+      this.onDebug?.('Audio capture stopped');
     });
   }
 
@@ -218,7 +266,7 @@ export class AudioManager {
     return this._isMuted;
   }
 
-  private spawnPlay(peerId: string, peer: PeerPlayback, channels: string, rate: string): void {
+  private spawnPlay(peerId: string, peer: PeerPlayback): void {
     // Use a FIFO (named pipe) instead of stdin piping. Node.js spawn() creates
     // non-blocking pipes; sox interprets EAGAIN (no data yet) as EOF and exits.
     // FIFOs use blocking reads, so sox correctly waits for streaming data.
@@ -229,6 +277,10 @@ export class AudioManager {
       return;
     }
     peer.fifoPath = fifoPath;
+
+    // Always play as stereo — mono input is upmixed in wireSink before writing
+    const channels = String(NUM_CHANNELS);
+    const rate = String(SAMPLE_RATE);
 
     // macOS: sox ... -t coreaudio "DeviceName" for per-device selection
     // Linux: play with PULSE_SINK env var
@@ -259,6 +311,7 @@ export class AudioManager {
     });
 
     peer.playProcess = playProcess;
+    this.onDebug?.(`Audio playback started for peer ${peerId.slice(0, 6)} (stereo)`);
 
     // Open FIFO for writing — createWriteStream queues writes until the fd is ready.
     // sox opens the FIFO for reading, unblocking both ends.
@@ -304,20 +357,37 @@ export class AudioManager {
         }
       }
 
+      // Detect mono input: if samples.length === numberOfFrames, it's mono.
+      // Upmix to stereo (duplicate each sample to L+R) for the stereo sox playback.
+      let outputSamples: Int16Array;
+      if (data.samples.length === data.numberOfFrames) {
+        // Mono → stereo upmix
+        outputSamples = new Int16Array(data.numberOfFrames * NUM_CHANNELS);
+        for (let i = 0; i < data.numberOfFrames; i++) {
+          outputSamples[i * 2] = samplesCopy[i];
+          outputSamples[i * 2 + 1] = samplesCopy[i];
+        }
+      } else {
+        outputSamples = samplesCopy;
+      }
+
       // Buffer *view* of our copy's raw bytes. IMPORTANT: Buffer.from(TypedArray)
       // truncates each element to a single byte — we must use the ArrayBuffer
       // overload to get the actual 16-bit PCM bytes.
-      const buf = Buffer.from(samplesCopy.buffer, samplesCopy.byteOffset, samplesCopy.byteLength);
+      const buf = Buffer.from(outputSamples.buffer, outputSamples.byteOffset, outputSamples.byteLength);
 
       // Lazy-spawn sox play with actual data format from RTCAudioSink
       if (!spawned) {
         spawned = true;
-        // @roamhq/wrtc RTCAudioSink misreports sampleRate (e.g. 16000) while
-        // delivering 48kHz samples. Force 48kHz mono to match WebRTC Opus decode.
-        this.spawnPlay(peerId, peer, '1', String(SAMPLE_RATE));
+        this.spawnPlay(peerId, peer);
       }
 
-      if (peer.fifoStream?.writable) {
+      // Guard against playback buffer growth: if the event loop was blocked,
+      // multiple ondata callbacks fire rapidly, writing bursts to the FIFO.
+      // The OS pipe buffer (64KB) absorbs the burst but adds latency that
+      // never recovers. Skip writes when Node.js buffer exceeds threshold.
+      const MAX_PLAYBACK_BUFFER = SAMPLE_RATE * 2 * NUM_CHANNELS * 0.15; // 150ms of stereo 16-bit audio
+      if (peer.fifoStream?.writable && peer.fifoStream.writableLength < MAX_PLAYBACK_BUFFER) {
         peer.fifoStream.write(buf);
       }
     };
@@ -331,6 +401,7 @@ export class AudioManager {
       const peer: PeerPlayback = { sink, playProcess: null, fifoPath: null, fifoStream: null, track };
       this.peers.set(peerId, peer);
       this.wireSink(peerId, peer);
+      this.onDebug?.(`Audio peer added: ${peerId.slice(0, 6)}`);
     } catch {
       // RTCAudioSink setup failed — non-fatal
     }
@@ -356,6 +427,7 @@ export class AudioManager {
         peer.fifoPath = null;
       }
       this.peers.delete(peerId);
+      this.onDebug?.(`Audio peer removed: ${peerId.slice(0, 6)}`);
     }
 
     const timer = this.speakingTimers.get(peerId);

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { execSync, spawnSync } from 'node:child_process';
+import { type ChildProcess, execSync, spawn, spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { parseArgs } from 'node:util';
 import { render } from 'ink';
 import { App } from './app.js';
 import { getOrCreateEmoji } from './lib/emoji.js';
+import { loadSettings, saveSettings } from './lib/settings.js';
 import { APP_VERSION } from './version.js';
 
 function checkSox(): boolean {
@@ -15,6 +16,20 @@ function checkSox(): boolean {
   } catch {
     return false;
   }
+}
+
+function checkFfmpeg(): { ffplay: boolean; ffmpeg: boolean } {
+  let ffplay = false;
+  let ffmpeg = false;
+  try {
+    execSync('which ffplay', { stdio: 'ignore' });
+    ffplay = true;
+  } catch {}
+  try {
+    execSync('which ffmpeg', { stdio: 'ignore' });
+    ffmpeg = true;
+  } catch {}
+  return { ffplay, ffmpeg };
 }
 
 function checkMicPermission(): 'granted' | 'denied' | 'unknown' {
@@ -54,6 +69,10 @@ const { values } = parseArgs({
     room: { type: 'string' },
     'input-device': { type: 'string' },
     'output-device': { type: 'string' },
+    'no-video': { type: 'boolean', default: false },
+    'video-device': { type: 'string' },
+    'no-overlay': { type: 'boolean', default: false },
+    'test-camera': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h' },
     debug: { type: 'boolean', default: false },
   },
@@ -68,74 +87,186 @@ Usage: openmeet [options]
   --room <id>            Room ID to join
   --input-device <name>  Input device name (skip device picker)
   --output-device <name> Output device name (skip device picker)
+  --no-video             Disable video (audio-only mode)
+  --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
+  --no-overlay           Disable video overlay (name, stream type, resolution)
+  --test-camera          Test camera capture (opens ffplay preview, no room join)
   -h, --help             Show help
 `);
   process.exit(0);
 }
 
-if (!checkSox()) {
-  process.stderr.write(`Error: sox is required but not found on PATH.
+if (values['test-camera']) {
+  const device = values['video-device'] ?? loadSettings().videoDeviceId ?? '0';
+  const isMac = platform() === 'darwin';
+  process.stdout.write(`Testing camera (device: ${device})... Press q or Esc in the ffplay window to close.\n`);
+
+  const captureArgs = isMac
+    ? [
+        '-f',
+        'avfoundation',
+        '-framerate',
+        '30',
+        '-video_size',
+        '640x480',
+        '-i',
+        `${device}:none`,
+        '-f',
+        'rawvideo',
+        '-pix_fmt',
+        'yuv420p',
+        '-loglevel',
+        'warning',
+        'pipe:1',
+      ]
+    : [
+        '-f',
+        'v4l2',
+        '-framerate',
+        '30',
+        '-video_size',
+        '640x480',
+        '-i',
+        device,
+        '-f',
+        'rawvideo',
+        '-pix_fmt',
+        'yuv420p',
+        '-loglevel',
+        'warning',
+        'pipe:1',
+      ];
+
+  const capture: ChildProcess = spawn('ffmpeg', captureArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
+  const player: ChildProcess = spawn(
+    'ffplay',
+    [
+      '-f',
+      'rawvideo',
+      '-pixel_format',
+      'yuv420p',
+      '-video_size',
+      '640x480',
+      '-framerate',
+      '30',
+      '-window_title',
+      `Camera Test (device ${device})`,
+      '-i',
+      'pipe:0',
+    ],
+    { stdio: ['pipe', 'ignore', 'ignore'] },
+  );
+
+  capture.stdout?.pipe(player.stdin!);
+  player.on('close', () => {
+    capture.kill();
+    process.exit(0);
+  });
+  capture.on('close', () => {
+    player.kill();
+    process.exit(0);
+  });
+  process.on('SIGINT', () => {
+    capture.kill();
+    player.kill();
+  });
+  process.on('SIGTERM', () => {
+    capture.kill();
+    player.kill();
+  });
+  // eslint-disable-next-line -- keep process alive while test runs
+  setInterval(() => {}, 60000);
+} else {
+  // ─── Normal app flow ──────────────────────────────────────────────────
+
+  if (!checkSox()) {
+    process.stderr.write(`Error: sox is required but not found on PATH.
 
 Install sox:
   macOS:   brew install sox
   Ubuntu:  sudo apt install sox
   Fedora:  sudo dnf install sox
 `);
-  process.exit(1);
-}
+    process.exit(1);
+  }
 
-const micStatus = checkMicPermission();
-if (micStatus === 'denied') {
-  process.stderr.write(`Error: Microphone access denied.
+  // Video support: soft-fail if ffmpeg/ffplay missing (unlike sox which is hard-fail)
+  let videoEnabled = !values['no-video'];
+  if (videoEnabled) {
+    const ffStatus = checkFfmpeg();
+    if (!ffStatus.ffplay || !ffStatus.ffmpeg) {
+      process.stderr.write(`Warning: ffmpeg/ffplay not found. Video support disabled.
+
+Install ffmpeg for video support:
+  macOS:   brew install ffmpeg
+  Ubuntu:  sudo apt install ffmpeg
+  Fedora:  sudo dnf install ffmpeg
+
+`);
+      videoEnabled = false;
+    }
+  }
+
+  const micStatus = checkMicPermission();
+  if (micStatus === 'denied') {
+    process.stderr.write(`Error: Microphone access denied.
 
 Your terminal app needs microphone permission on macOS:
   1. Open System Settings > Privacy & Security > Microphone
   2. Enable the toggle for your terminal app (Terminal, iTerm2, Warp, etc.)
   3. Restart the terminal and try again
 `);
-  process.exit(1);
-}
-
-const emoji = getOrCreateEmoji();
-
-// Suppress console output to keep TUI clean
-console.log = () => {};
-console.error = () => {};
-console.warn = () => {};
-
-// Enter alternate screen buffer (like nano/vim) — restores terminal on exit
-process.stdout.write('\x1b[?1049h');
-
-// Ink uses ansiEscapes.clearTerminal (\x1b[2J\x1b[3J\x1b[H]) when output fills the screen.
-// \x1b[3J clears the scrollback buffer, which on macOS leaks through to the main buffer
-// even when inside the alt screen. Strip it so the user's terminal history is preserved.
-const origStdoutWrite = process.stdout.write;
-process.stdout.write = function (chunk, ...args: any[]) {
-  if (typeof chunk === 'string') {
-    chunk = chunk.replaceAll('\x1b[3J', '');
+    process.exit(1);
   }
-  return origStdoutWrite.call(this, chunk, ...args);
-} as typeof process.stdout.write;
 
-const instance = render(
-  <App
-    serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
-    emoji={emoji}
-    version={APP_VERSION}
-    initialRoom={values.room}
-    inputDevice={values['input-device']}
-    outputDevice={values['output-device']}
-    debug={values.debug ?? false}
-  />,
-);
+  // Persist --no-overlay flag to settings if provided
+  if (values['no-overlay']) {
+    saveSettings({ videoOverlay: false });
+  }
 
-// After Ink unmounts, trigger process exit
-instance.waitUntilExit().then(() => {
-  process.exit(0);
-});
+  const emoji = getOrCreateEmoji();
 
-// Registered AFTER render() so this runs AFTER Ink's own exit handler.
-// Ink's cleanup writes to the alt buffer, then we leave it — normal buffer untouched.
-process.on('exit', () => {
-  process.stdout.write('\x1b[?1049l');
-});
+  // Suppress console output to keep TUI clean
+  console.log = () => {};
+  console.error = () => {};
+  console.warn = () => {};
+
+  // Enter alternate screen buffer (like nano/vim) — restores terminal on exit
+  process.stdout.write('\x1b[?1049h');
+
+  // Ink uses ansiEscapes.clearTerminal (\x1b[2J\x1b[3J\x1b[H]) when output fills the screen.
+  // \x1b[3J clears the scrollback buffer, which on macOS leaks through to the main buffer
+  // even when inside the alt screen. Strip it so the user's terminal history is preserved.
+  const origStdoutWrite = process.stdout.write;
+  process.stdout.write = function (chunk, ...args: any[]) {
+    if (typeof chunk === 'string') {
+      chunk = chunk.replaceAll('\x1b[3J', '');
+    }
+    return origStdoutWrite.call(this, chunk, ...args);
+  } as typeof process.stdout.write;
+
+  const instance = render(
+    <App
+      serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
+      emoji={emoji}
+      version={APP_VERSION}
+      initialRoom={values.room}
+      inputDevice={values['input-device']}
+      outputDevice={values['output-device']}
+      videoEnabled={videoEnabled}
+      videoDevice={values['video-device']}
+      debug={values.debug ?? false}
+    />,
+  );
+
+  // After Ink unmounts, trigger process exit
+  instance.waitUntilExit().then(() => {
+    process.exit(0);
+  });
+
+  // Registered AFTER render() so this runs AFTER Ink's own exit handler.
+  // Ink's cleanup writes to the alt buffer, then we leave it — normal buffer untouched.
+  process.on('exit', () => {
+    process.stdout.write('\x1b[?1049l');
+  });
+} // end else (test-camera)

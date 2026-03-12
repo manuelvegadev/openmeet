@@ -9,10 +9,20 @@ interface HomeScreenProps {
   error: string | null;
   onCreateRoom: () => void;
   onJoinRoom: (roomId: string) => void;
+  onSettings: () => void;
   onQuit: () => void;
 }
 
-export function HomeScreen({ emoji, version, loading, error, onCreateRoom, onJoinRoom, onQuit }: HomeScreenProps) {
+export function HomeScreen({
+  emoji,
+  version,
+  loading,
+  error,
+  onCreateRoom,
+  onJoinRoom,
+  onSettings,
+  onQuit,
+}: HomeScreenProps) {
   const [mode, setMode] = useState<'menu' | 'join'>('menu');
   const [joinCode, setJoinCode] = useState('');
   const [escPressed, setEscPressed] = useState(false);
@@ -45,6 +55,7 @@ export function HomeScreen({ emoji, version, loading, error, onCreateRoom, onJoi
     if (mode === 'menu' && !loading) {
       if (input === 'c') onCreateRoom();
       if (input === 'j') setMode('join');
+      if (input === 's') onSettings();
     }
   });
 
@@ -92,6 +103,9 @@ export function HomeScreen({ emoji, version, loading, error, onCreateRoom, onJoi
           </Text>
           <Text>
             [<Text bold>j</Text>] Join Room
+          </Text>
+          <Text>
+            [<Text bold>s</Text>] Settings
           </Text>
         </>
       )}

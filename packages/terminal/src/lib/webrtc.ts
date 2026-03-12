@@ -18,24 +18,33 @@ export function createAudioSource(): { source: any; track: any } {
 export class PeerConnectionManager {
   private connections = new Map<string, any>();
   private audioTrack: any;
+  private videoTrack: any;
   private sendSignal: (message: WSMessage) => void;
   private myId: string;
   private onRemoteAudioTrack: (peerId: string, track: any) => void;
+  private onRemoteVideoTrack: (peerId: string, track: any, streamType: 'webcam' | 'screen') => void;
   private onPeerDisconnected: (peerId: string) => void;
   private makingOffer = new Set<string>();
+  onDebug?: (msg: string) => void;
 
   constructor(options: {
     myId: string;
     audioTrack: any;
+    videoTrack?: any;
     sendSignal: (msg: WSMessage) => void;
     onRemoteAudioTrack: (peerId: string, track: any) => void;
+    onRemoteVideoTrack?: (peerId: string, track: any, streamType: 'webcam' | 'screen') => void;
     onPeerDisconnected: (peerId: string) => void;
+    onDebug?: (msg: string) => void;
   }) {
     this.myId = options.myId;
     this.audioTrack = options.audioTrack;
+    this.videoTrack = options.videoTrack ?? null;
     this.sendSignal = options.sendSignal;
     this.onRemoteAudioTrack = options.onRemoteAudioTrack;
+    this.onRemoteVideoTrack = options.onRemoteVideoTrack ?? (() => {});
     this.onPeerDisconnected = options.onPeerDisconnected;
+    this.onDebug = options.onDebug;
   }
 
   setMyId(id: string): void {
@@ -54,11 +63,19 @@ export class PeerConnectionManager {
     pc.ontrack = (event: any) => {
       if (event.track.kind === 'audio') {
         this.onRemoteAudioTrack(peerId, event.track);
+      } else if (event.track.kind === 'video') {
+        // Determine webcam vs screen by transceiver index: 1 = webcam, 2 = screen
+        const transceivers = pc.getTransceivers();
+        const idx = transceivers.indexOf(event.transceiver);
+        const streamType = idx === 2 ? 'screen' : 'webcam';
+        this.onDebug?.(`RTC video track from ${peerId.slice(0, 6)}: ${streamType} (transceiver ${idx})`);
+        this.onRemoteVideoTrack(peerId, event.track, streamType);
       }
     };
 
     pc.onicecandidate = (event: any) => {
       if (event.candidate) {
+        this.onDebug?.(`RTC ICE candidate for ${peerId.slice(0, 6)}: ${event.candidate.candidate?.slice(0, 40)}`);
         this.sendSignal({
           type: 'ice-candidate',
           fromId: this.myId,
@@ -69,6 +86,7 @@ export class PeerConnectionManager {
     };
 
     pc.onconnectionstatechange = () => {
+      this.onDebug?.(`RTC ${peerId.slice(0, 6)} state: ${pc.connectionState}`);
       if (pc.connectionState === 'failed') {
         this.removeConnection(peerId);
       }
@@ -90,11 +108,14 @@ export class PeerConnectionManager {
       pc.getTransceivers()[0].sender.replaceTrack(this.audioTrack);
     }
 
-    // Transceiver 1: Webcam video — sendrecv (for SDP m-line compatibility, no track)
+    // Transceiver 1: Webcam video — sendrecv (attach our video track if available)
     pc.addTransceiver('video', {
       direction: 'sendrecv',
       sendEncodings: [{ priority: 'low', networkPriority: 'low', maxFramerate: 30 }],
     });
+    if (this.videoTrack) {
+      pc.getTransceivers()[1].sender.replaceTrack(this.videoTrack);
+    }
 
     // Transceiver 2: Screen share video — recvonly (terminal never shares screen)
     pc.addTransceiver('video', {
@@ -119,6 +140,7 @@ export class PeerConnectionManager {
         sdp: boostOpusQuality(offer.sdp ?? ''),
       });
 
+      this.onDebug?.(`RTC offer created for ${peerId.slice(0, 6)}`);
       this.sendSignal({
         type: 'offer',
         fromId: this.myId,
@@ -138,6 +160,7 @@ export class PeerConnectionManager {
       // connection and recreate as answerer. We can't rollback and reuse
       // because addTransceiver-created transceivers aren't eligible for
       // m-line matching during setRemoteDescription (spec behavior).
+      this.onDebug?.(`RTC glare detected with ${peerId.slice(0, 6)}, rolling back`);
       pc.close();
       this.connections.delete(peerId);
       pc = undefined;
@@ -161,21 +184,41 @@ export class PeerConnectionManager {
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
 
+      // Attach video track to webcam transceiver (index 1) in answerer path.
+      // setRemoteDescription created transceivers from the offer's m-lines,
+      // defaulting to recvonly. We must set sendrecv so the answer SDP
+      // tells the remote that we're sending video.
+      if (this.videoTrack) {
+        const transceivers = pc.getTransceivers();
+        if (transceivers.length > 1) {
+          transceivers[1].sender.replaceTrack(this.videoTrack);
+          transceivers[1].direction = 'sendrecv';
+        }
+      }
+
       const answer = await pc.createAnswer();
       let modifiedSdp = answer.sdp ?? '';
 
-      // Safety net: if @roamhq/wrtc generated recvonly for audio despite our
-      // sendrecv transceiver, munge the SDP so the browser knows we send audio.
+      // Safety net: if @roamhq/wrtc generated recvonly despite our sendrecv
+      // transceiver, munge the SDP so the browser knows we're sending.
       const mSections = modifiedSdp.split(/(?=m=)/);
       const audioIdx = mSections.findIndex((s: string) => s.startsWith('m=audio'));
       if (audioIdx >= 0 && !mSections[audioIdx].includes('a=sendrecv')) {
         mSections[audioIdx] = mSections[audioIdx].replace(/a=recvonly|a=inactive/, 'a=sendrecv');
-        modifiedSdp = mSections.join('');
       }
+      // Same for webcam video (first m=video section) when we have a video track
+      if (this.videoTrack) {
+        const videoIdx = mSections.findIndex((s: string) => s.startsWith('m=video'));
+        if (videoIdx >= 0 && !mSections[videoIdx].includes('a=sendrecv')) {
+          mSections[videoIdx] = mSections[videoIdx].replace(/a=recvonly|a=inactive/, 'a=sendrecv');
+        }
+      }
+      modifiedSdp = mSections.join('');
 
       modifiedSdp = boostOpusQuality(modifiedSdp);
       await pc.setLocalDescription({ ...answer, sdp: modifiedSdp });
 
+      this.onDebug?.(`RTC answer created for ${peerId.slice(0, 6)}`);
       this.sendSignal({
         type: 'answer',
         fromId: this.myId,
@@ -204,6 +247,21 @@ export class PeerConnectionManager {
       await pc.addIceCandidate(new RTCIceCandidate(candidate));
     } catch {
       // ICE candidate errors are common and non-fatal (late candidates after connection)
+    }
+  }
+
+  /** Replace the video track on all existing peer connections. */
+  setVideoTrack(track: any | null): void {
+    this.videoTrack = track;
+    for (const [, pc] of this.connections) {
+      const transceivers = pc.getTransceivers();
+      if (transceivers.length > 1) {
+        try {
+          transceivers[1].sender.replaceTrack(track);
+        } catch {
+          // Connection may have closed
+        }
+      }
     }
   }
 

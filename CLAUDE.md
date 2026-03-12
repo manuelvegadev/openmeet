@@ -262,15 +262,16 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messa
 | `room-view.tsx` | Main room: audio, chat, participant list, status bar |
 | `chat-input.tsx` | Text input for chat messages |
 | `chat-log.tsx` | Scrollable chat message history |
-| `participant-list.tsx` | Connected participants with mute indicators |
+| `participant-list.tsx` | Connected participants with mute/cam/screen indicators |
 | `status-bar.tsx` | Connection status, room info |
 | `room-log.tsx` | Room event log (joins, leaves, errors) |
+| `settings-view.tsx` | Settings screen (audio devices, camera, video overlay) |
 
 ### Hooks
 
 | Hook | Purpose |
 |------|---------|
-| `use-room.ts` | WebSocket + WebRTC orchestration, audio pipeline, chat state, per-peer latency estimation (`ConnectionStats.peerLatencyMs`) |
+| `use-room.ts` | WebSocket + WebRTC orchestration, audio/video pipeline, chat state, per-peer latency estimation (`ConnectionStats.peerLatencyMs`) |
 
 ### Lib modules
 
@@ -280,7 +281,10 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messa
 | `webrtc.ts` | Peer connection management with `@roamhq/wrtc` |
 | `audio.ts` | sox-based audio capture/playback pipelines |
 | `audio-test.ts` | Audio device testing utilities |
-| `devices.ts` | Audio device enumeration and preference persistence |
+| `video.ts` | VideoManager: ffmpeg capture (send) + ffplay display (receive), I420 bilinear scaling, overlay |
+| `overlay.ts` | 8×8 bitmap font overlay renderer burned into I420 video frames |
+| `devices.ts` | Audio/video device enumeration |
+| `settings.ts` | Persistent settings (`~/.config/openmeet/settings.json`) |
 | `sdp.ts` | SDP manipulation (stereo Opus) |
 | `emoji.ts` | Random emoji username generation |
 
@@ -290,16 +294,22 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messa
 - **TUI framework**: Ink v5 (React for terminal)
 - **WebRTC**: `@roamhq/wrtc` (native WebRTC bindings for Node.js)
 - **Audio**: sox (`rec` for capture, `play` for playback)
+- **Video**: ffmpeg (webcam capture) + ffplay (remote video display)
 - **Bundler**: esbuild (single-file ESM bundle with shebang)
 
 ### CLI usage
 
 ```bash
 openmeet [options]
-  --server <url>         WebSocket URL (default: ws://localhost:3001/ws)
+  --server <url>         WebSocket URL (default: wss://openmeet.mvega.pro/ws)
   --room <id>            Room ID to join directly
   --input-device <name>  Input device name (skip device picker)
   --output-device <name> Output device name (skip device picker)
+  --no-video             Disable video (audio-only mode)
+  --video-device <id>    Video capture device (e.g., "0" for macOS avfoundation)
+  --no-overlay           Disable video overlay
+  --test-camera          Test camera capture (opens ffplay preview, no room join)
+  --debug                Enable debug logging
   -h, --help             Show help
 ```
 
@@ -373,3 +383,8 @@ git push && git push --tags
 14. **Terminal sox dependency**: `sox` must be installed on the user's system for audio. The CLI checks for `rec` and `play` on startup and exits with instructions if missing.
 15. **Terminal esbuild bundle**: `@openmeet/shared` is aliased and inlined; all npm dependencies are kept external (`packages: 'external'`). The output is a single ESM file with a `#!/usr/bin/env node` shebang. `__APP_VERSION__` is injected via esbuild `define`; `src/version.ts` provides a runtime fallback for `tsx` dev mode.
 16. **Terminal alt screen + Ink clearTerminal**: Ink writes `\x1b[2J\x1b[3J\x1b[H` when output fills the screen. The `\x1b[3J` (clear scrollback) leaks through the alternate screen buffer on macOS, wiping terminal history. `index.tsx` patches `process.stdout.write` to strip `\x1b[3J`.
+17. **Terminal video answerer SDP direction**: In the answerer path, `setRemoteDescription` creates transceivers defaulting to `recvonly`. Must explicitly set `transceivers[1].direction = 'sendrecv'` and munge the SDP before `setLocalDescription` for the webcam video to be sent. Without this, the browser peer never receives video.
+18. **Terminal video capture FPS**: macOS avfoundation rejects `-framerate 15` despite listing it as supported. Use 30fps for reliable capture.
+19. **Terminal ffmpeg device listing**: `ffmpeg -list_devices` exits non-zero (because `-i ""` is invalid). Must use `spawnSync` (not `execSync`) to capture stderr without throwing.
+20. **Terminal video windows manual**: Remote webcam video windows are opened manually by the user (press `w` on selected peer), not automatically. Screen share windows open/close automatically via `screen-share-state` messages. Tracks are stored in refs and attached to VideoManager on demand.
+21. **Terminal settings persistence**: Settings stored at `~/.config/openmeet/settings.json`. Includes audio device IDs, video device ID, overlay toggle, and `devicesConfigured` flag. Legacy flat files (`audio-input`/`audio-output`) auto-migrated on first read.

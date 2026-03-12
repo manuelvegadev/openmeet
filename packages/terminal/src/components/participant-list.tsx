@@ -35,7 +35,9 @@ interface ParticipantListProps {
   username: string;
   isMuted: boolean;
   remoteMuteStates: Record<string, boolean>;
+  remoteVideoMuteStates: Record<string, boolean>;
   remoteScreenShareStates: Record<string, boolean>;
+  peerVideoOpen: Record<string, boolean>;
   speakingStates: Record<string, boolean>;
   audioLevels: Record<string, number>;
   peerVolumes: Record<string, number>;
@@ -48,7 +50,9 @@ export function ParticipantList({
   username,
   isMuted,
   remoteMuteStates,
+  remoteVideoMuteStates,
   remoteScreenShareStates,
+  peerVideoOpen,
   speakingStates,
   audioLevels,
   peerVolumes,
@@ -87,6 +91,8 @@ export function ParticipantList({
               <Text color="cyan">{isSelected ? '> ' : '  '}</Text>
               <Text>{p.username}</Text>
               {remoteMuteStates[p.id] && <Text color="yellow"> [muted]</Text>}
+              {remoteVideoMuteStates[p.id] === false && <Text color="magenta"> [cam]</Text>}
+              {peerVideoOpen[p.id] && <Text color="green"> [watching]</Text>}
               {remoteScreenShareStates[p.id] && <Text color="cyan"> [scr]</Text>}
             </Text>
             <Box>
