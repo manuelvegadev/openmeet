@@ -1,6 +1,6 @@
 {
   "name": "openmeet-terminal",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Join OpenMeet video rooms from the terminal — audio chat and text messaging via WebRTC",
   "type": "module",
   "bin": {
