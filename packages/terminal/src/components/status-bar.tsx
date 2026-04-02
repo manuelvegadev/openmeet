@@ -23,7 +23,7 @@ export function StatusBar({
         <Text dimColor>
           [Esc] Leave [Tab] Chat [m] {isMuted ? 'unmute' : 'mute'}
           {videoEnabled ? ` [v] cam ${isVideoMuted ? 'on' : 'off'}` : ''}
-          {videoEnabled ? ` [w] watch` : ''} [↑↓] Select [[-]/[+]] Vol
+          {videoEnabled ? ` [w] watch` : ''} [o] overlay [↑↓] Select [[-]/[+]] Vol
         </Text>
         {debugMode && <Text color="magenta">[g] DBG</Text>}
       </Box>

@@ -22,7 +22,7 @@ const DEFAULTS: AppSettings = {
   audioOutputId: null,
   videoDeviceId: null,
   devicesConfigured: false,
-  videoOverlay: true,
+  videoOverlay: false,
 };
 
 let cache: AppSettings | null = null;

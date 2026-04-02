@@ -20,8 +20,9 @@ const CAPTURE_FRAME_BYTES = CAPTURE_WIDTH * CAPTURE_HEIGHT * 1.5; // I420
 // ~5 frames at 720p ≈ 7MB — generous enough to absorb event loop stalls.
 const MAX_WRITE_BUFFER = DISPLAY_FRAME_BYTES * 5;
 
-// Pre-allocate the output buffer for rescaled frames (reused across all peers)
+// Pre-allocate output buffers for rescaled frames (reused across all peers)
 const scaledFrame = Buffer.alloc(DISPLAY_FRAME_BYTES);
+const fitFrame = Buffer.alloc(DISPLAY_FRAME_BYTES); // intermediate buffer for letterboxing
 
 /**
  * Bilinear I420 rescale — blends 4 neighboring source pixels for smooth output.
@@ -209,9 +210,8 @@ export class VideoManager {
 
   /**
    * Wire RTCVideoSink directly to ffplay. Frames are rescaled in JS using
-   * nearest-neighbor I420 scaling to the fixed display resolution. No ffmpeg
-   * subprocess needed — resolution changes are handled instantly with zero
-   * process restarts.
+   * bilinear I420 scaling to fit within the fixed display resolution while
+   * preserving aspect ratio (letterbox/pillarbox with black bars).
    */
   private wireSink(peer: PeerVideoPlayback): void {
     peer.sink.onframe = ({ frame }: { frame: { width: number; height: number; data: Uint8Array } }) => {
@@ -223,12 +223,78 @@ export class VideoManager {
         this.spawnFfplay(peer);
       }
 
-      // Rescale to fixed display resolution (bilinear interpolation)
-      if (width === DISPLAY_WIDTH && height === DISPLAY_HEIGHT) {
-        // No rescale needed — copy directly (native addon may reuse buffer)
-        data.copy ? (data as any).copy(scaledFrame) : scaledFrame.set(data);
+      // Scale to fit within DISPLAY_WIDTH x DISPLAY_HEIGHT preserving aspect ratio.
+      // Fill the output with black first, then scale into the centered sub-rect.
+      const srcAspect = width / height;
+      const dstAspect = DISPLAY_WIDTH / DISPLAY_HEIGHT;
+
+      let fitW: number;
+      let fitH: number;
+      if (srcAspect > dstAspect) {
+        // Source is wider — letterbox (black bars top/bottom)
+        fitW = DISPLAY_WIDTH;
+        fitH = Math.round(DISPLAY_WIDTH / srcAspect);
       } else {
-        scaleI420(data, width, height, scaledFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        // Source is taller — pillarbox (black bars left/right)
+        fitH = DISPLAY_HEIGHT;
+        fitW = Math.round(DISPLAY_HEIGHT * srcAspect);
+      }
+      // Ensure even dimensions (required for I420 chroma subsampling)
+      fitW &= ~1;
+      fitH &= ~1;
+
+      if (fitW === DISPLAY_WIDTH && fitH === DISPLAY_HEIGHT) {
+        // Perfect fit — no letterboxing needed
+        if (width === DISPLAY_WIDTH && height === DISPLAY_HEIGHT) {
+          data.copy ? (data as any).copy(scaledFrame) : scaledFrame.set(data);
+        } else {
+          scaleI420(data, width, height, scaledFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        }
+      } else {
+        // Fill with black (Y=0, U=128, V=128)
+        const ySize = DISPLAY_WIDTH * DISPLAY_HEIGHT;
+        const uvSize = (DISPLAY_WIDTH >> 1) * (DISPLAY_HEIGHT >> 1);
+        scaledFrame.fill(0, 0, ySize);
+        scaledFrame.fill(128, ySize, ySize + uvSize * 2);
+
+        // Scale source into pre-allocated intermediate buffer at the fitted size
+        scaleI420(data, width, height, fitFrame, fitW, fitH);
+
+        // Copy fitted frame into the center of the display frame (I420 plane by plane)
+        const offX = (DISPLAY_WIDTH - fitW) >> 1;
+        const offY = (DISPLAY_HEIGHT - fitH) >> 1;
+
+        // Y plane
+        for (let y = 0; y < fitH; y++) {
+          fitFrame.copy(scaledFrame, (offY + y) * DISPLAY_WIDTH + offX, y * fitW, y * fitW + fitW);
+        }
+        // U plane
+        const fitUOff = fitW * fitH;
+        const dstUOff = ySize;
+        const fitUW = fitW >> 1;
+        const fitUH = fitH >> 1;
+        const dstUW = DISPLAY_WIDTH >> 1;
+        const uOffX = offX >> 1;
+        const uOffY = offY >> 1;
+        for (let y = 0; y < fitUH; y++) {
+          fitFrame.copy(
+            scaledFrame,
+            dstUOff + (uOffY + y) * dstUW + uOffX,
+            fitUOff + y * fitUW,
+            fitUOff + y * fitUW + fitUW,
+          );
+        }
+        // V plane
+        const fitVOff = fitUOff + fitUW * fitUH;
+        const dstVOff = dstUOff + uvSize;
+        for (let y = 0; y < fitUH; y++) {
+          fitFrame.copy(
+            scaledFrame,
+            dstVOff + (uOffY + y) * dstUW + uOffX,
+            fitVOff + y * fitUW,
+            fitVOff + y * fitUW + fitUW,
+          );
+        }
       }
 
       // Burn overlay (name, stream type, source resolution) onto the frame

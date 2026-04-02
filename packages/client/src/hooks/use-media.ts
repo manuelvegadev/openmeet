@@ -39,7 +39,6 @@ function getAudioConstraints(echoCancellation: boolean, deviceId?: string): Medi
     echoCancellation,
     noiseSuppression: true,
     sampleRate: 48000,
-    channelCount: 2,
     ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
   };
 }

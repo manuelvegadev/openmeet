@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ChatPanel } from '@/components/chat-panel';
 import { ControlsBar } from '@/components/controls-bar';
+import { PreJoinLobby } from '@/components/pre-join-lobby';
 import { TopBar } from '@/components/top-bar';
 import { VideoGrid } from '@/components/video-grid';
 import { useMedia } from '@/hooks/use-media';
@@ -19,6 +20,7 @@ function RoomPage() {
   const { roomId } = Route.useParams();
   const navigate = useNavigate();
   const [username] = useState(() => getOrCreateEmoji());
+  const [readyToJoin, setReadyToJoin] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isDebugEnabled, setIsDebugEnabled] = useState(false);
   const [joined, setJoined] = useState(false);
@@ -108,12 +110,12 @@ function RoomPage() {
     }
   }, [connected]);
 
-  // Join room when connected
+  // Join room when connected and user has clicked "Join now"
   useEffect(() => {
-    if (connected && username && !joined) {
+    if (connected && username && readyToJoin && !joined) {
       send({ type: 'join-room', roomId, username });
     }
-  }, [connected, username, roomId, send, joined]);
+  }, [connected, username, roomId, send, joined, readyToJoin]);
 
   // Broadcast mute state: after joining, on audio/video toggle, and when
   // participants change (so newcomers learn our state)
@@ -205,6 +207,20 @@ function RoomPage() {
     },
     [send, roomId, username],
   );
+
+  if (!readyToJoin) {
+    return (
+      <PreJoinLobby
+        username={username}
+        stream={media.stream}
+        isAudioEnabled={media.isAudioEnabled}
+        isVideoEnabled={media.isVideoEnabled}
+        onToggleAudio={media.toggleAudio}
+        onToggleVideo={media.toggleVideo}
+        onJoin={() => setReadyToJoin(true)}
+      />
+    );
+  }
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">

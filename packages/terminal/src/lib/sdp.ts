@@ -1,5 +1,5 @@
-/** Enable stereo Opus at 192kbps. Adds stereo=1, sprop-stereo=1, and
- *  maxaveragebitrate=192000 to Opus fmtp lines for high-quality audio. */
+/** Boost Opus quality: stereo-capable at up to 256 kbps. Adds stereo=1,
+ *  sprop-stereo=1, and maxaveragebitrate=256000 to Opus fmtp lines. */
 export function boostOpusQuality(sdp: string): string {
   return sdp.replace(/a=fmtp:(\d+) (.+)/g, (match, pt, params) => {
     if (params.includes('minptime')) {
@@ -11,9 +11,9 @@ export function boostOpusQuality(sdp: string): string {
         modified += ';sprop-stereo=1';
       }
       if (!modified.includes('maxaveragebitrate')) {
-        modified += ';maxaveragebitrate=192000';
+        modified += ';maxaveragebitrate=256000';
       } else {
-        modified = modified.replace(/maxaveragebitrate=\d+/, 'maxaveragebitrate=192000');
+        modified = modified.replace(/maxaveragebitrate=\d+/, 'maxaveragebitrate=256000');
       }
       return `a=fmtp:${pt} ${modified}`;
     }

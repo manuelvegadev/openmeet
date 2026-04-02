@@ -334,21 +334,27 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
             videoManager.startCapture(videoSource, device);
           }
 
-          // Create connections to existing participants
-          for (const p of msg.participants) {
-            peerManager.createConnection(p.id);
-          }
+          // Wait for first audio frame before creating connections so the
+          // RTCAudioSource track has real data when the offer is sent.
+          // 2s timeout ensures connections still get created if sox is slow.
+          const participants = msg.participants;
+          const yourId = msg.yourId;
+          Promise.race([audioManager.ready, new Promise<void>((r) => setTimeout(r, 2000))]).then(() => {
+            for (const p of participants) {
+              peerManager.createConnection(p.id);
+            }
+          });
 
           // Broadcast initial states
           ws.send({
             type: 'mute-state',
-            fromId: msg.yourId,
+            fromId: yourId,
             isAudioMuted: false,
             isVideoMuted: videoManager?.isVideoMuted ?? true,
           });
           ws.send({
             type: 'screen-share-state',
-            fromId: msg.yourId,
+            fromId: yourId,
             isScreenSharing: false,
           });
           break;

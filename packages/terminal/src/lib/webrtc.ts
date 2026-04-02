@@ -25,6 +25,9 @@ export class PeerConnectionManager {
   private onRemoteVideoTrack: (peerId: string, track: any, streamType: 'webcam' | 'screen') => void;
   private onPeerDisconnected: (peerId: string) => void;
   private makingOffer = new Set<string>();
+  private retryCount = new Map<string, number>();
+  private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static MAX_RETRIES = 3;
   onDebug?: (msg: string) => void;
 
   constructor(options: {
@@ -87,8 +90,17 @@ export class PeerConnectionManager {
 
     pc.onconnectionstatechange = () => {
       this.onDebug?.(`RTC ${peerId.slice(0, 6)} state: ${pc.connectionState}`);
+      if (pc.connectionState === 'connected') {
+        this.retryCount.delete(peerId);
+      }
       if (pc.connectionState === 'failed') {
-        this.removeConnection(peerId);
+        const existingTimer = this.retryTimers.get(peerId);
+        if (existingTimer) clearTimeout(existingTimer);
+        this.retryTimers.delete(peerId);
+        this.connections.delete(peerId);
+        this.makingOffer.delete(peerId);
+        this.onPeerDisconnected(peerId);
+        this.scheduleRetry(peerId);
       }
     };
 
@@ -131,6 +143,7 @@ export class PeerConnectionManager {
   }
 
   async createConnection(peerId: string): Promise<void> {
+    this.makingOffer.add(peerId);
     try {
       const pc = this.createOffererConnection(peerId);
 
@@ -147,20 +160,34 @@ export class PeerConnectionManager {
         toId: peerId,
         sdp: PeerConnectionManager.extractSdp(pc.localDescription),
       });
-    } catch {
-      // Offer creation failed — non-fatal, peer will retry
+    } catch (err) {
+      this.onDebug?.(`RTC offer creation failed for ${peerId.slice(0, 6)}: ${err}`);
+    } finally {
+      this.makingOffer.delete(peerId);
     }
   }
 
   async handleOffer(peerId: string, sdp: any): Promise<void> {
     let pc = this.connections.get(peerId);
 
-    if (pc && pc.signalingState === 'have-local-offer') {
-      // Glare: both sides sent offers simultaneously. Close our offerer
-      // connection and recreate as answerer. We can't rollback and reuse
-      // because addTransceiver-created transceivers aren't eligible for
-      // m-line matching during setRemoteDescription (spec behavior).
-      this.onDebug?.(`RTC glare detected with ${peerId.slice(0, 6)}, rolling back`);
+    // Perfect negotiation — detect offer collision (glare).
+    // Uses the same lexicographic ID comparison as the web client so both
+    // sides agree on who yields and who ignores.
+    const offerCollision = this.makingOffer.has(peerId) || (pc && pc.signalingState !== 'stable');
+    const polite = this.myId < peerId;
+
+    if (!polite && offerCollision) {
+      // Impolite: ignore incoming offer — remote (polite) will process ours
+      this.onDebug?.(`RTC glare: impolite, ignoring offer from ${peerId.slice(0, 6)}`);
+      return;
+    }
+
+    if (offerCollision && pc) {
+      // Polite: yield by closing our offerer and recreating as answerer.
+      // Can't use setLocalDescription({ type: 'rollback' }) in @roamhq/wrtc,
+      // so close+recreate is the equivalent. addTransceiver-created transceivers
+      // aren't eligible for m-line matching, so reuse isn't possible anyway.
+      this.onDebug?.(`RTC glare: polite, yielding to ${peerId.slice(0, 6)}`);
       pc.close();
       this.connections.delete(peerId);
       pc = undefined;
@@ -184,38 +211,38 @@ export class PeerConnectionManager {
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
 
-      // Attach video track to webcam transceiver (index 1) in answerer path.
-      // setRemoteDescription created transceivers from the offer's m-lines,
-      // defaulting to recvonly. We must set sendrecv so the answer SDP
-      // tells the remote that we're sending video.
-      if (this.videoTrack) {
-        const transceivers = pc.getTransceivers();
-        if (transceivers.length > 1) {
-          transceivers[1].sender.replaceTrack(this.videoTrack);
-          transceivers[1].direction = 'sendrecv';
+      // Set transceiver directions BEFORE createAnswer so the answer SDP
+      // reflects the correct state natively (no post-creation SDP munging).
+      const transceivers = pc.getTransceivers();
+
+      // Audio (index 0): must be sendrecv to send our audio
+      if (transceivers.length > 0) {
+        transceivers[0].direction = 'sendrecv';
+        if (this.audioTrack) {
+          transceivers[0].sender.replaceTrack(this.audioTrack);
         }
       }
+
+      // Webcam video (index 1): sendrecv if we have video, leave as-is otherwise
+      if (transceivers.length > 1 && this.videoTrack) {
+        transceivers[1].sender.replaceTrack(this.videoTrack);
+        transceivers[1].direction = 'sendrecv';
+      }
+
+      // Screen video (index 2): always recvonly for terminal (no change needed)
 
       const answer = await pc.createAnswer();
-      let modifiedSdp = answer.sdp ?? '';
+      const modifiedSdp = boostOpusQuality(answer.sdp ?? '');
 
-      // Safety net: if @roamhq/wrtc generated recvonly despite our sendrecv
-      // transceiver, munge the SDP so the browser knows we're sending.
-      const mSections = modifiedSdp.split(/(?=m=)/);
-      const audioIdx = mSections.findIndex((s: string) => s.startsWith('m=audio'));
-      if (audioIdx >= 0 && !mSections[audioIdx].includes('a=sendrecv')) {
-        mSections[audioIdx] = mSections[audioIdx].replace(/a=recvonly|a=inactive/, 'a=sendrecv');
-      }
-      // Same for webcam video (first m=video section) when we have a video track
-      if (this.videoTrack) {
-        const videoIdx = mSections.findIndex((s: string) => s.startsWith('m=video'));
-        if (videoIdx >= 0 && !mSections[videoIdx].includes('a=sendrecv')) {
-          mSections[videoIdx] = mSections[videoIdx].replace(/a=recvonly|a=inactive/, 'a=sendrecv');
+      // Verify directions are correct (diagnostic only, no munging)
+      if (this.onDebug) {
+        const sections = modifiedSdp.split(/(?=m=)/);
+        const audioSection = sections.find((s: string) => s.startsWith('m=audio'));
+        if (audioSection && !audioSection.includes('a=sendrecv')) {
+          this.onDebug(`WARNING: audio answer SDP is not sendrecv — audio may not be sent`);
         }
       }
-      modifiedSdp = mSections.join('');
 
-      modifiedSdp = boostOpusQuality(modifiedSdp);
       await pc.setLocalDescription({ ...answer, sdp: modifiedSdp });
 
       this.onDebug?.(`RTC answer created for ${peerId.slice(0, 6)}`);
@@ -225,8 +252,8 @@ export class PeerConnectionManager {
         toId: peerId,
         sdp: PeerConnectionManager.extractSdp(pc.localDescription),
       });
-    } catch {
-      // Offer handling failed — non-fatal
+    } catch (err) {
+      this.onDebug?.(`RTC handleOffer from ${peerId.slice(0, 6)} failed: ${err}`);
     }
   }
 
@@ -235,8 +262,9 @@ export class PeerConnectionManager {
     if (!pc) return;
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    } catch {
-      // Answer handling failed — non-fatal
+      this.onDebug?.(`RTC answer applied for ${peerId.slice(0, 6)}`);
+    } catch (err) {
+      this.onDebug?.(`RTC handleAnswer from ${peerId.slice(0, 6)} failed: ${err}`);
     }
   }
 
@@ -245,8 +273,8 @@ export class PeerConnectionManager {
     if (!pc) return;
     try {
       await pc.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch {
-      // ICE candidate errors are common and non-fatal (late candidates after connection)
+    } catch (err) {
+      this.onDebug?.(`RTC ICE for ${peerId.slice(0, 6)}: ${err}`);
     }
   }
 
@@ -265,7 +293,38 @@ export class PeerConnectionManager {
     }
   }
 
+  /** Schedule a retry for a failed connection (only impolite peer retries). */
+  private scheduleRetry(peerId: string): void {
+    // Only the "impolite" peer (larger ID) retries to avoid simultaneous attempts
+    if (this.myId < peerId) return;
+
+    const count = this.retryCount.get(peerId) ?? 0;
+    if (count >= PeerConnectionManager.MAX_RETRIES) {
+      this.onDebug?.(`RTC max retries reached for ${peerId.slice(0, 6)}`);
+      this.retryCount.delete(peerId);
+      return;
+    }
+
+    const delay = 1000 * 2 ** count;
+    this.retryCount.set(peerId, count + 1);
+    this.onDebug?.(
+      `RTC retry ${count + 1}/${PeerConnectionManager.MAX_RETRIES} for ${peerId.slice(0, 6)} in ${delay}ms`,
+    );
+
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(peerId);
+      this.createConnection(peerId);
+    }, delay);
+    this.retryTimers.set(peerId, timer);
+  }
+
   removeConnection(peerId: string): void {
+    const timer = this.retryTimers.get(peerId);
+    if (timer) {
+      clearTimeout(timer);
+      this.retryTimers.delete(peerId);
+    }
+    this.retryCount.delete(peerId);
     const pc = this.connections.get(peerId);
     if (pc) {
       pc.close();
@@ -276,6 +335,11 @@ export class PeerConnectionManager {
   }
 
   closeAll(): void {
+    for (const timer of this.retryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.retryTimers.clear();
+    this.retryCount.clear();
     for (const peerId of [...this.connections.keys()]) {
       this.removeConnection(peerId);
     }

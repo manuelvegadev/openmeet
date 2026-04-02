@@ -164,7 +164,7 @@ export function RoomView({
       if (input === 'd') {
         setDeviceStep('loading');
       }
-      if (input === 'o' && room.videoEnabled) {
+      if (input === 'o') {
         room.toggleOverlay();
       }
       if (input === 'w') {

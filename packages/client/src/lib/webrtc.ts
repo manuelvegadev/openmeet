@@ -9,12 +9,22 @@ const AUDIO_INDEX = 0;
 const WEBCAM_INDEX = 1;
 const SCREEN_INDEX = 2;
 
-function enableStereoOpus(sdp: string): string {
+function boostOpusQuality(sdp: string): string {
   return sdp.replace(/a=fmtp:(\d+) (.+)/g, (match, pt, params) => {
     if (params.includes('minptime')) {
-      if (!params.includes('stereo=1')) {
-        return `a=fmtp:${pt} ${params};stereo=1;sprop-stereo=1`;
+      let modified = params;
+      if (!modified.includes('stereo')) {
+        modified += ';stereo=1';
       }
+      if (!modified.includes('sprop-stereo')) {
+        modified += ';sprop-stereo=1';
+      }
+      if (!modified.includes('maxaveragebitrate')) {
+        modified += ';maxaveragebitrate=256000';
+      } else {
+        modified = modified.replace(/maxaveragebitrate=\d+/, 'maxaveragebitrate=256000');
+      }
+      return `a=fmtp:${pt} ${modified}`;
     }
     return match;
   });
@@ -33,6 +43,9 @@ export class PeerConnectionManager {
   private onRemoteStreamRemoved: (peerId: string) => void;
   private makingOffer = new Set<string>();
   private pendingRenegotiation = new Set<string>();
+  private retryCount = new Map<string, number>();
+  private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static MAX_RETRIES = 3;
 
   constructor(options: {
     myId: string;
@@ -142,7 +155,7 @@ export class PeerConnectionManager {
     this.makingOffer.add(peerId);
     try {
       const offer = await pc.createOffer();
-      const modifiedSdp = enableStereoOpus(offer.sdp ?? '');
+      const modifiedSdp = boostOpusQuality(offer.sdp ?? '');
       await pc.setLocalDescription({ ...offer, sdp: modifiedSdp });
       this.sendSignal({
         type: 'offer',
@@ -192,7 +205,7 @@ export class PeerConnectionManager {
       this.setupScreenTrackListener(peerId, pc);
 
       const answer = await pc.createAnswer();
-      const modifiedSdp = enableStereoOpus(answer.sdp ?? '');
+      const modifiedSdp = boostOpusQuality(answer.sdp ?? '');
       await pc.setLocalDescription({ ...answer, sdp: modifiedSdp });
 
       this.sendSignal({
@@ -230,7 +243,34 @@ export class PeerConnectionManager {
     }
   }
 
+  /** Schedule a retry for a failed connection (only impolite peer retries). */
+  private scheduleRetry(peerId: string): void {
+    if (this.myId < peerId) return;
+
+    const count = this.retryCount.get(peerId) ?? 0;
+    if (count >= PeerConnectionManager.MAX_RETRIES) {
+      console.warn(`Max retries reached for ${peerId}`);
+      this.retryCount.delete(peerId);
+      return;
+    }
+
+    const delay = 1000 * 2 ** count;
+    this.retryCount.set(peerId, count + 1);
+
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(peerId);
+      this.createConnection(peerId);
+    }, delay);
+    this.retryTimers.set(peerId, timer);
+  }
+
   removeConnection(peerId: string): void {
+    const timer = this.retryTimers.get(peerId);
+    if (timer) {
+      clearTimeout(timer);
+      this.retryTimers.delete(peerId);
+    }
+    this.retryCount.delete(peerId);
     const pc = this.connections.get(peerId);
     if (pc) {
       pc.close();
@@ -244,6 +284,11 @@ export class PeerConnectionManager {
   }
 
   closeAll(): void {
+    for (const timer of this.retryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.retryTimers.clear();
+    this.retryCount.clear();
     for (const [peerId] of this.connections) {
       this.removeConnection(peerId);
     }
@@ -272,7 +317,7 @@ export class PeerConnectionManager {
       this.syncLocalTracks(pc);
 
       const offer = await pc.createOffer();
-      const modifiedSdp = enableStereoOpus(offer.sdp ?? '');
+      const modifiedSdp = boostOpusQuality(offer.sdp ?? '');
       await pc.setLocalDescription({ ...offer, sdp: modifiedSdp });
       this.sendSignal({
         type: 'offer',
@@ -375,13 +420,22 @@ export class PeerConnectionManager {
     };
 
     pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        this.retryCount.delete(peerId);
+        this.syncLocalTracks(pc);
+      }
       if (pc.connectionState === 'failed') {
         console.warn(`Connection to ${peerId} failed`);
-        this.removeConnection(peerId);
-      }
-      // Safety net: verify tracks when connection is established
-      if (pc.connectionState === 'connected') {
-        this.syncLocalTracks(pc);
+        const existingTimer = this.retryTimers.get(peerId);
+        if (existingTimer) clearTimeout(existingTimer);
+        this.retryTimers.delete(peerId);
+        this.connections.delete(peerId);
+        this.remoteStreams.delete(peerId);
+        this.remoteScreenStreams.delete(peerId);
+        this.makingOffer.delete(peerId);
+        this.pendingRenegotiation.delete(peerId);
+        this.onRemoteStreamRemoved(peerId);
+        this.scheduleRetry(peerId);
       }
     };
 
