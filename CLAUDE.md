@@ -17,8 +17,8 @@ Client A <──WebRTC P2P──> Client B
 
 - **Topology**: P2P mesh — each client connects directly to every other client
 - **Signaling**: WebSocket for SDP/ICE exchange, chat messages, mute state, and screen share state
-- **Media**: WebRTC with stereo Opus audio (48kHz) and VP8/VP9 video (720p webcam, high-res screen share)
-- **Screen sharing**: Simultaneous webcam + screen share via 3 transceivers per connection
+- **Media**: WebRTC with stereo Opus audio (48kHz, 256kbps) and VP8/VP9 video (1080p webcam, 1080p screen share)
+- **Screen sharing**: Simultaneous webcam + screen share via 3 transceivers per connection (both web and terminal clients)
 - **Files**: HTTP upload to server (tracked per room), URL shared via WebSocket chat. Files deleted when room empties.
 
 ## Tech Stack
@@ -147,6 +147,7 @@ Vite + React 19 + TanStack Router (file-based) + shadcn/ui (Base UI). Installabl
 
 | Component | Purpose |
 |-----------|---------|
+| `pre-join-lobby.tsx` | Pre-join screen: camera preview, mic/cam toggles, "Join now" button (like Google Meet) |
 | `video-tile.tsx` | Single video element with username overlay, speaking glow, fullscreen, "You are presenting" placeholder |
 | `video-grid.tsx` | Responsive grid layout (1→2→2x2→3x2) + spotlight mode, separate webcam + screen share tiles per participant, auto-spotlight on screen share |
 | `chat-panel.tsx` | Resizable side panel with markdown messages (react-markdown), auto-growing textarea, file attach, card-style message bubbles, drag-to-resize left border |
@@ -186,9 +187,11 @@ Vite + React 19 + TanStack Router (file-based) + shadcn/ui (Base UI). Installabl
 
 3. **Track routing by arrival order**: `ontrack` handler routes video tracks by checking if a webcam video already exists in the remote stream — if yes, any new video track is the screen share. This is more robust than transceiver index/reference comparison, which can fail during renegotiation. Backed by `onunmute` fallback on the screen receiver track.
 
-4. **Glare handling**: If both peers send offers simultaneously (`signalingState === 'have-local-offer'`), the receiver rolls back its own offer before processing the remote offer.
+4. **Glare handling (perfect negotiation)**: Both web and terminal use lexicographic ID comparison (`myId < peerId` = polite). Polite peer yields on collision (web: rollback, terminal: close+recreate since @roamhq/wrtc doesn't support rollback). Impolite peer ignores incoming offer.
 
-5. **SDP modification**: `enableStereoOpus()` modifies SDP to add `stereo=1;sprop-stereo=1` for Opus codec lines.
+5. **SDP modification**: `boostOpusQuality()` modifies SDP to add `stereo=1;sprop-stereo=1;maxaveragebitrate=256000` for Opus codec lines. Both clients use the same function name and parameters.
+
+5b. **Connection retry**: Both clients retry failed connections with exponential backoff (1s, 2s, 4s, max 3 attempts). Only the impolite peer (larger ID) retries to avoid simultaneous retry storms.
 
 6. **Screen share via transceiver 2**: `setScreenStream()` targets the 3rd transceiver (index 2), using `replaceTrack()` + direction toggle (`recvonly` ↔ `sendrecv`). Renegotiates only on direction change.
 
@@ -263,7 +266,7 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messa
 | `chat-input.tsx` | Text input for chat messages |
 | `chat-log.tsx` | Scrollable chat message history |
 | `participant-list.tsx` | Connected participants with mute/cam/screen indicators |
-| `status-bar.tsx` | Connection status, room info |
+| `status-bar.tsx` | Keyboard shortcuts help text, debug mode indicator |
 | `room-log.tsx` | Room event log (joins, leaves, errors) |
 | `settings-view.tsx` | Settings screen (audio devices, camera, video overlay) |
 
@@ -281,11 +284,11 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messa
 | `webrtc.ts` | Peer connection management with `@roamhq/wrtc` |
 | `audio.ts` | sox-based audio capture/playback pipelines |
 | `audio-test.ts` | Audio device testing utilities |
-| `video.ts` | VideoManager: ffmpeg capture (send) + ffplay display (receive), I420 bilinear scaling, overlay |
+| `video.ts` | VideoManager: ffmpeg webcam + screen capture (send), ffplay display (receive), I420 bilinear scaling with aspect-ratio-preserving letterbox/pillarbox, overlay |
 | `overlay.ts` | 8×8 bitmap font overlay renderer burned into I420 video frames |
-| `devices.ts` | Audio/video device enumeration |
+| `devices.ts` | Audio/video/screen device enumeration (macOS avfoundation, Linux xrandr/pactl) |
 | `settings.ts` | Persistent settings (`~/.config/openmeet/settings.json`) |
-| `sdp.ts` | SDP manipulation (stereo Opus) |
+| `sdp.ts` | SDP manipulation (stereo Opus at 256kbps) |
 | `emoji.ts` | Random emoji username generation |
 
 ### Tech stack
@@ -294,7 +297,7 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, and text messa
 - **TUI framework**: Ink v5 (React for terminal)
 - **WebRTC**: `@roamhq/wrtc` (native WebRTC bindings for Node.js)
 - **Audio**: sox (`rec` for capture, `play` for playback)
-- **Video**: ffmpeg (webcam capture) + ffplay (remote video display)
+- **Video**: ffmpeg (webcam + screen capture) + ffplay (remote video display)
 - **Bundler**: esbuild (single-file ESM bundle with shebang)
 
 ### CLI usage
@@ -309,7 +312,8 @@ openmeet [options]
   --video-device <id>    Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay
   --test-camera          Test camera capture (opens ffplay preview, no room join)
-  --debug                Enable debug logging
+  --test-screen          Test screen capture (lists screens, opens ffplay preview)
+  --debug                Enable debug logging (also writes to ~/.config/openmeet/debug.log)
   -h, --help             Show help
 ```
 
@@ -383,8 +387,15 @@ git push && git push --tags
 14. **Terminal sox dependency**: `sox` must be installed on the user's system for audio. The CLI checks for `rec` and `play` on startup and exits with instructions if missing.
 15. **Terminal esbuild bundle**: `@openmeet/shared` is aliased and inlined; all npm dependencies are kept external (`packages: 'external'`). The output is a single ESM file with a `#!/usr/bin/env node` shebang. `__APP_VERSION__` is injected via esbuild `define`; `src/version.ts` provides a runtime fallback for `tsx` dev mode.
 16. **Terminal alt screen + Ink clearTerminal**: Ink writes `\x1b[2J\x1b[3J\x1b[H` when output fills the screen. The `\x1b[3J` (clear scrollback) leaks through the alternate screen buffer on macOS, wiping terminal history. `index.tsx` patches `process.stdout.write` to strip `\x1b[3J`.
-17. **Terminal video answerer SDP direction**: In the answerer path, `setRemoteDescription` creates transceivers defaulting to `recvonly`. Must explicitly set `transceivers[1].direction = 'sendrecv'` and munge the SDP before `setLocalDescription` for the webcam video to be sent. Without this, the browser peer never receives video.
+17. **Terminal video answerer SDP direction**: In the answerer path, `setRemoteDescription` creates transceivers defaulting to `recvonly`. Must explicitly set transceiver directions to `sendrecv` BEFORE `createAnswer()` (not via post-creation SDP munging). This applies to audio (index 0), webcam (index 1), and screen (index 2 when sharing).
 18. **Terminal video capture FPS**: macOS avfoundation rejects `-framerate 15` despite listing it as supported. Use 30fps for reliable capture.
 19. **Terminal ffmpeg device listing**: `ffmpeg -list_devices` exits non-zero (because `-i ""` is invalid). Must use `spawnSync` (not `execSync`) to capture stderr without throwing.
-20. **Terminal video windows manual**: Remote webcam video windows are opened manually by the user (press `w` on selected peer), not automatically. Screen share windows open/close automatically via `screen-share-state` messages. Tracks are stored in refs and attached to VideoManager on demand.
+20. **Terminal video windows manual**: Remote webcam (`w` key) and screen share (`e` key) windows are opened manually by the user on the selected peer. Screen windows auto-close when the peer stops sharing. `w` is gated on the peer having camera on (`remoteVideoMuteStates[peerId] === false`). Tracks are stored in refs and attached to VideoManager on demand.
 21. **Terminal settings persistence**: Settings stored at `~/.config/openmeet/settings.json`. Includes audio device IDs, video device ID, overlay toggle, and `devicesConfigured` flag. Legacy flat files (`audio-input`/`audio-output`) auto-migrated on first read.
+22. **Terminal screen capture macOS**: Uses ffmpeg avfoundation with `-capture_cursor 1`. Requires Screen Recording permission for the terminal app. On macOS 15 (Sequoia), ffmpeg must be built with ScreenCaptureKit support — older builds hang. The `-r 30` output flag is required because avfoundation ignores `-framerate` for screen capture.
+23. **Terminal screen capture resolution**: Captures at 1080p@30fps via ffmpeg scale+pad filter (`scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1920:1080:(ow-iw)/2:(oh-ih)/2`). Fixed output ensures predictable I420 frame sizes. Higher resolutions (2K@60fps) overwhelm the Node.js event loop with raw frame data (~330MB/s).
+24. **Terminal renegotiation for screen share**: `setScreenTrack()` toggles transceiver 2 direction and triggers renegotiation. The renegotiation offer SDP is munged to force `a=sendrecv` on the screen m-line because @roamhq/wrtc may not reflect direction changes.
+25. **Web client pre-join lobby**: Users see a camera preview with mic/cam toggles before joining. The `join-room` WebSocket message is gated on `readyToJoin` state. Media starts on mount (for preview) but WebRTC connections aren't created until join.
+26. **Web client screen track activation**: `ontrack`/`onunmute` may not fire during renegotiation for existing transceivers. `activateScreenTrack(peerId)` proactively retrieves the screen receiver track from transceiver 2, called when `screen-share-state: true` arrives.
+27. **Terminal debug log file**: When `--debug` is on, all debug events are written to `~/.config/openmeet/debug.log` via `appendFileSync`. Tail with `tail -f ~/.config/openmeet/debug.log`.
+28. **Audio quality alignment**: Both clients use `boostOpusQuality()` to set `stereo=1;sprop-stereo=1;maxaveragebitrate=256000` (256kbps). Web client does not force `channelCount: 2` — browser uses mic's native channels. Terminal always captures stereo via sox for @roamhq/wrtc compatibility. Playback always stereo with mono→stereo upmix.

@@ -27,41 +27,46 @@ No browser needed. Just your terminal, a mic, and speakers.
 │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│
 │ > Type message...                                                                                                    │
 │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│
-│ [Esc] Leave [Tab] Chat [m] mute [d] Devices [↑↓] Select [[-]/[+]] Vol                                    ● Connected │
+│ [Esc] Leave [Tab] Chat [m] mute [s] share [w] watch [e] screen [↑↓] Select [[-]/[+]] Vol                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Features
 
-- **Real-time audio chat** — full-duplex audio via WebRTC with 128kbps Opus encoding
+- **Real-time audio chat** — full-duplex stereo audio via WebRTC with 256kbps Opus encoding
+- **Video support** — send and receive webcam video (1080p) via ffmpeg/ffplay
+- **Screen sharing** — share your screen at 1080p@30fps, view remote screen shares
 - **Text messaging** — send and receive chat messages alongside audio
-- **Device selection** — pick your mic and speakers, with a built-in audio test step
+- **Device selection** — pick your mic, speakers, camera, and screen capture device
 - **Per-participant volume** — adjust volume for each remote peer independently
 - **Speaking indicators** — see who's talking with live VU meters
 - **Connection stats** — real-time bitrate, RTT, packet loss, and estimated per-peer latency display
+- **Connection recovery** — automatic retry with exponential backoff on connection failure
 - **Room management** — create new rooms or join existing ones by room code
 - **Emoji identities** — auto-assigned persistent emoji username (e.g., 🐶, 🦊, 🐸)
+- **Debug logging** — optional file-based debug log at `~/.config/openmeet/debug.log`
 - **Cross-platform** — works on macOS and Linux
 
 ## Prerequisites
 
 - **Node.js 22+** — [download](https://nodejs.org)
 - **sox** — audio capture and playback engine
+- **ffmpeg** _(optional)_ — required for video and screen sharing
 
-Install sox:
+Install dependencies:
 
 ```bash
 # macOS
-brew install sox
+brew install sox ffmpeg
 
 # Ubuntu / Debian
-sudo apt install sox
+sudo apt install sox ffmpeg
 
 # Fedora
-sudo dnf install sox
+sudo dnf install sox ffmpeg
 
 # Arch
-sudo pacman -S sox
+sudo pacman -S sox ffmpeg
 ```
 
 ## Install
@@ -100,6 +105,12 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--room <id>` | Room ID to join directly | _(interactive)_ |
 | `--input-device <name>` | Audio input device name | _(device picker)_ |
 | `--output-device <name>` | Audio output device name | _(device picker)_ |
+| `--no-video` | Disable video (audio-only mode) | |
+| `--video-device <id>` | Video capture device (e.g., `"0"`) | |
+| `--no-overlay` | Disable video overlay | |
+| `--test-camera` | Test camera capture (opens ffplay preview) | |
+| `--test-screen` | Test screen capture (lists screens, opens ffplay preview) | |
+| `--debug` | Enable debug logging (writes to `~/.config/openmeet/debug.log`) | |
 | `-h, --help` | Show help | |
 
 ### Keyboard shortcuts
@@ -110,6 +121,11 @@ Once inside a room:
 |-----|--------|
 | `Tab` | Toggle focus between participant list and chat input |
 | `m` | Toggle mute (when participant list is focused) |
+| `v` | Toggle camera on/off (requires `--video-device` or video enabled) |
+| `s` | Toggle screen sharing (shows screen picker on first use) |
+| `w` | Open/close selected peer's webcam (only when peer has camera on) |
+| `e` | Open/close selected peer's screen share (only when peer is sharing) |
+| `o` | Toggle video overlay (name, resolution info on video windows) |
 | `d` | Open device picker |
 | `Up` / `Down` | Select participant |
 | `[` / `]` or `-` / `+` | Adjust selected peer's volume |
@@ -120,17 +136,21 @@ Once inside a room:
 
 ```
 Terminal ──sox rec──▶ WebRTC Audio ──▶ Remote Peers
+Terminal ──ffmpeg──▶ WebRTC Video ──▶ Remote Peers (webcam + screen)
                                             │
 Remote Peers ──▶ WebRTC Audio ──sox play──▶ Terminal
+Remote Peers ──▶ WebRTC Video ──ffplay────▶ Terminal (separate windows)
                                             │
 Terminal ◀────────── WebSocket ──────────▶ Server
                    (signaling + chat)
 ```
 
-1. **Audio capture**: `sox rec` records from your mic at 48kHz/16-bit mono and feeds 10ms PCM frames into a WebRTC audio track
-2. **Audio playback**: incoming WebRTC audio is piped to `sox play` for each remote peer, with per-peer volume control
-3. **Signaling**: WebSocket connection to the OpenMeet server handles SDP/ICE exchange, chat messages, and room state
-4. **WebRTC**: peer-to-peer connections using `@roamhq/wrtc` (native WebRTC bindings for Node.js)
+1. **Audio capture**: `sox rec` records from your mic at 48kHz/16-bit stereo and feeds 10ms PCM frames into a WebRTC audio track (256kbps Opus)
+2. **Audio playback**: incoming WebRTC audio is piped to `sox play` via FIFOs for each remote peer, with per-peer volume control
+3. **Video capture**: `ffmpeg` captures webcam (1080p) or screen (1080p@30fps) and feeds raw I420 frames into WebRTC video tracks
+4. **Video display**: `ffplay` opens separate windows for remote webcam and screen share streams, with aspect-ratio-preserving letterboxing
+5. **Signaling**: WebSocket connection to the OpenMeet server handles SDP/ICE exchange, chat messages, and room state
+6. **WebRTC**: peer-to-peer connections using `@roamhq/wrtc` (native WebRTC bindings for Node.js) with 3 transceivers per connection (audio, webcam, screen)
 
 ## Self-hosted server
 
@@ -159,6 +179,16 @@ Your terminal app needs microphone permission:
 1. Open **System Settings > Privacy & Security > Microphone**
 2. Enable the toggle for your terminal app (Terminal, iTerm2, Warp, etc.)
 3. Restart the terminal and try again
+
+### Screen sharing doesn't work (macOS)
+
+Screen capture requires Screen Recording permission and a compatible ffmpeg build:
+
+1. Open **System Settings > Privacy & Security > Screen Recording**
+2. Enable the toggle for your terminal app
+3. Restart the terminal
+
+On macOS 15 (Sequoia), ffmpeg must be built with ScreenCaptureKit support. If screen capture hangs, try `brew reinstall ffmpeg`. Test with `openmeet --test-screen`.
 
 ### No audio from remote peers
 
