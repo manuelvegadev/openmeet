@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { platform } from 'node:os';
 import wrtc from '@roamhq/wrtc';
+import type { ScreenDevice } from './devices.js';
 import { renderOverlay } from './overlay.js';
 
 const { RTCVideoSink, RTCVideoSource } = wrtc.nonstandard;
@@ -10,11 +11,17 @@ const DISPLAY_WIDTH = 1280;
 const DISPLAY_HEIGHT = 720;
 const DISPLAY_FRAME_BYTES = DISPLAY_WIDTH * DISPLAY_HEIGHT * 1.5; // I420
 
-// Capture settings
+// Webcam capture settings
 const CAPTURE_WIDTH = 640;
 const CAPTURE_HEIGHT = 480;
 const CAPTURE_FPS = 30;
 const CAPTURE_FRAME_BYTES = CAPTURE_WIDTH * CAPTURE_HEIGHT * 1.5; // I420
+
+// Screen capture settings — 1080p@30fps keeps the raw I420 pipe under ~93MB/s.
+// Higher resolutions overwhelm the Node.js event loop with raw frame data.
+const SCREEN_MAX_WIDTH = 1920;
+const SCREEN_MAX_HEIGHT = 1080;
+const SCREEN_FPS = 30;
 
 // Backpressure: max bytes buffered in ffplay stdin before dropping frames.
 // ~5 frames at 720p ≈ 7MB — generous enough to absorb event loop stalls.
@@ -102,12 +109,26 @@ interface PeerVideoPlayback {
   windowClosed: boolean;
 }
 
+/** Compute output dimensions to fit within max bounds, preserving aspect ratio. */
+function fitDimensions(srcW: number, srcH: number, maxW: number, maxH: number): { width: number; height: number } {
+  const scale = Math.min(maxW / srcW, maxH / srcH, 1); // don't upscale
+  let width = Math.round(srcW * scale);
+  let height = Math.round(srcH * scale);
+  // Ensure even dimensions (required for I420)
+  width &= ~1;
+  height &= ~1;
+  return { width: Math.max(width, 2), height: Math.max(height, 2) };
+}
+
 export class VideoManager {
   private peers = new Map<string, PeerVideoPlayback>();
   private captureProcess: ChildProcess | null = null;
   private videoSource: any = null;
   private _isVideoMuted = true; // starts muted — no camera by default
   private capturing = false;
+  private screenCaptureProcess: ChildProcess | null = null;
+  private _isScreenSharing = false;
+  private screenCapturing = false;
   overlayEnabled = true;
   onDebug?: (msg: string) => void;
   onWindowClosed?: (peerId: string, streamType: 'webcam' | 'screen') => void;
@@ -456,10 +477,168 @@ export class VideoManager {
     return this._isVideoMuted;
   }
 
+  // ─── Screen capture (send) ─────────────────────────────────────────
+
+  get isScreenSharing(): boolean {
+    return this._isScreenSharing;
+  }
+
+  startScreenCapture(screenVideoSource: any, device: ScreenDevice): void {
+    if (this.screenCapturing) return;
+    this.screenCapturing = true;
+    this._isScreenSharing = true;
+
+    const isMac = platform() === 'darwin';
+
+    // Use a fixed output resolution via scale+pad filter so frame size is always
+    // predictable. macOS Retina displays report logical resolution via system_profiler
+    // but avfoundation captures at physical pixels — so we can't trust device.width/height.
+    // The scale filter handles any input → capped at 2K, and pad ensures exact output size.
+    const outW = SCREEN_MAX_WIDTH;
+    const outH = SCREEN_MAX_HEIGHT;
+    const screenFrameBytes = outW * outH * 1.5;
+    const scaleFilter = [
+      `scale=${outW}:${outH}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
+      `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2`,
+    ].join(',');
+
+    const args = isMac
+      ? [
+          '-f',
+          'avfoundation',
+          '-capture_cursor',
+          '1',
+          '-framerate',
+          String(SCREEN_FPS),
+          '-i',
+          `${device.id}:none`,
+          '-vf',
+          scaleFilter,
+          '-r',
+          String(SCREEN_FPS),
+          '-f',
+          'rawvideo',
+          '-pix_fmt',
+          'yuv420p',
+          '-loglevel',
+          'warning',
+          'pipe:1',
+        ]
+      : [
+          '-f',
+          'x11grab',
+          '-framerate',
+          String(SCREEN_FPS),
+          '-video_size',
+          `${device.width ?? 1920}x${device.height ?? 1080}`,
+          '-i',
+          device.id,
+          '-vf',
+          scaleFilter,
+          '-r',
+          String(SCREEN_FPS),
+          '-f',
+          'rawvideo',
+          '-pix_fmt',
+          'yuv420p',
+          '-loglevel',
+          'warning',
+          'pipe:1',
+        ];
+
+    this.onDebug?.(`Screen ffmpeg args: ffmpeg ${args.join(' ')}`);
+    this.onDebug?.(`Screen expected frame size: ${screenFrameBytes} bytes (${outW}x${outH} I420)`);
+
+    this.screenCaptureProcess = spawn('ffmpeg', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let buffer = Buffer.alloc(0);
+    let screenFrameData: Uint8ClampedArray | null = null;
+    let screenFrameCount = 0;
+    let lastScreenLog = Date.now();
+    let totalBytesReceived = 0;
+    const MAX_BUFFER_FRAMES = 4;
+
+    this.screenCaptureProcess.stdout?.on('data', (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      totalBytesReceived += chunk.length;
+
+      // Log first data and periodic stats
+      if (screenFrameCount === 0 && buffer.length > 0) {
+        this.onDebug?.(`Screen ffmpeg first data: ${chunk.length} bytes, buffer: ${buffer.length}/${screenFrameBytes}`);
+      }
+
+      const bufferedFrames = Math.floor(buffer.length / screenFrameBytes);
+      if (bufferedFrames > MAX_BUFFER_FRAMES) {
+        buffer = buffer.subarray((bufferedFrames - 1) * screenFrameBytes);
+        this.onDebug?.(`Screen buffer overflow, dropped ${bufferedFrames - 1} frames`);
+      }
+
+      while (buffer.length >= screenFrameBytes) {
+        const frameBuffer = buffer.subarray(0, screenFrameBytes);
+        buffer = buffer.subarray(screenFrameBytes);
+
+        // Reuse a single frame buffer to avoid ~93MB/s of GC pressure
+        if (!screenFrameData) screenFrameData = new Uint8ClampedArray(screenFrameBytes);
+        frameBuffer.copy(Buffer.from(screenFrameData.buffer));
+        screenVideoSource.onFrame({
+          width: outW,
+          height: outH,
+          data: screenFrameData,
+        });
+        screenFrameCount++;
+      }
+
+      // Log stats every 5 seconds
+      const now = Date.now();
+      if (now - lastScreenLog > 5000) {
+        this.onDebug?.(
+          `Screen capture: ${screenFrameCount} frames sent, ${Math.round(totalBytesReceived / 1024 / 1024)}MB received from ffmpeg, buffer residual: ${buffer.length} bytes`,
+        );
+        lastScreenLog = now;
+      }
+    });
+
+    let stderrBuf = '';
+    this.screenCaptureProcess.stderr?.on('data', (chunk: Buffer) => {
+      stderrBuf += chunk.toString();
+      const lines = stderrBuf.split('\n');
+      stderrBuf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (line.trim()) this.onDebug?.(`ffmpeg screen: ${line.trim()}`);
+      }
+    });
+
+    this.screenCaptureProcess.on('error', () => {
+      this.screenCapturing = false;
+      this._isScreenSharing = false;
+      this.onDebug?.('Screen capture failed to start');
+    });
+
+    this.screenCaptureProcess.on('close', () => {
+      this.screenCapturing = false;
+      this._isScreenSharing = false;
+      this.onDebug?.('Screen capture stopped');
+    });
+
+    this.onDebug?.(`Screen capture started (${outW}x${outH}@${SCREEN_FPS}fps from ${device.name})`);
+  }
+
+  stopScreenCapture(): void {
+    if (this.screenCaptureProcess) {
+      this.screenCaptureProcess.kill();
+      this.screenCaptureProcess = null;
+    }
+    this.screenCapturing = false;
+    this._isScreenSharing = false;
+  }
+
   // ─── Cleanup ───────────────────────────────────────────────────────
 
   shutdown(): void {
     this.stopCapture();
+    this.stopScreenCapture();
     for (const [, peer] of this.peers) {
       this.cleanupPeer(peer);
     }

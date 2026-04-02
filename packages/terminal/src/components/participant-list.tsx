@@ -34,10 +34,14 @@ interface ParticipantListProps {
   myId: string | null;
   username: string;
   isMuted: boolean;
+  isVideoMuted: boolean;
+  videoEnabled: boolean;
+  isScreenSharing: boolean;
   remoteMuteStates: Record<string, boolean>;
   remoteVideoMuteStates: Record<string, boolean>;
   remoteScreenShareStates: Record<string, boolean>;
   peerVideoOpen: Record<string, boolean>;
+  peerScreenOpen: Record<string, boolean>;
   speakingStates: Record<string, boolean>;
   audioLevels: Record<string, number>;
   peerVolumes: Record<string, number>;
@@ -49,10 +53,14 @@ export function ParticipantList({
   participants,
   username,
   isMuted,
+  isVideoMuted,
+  videoEnabled,
+  isScreenSharing,
   remoteMuteStates,
   remoteVideoMuteStates,
   remoteScreenShareStates,
   peerVideoOpen,
+  peerScreenOpen,
   speakingStates,
   audioLevels,
   peerVolumes,
@@ -69,6 +77,8 @@ export function ParticipantList({
           <Text color={localSpeaking ? 'green' : undefined}>{localSpeaking ? '● ' : '○ '}</Text>
           <Text>{username} (you)</Text>
           {isMuted && <Text color="yellow"> [muted]</Text>}
+          {videoEnabled && !isVideoMuted && <Text color="magenta"> [cam]</Text>}
+          {isScreenSharing && <Text color="red"> [sharing]</Text>}
         </Text>
         <Box>
           <Text dimColor>48kHz stereo{connectionStats ? ` ↑${connectionStats.sendBitrateKbps}k` : ''} </Text>
@@ -94,6 +104,7 @@ export function ParticipantList({
               {remoteVideoMuteStates[p.id] === false && <Text color="magenta"> [cam]</Text>}
               {peerVideoOpen[p.id] && <Text color="green"> [watching]</Text>}
               {remoteScreenShareStates[p.id] && <Text color="cyan"> [scr]</Text>}
+              {peerScreenOpen[p.id] && <Text color="green"> [viewing scr]</Text>}
             </Text>
             <Box>
               <Text>

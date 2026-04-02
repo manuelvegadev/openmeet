@@ -3,8 +3,8 @@ import SelectInput from 'ink-select-input';
 import { useEffect, useRef, useState } from 'react';
 import { useRoom } from '../hooks/use-room.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
-import type { AudioDevice, DeviceEnvs } from '../lib/devices.js';
-import { getDeviceEnv, listAudioDevices } from '../lib/devices.js';
+import type { AudioDevice, DeviceEnvs, ScreenDevice } from '../lib/devices.js';
+import { getDeviceEnv, listAudioDevices, listScreenDevices } from '../lib/devices.js';
 import { saveSettings } from '../lib/settings.js';
 import { ChatInput } from './chat-input.js';
 import { ChatLog } from './chat-log.js';
@@ -64,6 +64,9 @@ export function RoomView({
   const [selectedOutput, setSelectedOutput] = useState<AudioDevice | undefined>();
   const [micLevel, setMicLevel] = useState(0);
   const [selectedPeerIdx, setSelectedPeerIdx] = useState(0);
+  const [screenPickerOpen, setScreenPickerOpen] = useState(false);
+  const [screenDeviceList, setScreenDeviceList] = useState<ScreenDevice[]>([]);
+  const [lastScreenDevice, setLastScreenDevice] = useState<ScreenDevice | null>(null);
   const testerRef = useRef<MicTester | null>(null);
   const smoothedRef = useRef(0);
 
@@ -120,6 +123,14 @@ export function RoomView({
   };
 
   useInput((input, key) => {
+    // Screen picker open — only Escape to cancel
+    if (screenPickerOpen) {
+      if (key.escape) {
+        setScreenPickerOpen(false);
+      }
+      return;
+    }
+
     // Device picker open — handle its keybindings
     if (deviceStep && deviceStep !== 'loading') {
       if (deviceStep === 'test') {
@@ -167,10 +178,38 @@ export function RoomView({
       if (input === 'o') {
         room.toggleOverlay();
       }
+      if (input === 's') {
+        if (room.isScreenSharing) {
+          room.stopScreenSharing();
+          setLastScreenDevice(null);
+        } else if (lastScreenDevice) {
+          room.startScreenSharing(lastScreenDevice);
+        } else {
+          // Open screen picker
+          const screens = listScreenDevices();
+          if (screens.length === 1) {
+            // Only one screen — start sharing immediately
+            setLastScreenDevice(screens[0]);
+            room.startScreenSharing(screens[0]);
+          } else if (screens.length > 1) {
+            setScreenDeviceList(screens);
+            setScreenPickerOpen(true);
+          }
+        }
+      }
       if (input === 'w') {
         const peerId = room.participants[selectedPeerIdx]?.id;
         if (peerId) {
-          room.togglePeerVideo(peerId);
+          // Only open if peer has camera on; always allow closing
+          if (room.peerVideoOpen[peerId] || room.remoteVideoMuteStates[peerId] === false) {
+            room.togglePeerVideo(peerId);
+          }
+        }
+      }
+      if (input === 'e') {
+        const peerId = room.participants[selectedPeerIdx]?.id;
+        if (peerId && room.remoteScreenShareStates[peerId]) {
+          room.togglePeerScreen(peerId);
         }
       }
       if (input === 'g') {
@@ -198,6 +237,38 @@ export function RoomView({
       }
     }
   });
+
+  // Screen picker overlay
+  if (screenPickerOpen && screenDeviceList.length > 0) {
+    const screenItems = screenDeviceList.map((d) => ({
+      label: `${d.name}${d.width && d.height ? ` (${d.width}x${d.height})` : ''}`,
+      value: d.id,
+    }));
+    return (
+      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
+        <Text bold color="blue">
+          Screen Share
+        </Text>
+        <Box height={1} overflow="hidden">
+          <Text dimColor>{'─'.repeat(200)}</Text>
+        </Box>
+        <Text bold>Select screen to share:</Text>
+        <SelectInput
+          items={screenItems}
+          onSelect={(item) => {
+            const device = screenDeviceList.find((d) => d.id === item.value);
+            if (device) {
+              setLastScreenDevice(device);
+              setScreenPickerOpen(false);
+              room.startScreenSharing(device);
+            }
+          }}
+        />
+        <Text />
+        <Text dimColor>[Esc] cancel</Text>
+      </Box>
+    );
+  }
 
   // Device picker overlay
   if (deviceStep && deviceStep !== 'loading') {
@@ -353,10 +424,14 @@ export function RoomView({
         myId={room.myId}
         username={username}
         isMuted={room.isMuted}
+        isVideoMuted={room.isVideoMuted}
+        videoEnabled={room.videoEnabled}
+        isScreenSharing={room.isScreenSharing}
         remoteMuteStates={room.remoteMuteStates}
         remoteVideoMuteStates={room.remoteVideoMuteStates}
         remoteScreenShareStates={room.remoteScreenShareStates}
         peerVideoOpen={room.peerVideoOpen}
+        peerScreenOpen={room.peerScreenOpen}
         speakingStates={room.speakingStates}
         audioLevels={room.audioLevels}
         peerVolumes={room.peerVolumes}
@@ -400,8 +475,7 @@ export function RoomView({
         isMuted={room.isMuted}
         isVideoMuted={room.isVideoMuted}
         videoEnabled={room.videoEnabled}
-        overlayEnabled={room.overlayEnabled}
-        connected={room.connected}
+        isScreenSharing={room.isScreenSharing}
         debugMode={room.debugMode}
       />
 

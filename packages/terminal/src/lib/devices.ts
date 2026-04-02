@@ -12,6 +12,13 @@ export interface VideoDevice {
   name: string;
 }
 
+export interface ScreenDevice {
+  id: string; // macOS: avfoundation index; Linux: X11 display string (e.g. ":0.0+0,0")
+  name: string;
+  width?: number;
+  height?: number;
+}
+
 export async function listAudioDevices(): Promise<{ inputs: AudioDevice[]; outputs: AudioDevice[] }> {
   const os = platform();
 
@@ -119,11 +126,13 @@ export function getDeviceEnv(input?: AudioDevice, output?: AudioDevice): DeviceE
   return { recExtra, playExtra, recDeviceName, playDeviceName };
 }
 
+// ─── Video devices ───────────────────────────────────────────────────
+
 export function listVideoDevices(): VideoDevice[] {
   const os = platform();
 
   if (os === 'darwin') {
-    return listMacOSVideoDevices();
+    return parseMacOSAvfoundation().cameras;
   }
   if (os === 'linux') {
     return listLinuxVideoDevices();
@@ -132,10 +141,37 @@ export function listVideoDevices(): VideoDevice[] {
   return [];
 }
 
-function listMacOSVideoDevices(): VideoDevice[] {
-  const devices: VideoDevice[] = [];
+// ─── Screen devices ──────────────────────────────────────────────────
+
+export function listScreenDevices(): ScreenDevice[] {
+  const os = platform();
+
+  if (os === 'darwin') {
+    const screens = parseMacOSAvfoundation().screens;
+    // Enrich with display resolutions from system_profiler
+    const resolutions = getMacOSScreenResolutions();
+    for (let i = 0; i < screens.length; i++) {
+      if (i < resolutions.length) {
+        screens[i].width = resolutions[i].width;
+        screens[i].height = resolutions[i].height;
+      }
+    }
+    return screens;
+  }
+  if (os === 'linux') {
+    return listLinuxScreenDevices();
+  }
+
+  return [];
+}
+
+// ─── macOS avfoundation (shared parser for cameras + screens) ────────
+
+function parseMacOSAvfoundation(): { cameras: VideoDevice[]; screens: ScreenDevice[] } {
+  const cameras: VideoDevice[] = [];
+  const screens: ScreenDevice[] = [];
+
   try {
-    // ffmpeg outputs device list to stderr and exits non-zero — use spawnSync to avoid throw
     const result = spawnSync('ffmpeg', ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''], {
       encoding: 'utf-8',
       timeout: 5000,
@@ -154,15 +190,46 @@ function listMacOSVideoDevices(): VideoDevice[] {
       if (inVideoSection) {
         const match = line.match(/\[(\d+)] (.+)/);
         if (match) {
-          devices.push({ id: match[1], name: match[2] });
+          const id = match[1];
+          const name = match[2];
+          if (/capture screen/i.test(name)) {
+            screens.push({ id, name });
+          } else {
+            cameras.push({ id, name });
+          }
         }
       }
     }
   } catch {
     // ffmpeg not available
   }
-  return devices;
+
+  return { cameras, screens };
 }
+
+function getMacOSScreenResolutions(): { width: number; height: number }[] {
+  const resolutions: { width: number; height: number }[] = [];
+  try {
+    const json = execSync('system_profiler SPDisplaysDataType -json', { encoding: 'utf-8', timeout: 5000 });
+    const data = JSON.parse(json);
+    for (const gpu of data.SPDisplaysDataType ?? []) {
+      for (const display of gpu.spdisplays_ndrvs ?? []) {
+        const res = display._spdisplays_resolution;
+        if (res) {
+          const match = res.match(/(\d+)\s*x\s*(\d+)/);
+          if (match) {
+            resolutions.push({ width: Number.parseInt(match[1], 10), height: Number.parseInt(match[2], 10) });
+          }
+        }
+      }
+    }
+  } catch {
+    // system_profiler not available
+  }
+  return resolutions;
+}
+
+// ─── Linux video/screen devices ──────────────────────────────────────
 
 function listLinuxVideoDevices(): VideoDevice[] {
   const devices: VideoDevice[] = [];
@@ -178,4 +245,30 @@ function listLinuxVideoDevices(): VideoDevice[] {
     // No video devices
   }
   return devices;
+}
+
+function listLinuxScreenDevices(): ScreenDevice[] {
+  const screens: ScreenDevice[] = [];
+  try {
+    const output = execSync('xrandr --query', { encoding: 'utf-8', timeout: 5000 });
+    for (const line of output.split('\n')) {
+      // Match lines like: "HDMI-1 connected 1920x1080+0+0"
+      const match = line.match(/^(\S+)\s+connected\s+(?:primary\s+)?(\d+)x(\d+)\+(\d+)\+(\d+)/);
+      if (match) {
+        const [, name, w, h, offX, offY] = match;
+        screens.push({
+          id: `:0.0+${offX},${offY}`,
+          name: `${name} (${w}x${h})`,
+          width: Number.parseInt(w, 10),
+          height: Number.parseInt(h, 10),
+        });
+      }
+    }
+  } catch {
+    // xrandr not available
+  }
+  if (screens.length === 0) {
+    screens.push({ id: ':0.0', name: 'Default screen', width: 1920, height: 1080 });
+  }
+  return screens;
 }

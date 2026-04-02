@@ -19,12 +19,14 @@ export class PeerConnectionManager {
   private connections = new Map<string, any>();
   private audioTrack: any;
   private videoTrack: any;
+  private screenTrack: any = null;
   private sendSignal: (message: WSMessage) => void;
   private myId: string;
   private onRemoteAudioTrack: (peerId: string, track: any) => void;
   private onRemoteVideoTrack: (peerId: string, track: any, streamType: 'webcam' | 'screen') => void;
   private onPeerDisconnected: (peerId: string) => void;
   private makingOffer = new Set<string>();
+  private pendingRenegotiation = new Set<string>();
   private retryCount = new Map<string, number>();
   private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private static MAX_RETRIES = 3;
@@ -34,6 +36,7 @@ export class PeerConnectionManager {
     myId: string;
     audioTrack: any;
     videoTrack?: any;
+    screenTrack?: any;
     sendSignal: (msg: WSMessage) => void;
     onRemoteAudioTrack: (peerId: string, track: any) => void;
     onRemoteVideoTrack?: (peerId: string, track: any, streamType: 'webcam' | 'screen') => void;
@@ -43,6 +46,7 @@ export class PeerConnectionManager {
     this.myId = options.myId;
     this.audioTrack = options.audioTrack;
     this.videoTrack = options.videoTrack ?? null;
+    this.screenTrack = options.screenTrack ?? null;
     this.sendSignal = options.sendSignal;
     this.onRemoteAudioTrack = options.onRemoteAudioTrack;
     this.onRemoteVideoTrack = options.onRemoteVideoTrack ?? (() => {});
@@ -129,10 +133,13 @@ export class PeerConnectionManager {
       pc.getTransceivers()[1].sender.replaceTrack(this.videoTrack);
     }
 
-    // Transceiver 2: Screen share video — recvonly (terminal never shares screen)
+    // Transceiver 2: Screen share video — sendrecv when sharing, recvonly otherwise
     pc.addTransceiver('video', {
-      direction: 'recvonly',
+      direction: this.screenTrack ? 'sendrecv' : 'recvonly',
     });
+    if (this.screenTrack) {
+      pc.getTransceivers()[2].sender.replaceTrack(this.screenTrack);
+    }
 
     return pc;
   }
@@ -229,7 +236,11 @@ export class PeerConnectionManager {
         transceivers[1].direction = 'sendrecv';
       }
 
-      // Screen video (index 2): always recvonly for terminal (no change needed)
+      // Screen video (index 2): sendrecv if we have a screen track, recvonly otherwise
+      if (transceivers.length > 2 && this.screenTrack) {
+        transceivers[2].sender.replaceTrack(this.screenTrack);
+        transceivers[2].direction = 'sendrecv';
+      }
 
       const answer = await pc.createAnswer();
       const modifiedSdp = boostOpusQuality(answer.sdp ?? '');
@@ -262,7 +273,10 @@ export class PeerConnectionManager {
     if (!pc) return;
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-      this.onDebug?.(`RTC answer applied for ${peerId.slice(0, 6)}`);
+      // Log transceiver states after answer is applied
+      const transceivers = pc.getTransceivers();
+      const dirs = transceivers.map((t: any, i: number) => `t${i}:${t.direction}/${t.currentDirection ?? '?'}`);
+      this.onDebug?.(`RTC answer applied for ${peerId.slice(0, 6)} [${dirs.join(', ')}]`);
     } catch (err) {
       this.onDebug?.(`RTC handleAnswer from ${peerId.slice(0, 6)} failed: ${err}`);
     }
@@ -290,6 +304,80 @@ export class PeerConnectionManager {
           // Connection may have closed
         }
       }
+    }
+  }
+
+  /** Set/clear the screen share track on transceiver 2. Triggers renegotiation on direction change. */
+  setScreenTrack(track: any | null): void {
+    this.screenTrack = track;
+    for (const [peerId, pc] of this.connections) {
+      const transceivers = pc.getTransceivers();
+      if (transceivers.length > 2) {
+        try {
+          transceivers[2].sender.replaceTrack(track);
+          const wantedDir = track ? 'sendrecv' : 'recvonly';
+          this.onDebug?.(
+            `RTC screen transceiver for ${peerId.slice(0, 6)}: ${transceivers[2].direction} → ${wantedDir}`,
+          );
+          if (transceivers[2].direction !== wantedDir) {
+            transceivers[2].direction = wantedDir;
+            this.renegotiate(peerId, pc);
+          }
+        } catch (err) {
+          this.onDebug?.(`RTC setScreenTrack for ${peerId.slice(0, 6)} failed: ${err}`);
+        }
+      }
+    }
+  }
+
+  private async renegotiate(peerId: string, pc: any): Promise<void> {
+    if (this.makingOffer.has(peerId)) {
+      this.pendingRenegotiation.add(peerId);
+      return;
+    }
+    this.makingOffer.add(peerId);
+    try {
+      const offer = await pc.createOffer();
+      let sdp = boostOpusQuality(offer.sdp ?? '');
+
+      // Ensure screen m-line (3rd m= section, 2nd video) reflects sendrecv when sharing.
+      // @roamhq/wrtc may not reflect direction changes in the generated offer SDP.
+      if (this.screenTrack) {
+        const sections = sdp.split(/(?=m=)/);
+        let videoCount = 0;
+        for (let i = 0; i < sections.length; i++) {
+          if (sections[i].startsWith('m=video')) {
+            videoCount++;
+            if (videoCount === 2 && !sections[i].includes('a=sendrecv')) {
+              sections[i] = sections[i].replace(/a=recvonly|a=inactive/, 'a=sendrecv');
+              this.onDebug?.(`RTC munged screen m-line to sendrecv for ${peerId.slice(0, 6)}`);
+            }
+          }
+        }
+        sdp = sections.join('');
+      }
+
+      await pc.setLocalDescription({ ...offer, sdp });
+      this.onDebug?.(`RTC renegotiation offer for ${peerId.slice(0, 6)}`);
+      this.sendSignal({
+        type: 'offer',
+        fromId: this.myId,
+        toId: peerId,
+        sdp: PeerConnectionManager.extractSdp(pc.localDescription),
+      });
+    } catch (err) {
+      this.onDebug?.(`RTC renegotiation with ${peerId.slice(0, 6)} failed: ${err}`);
+    } finally {
+      this.makingOffer.delete(peerId);
+      this.flushPendingRenegotiation(peerId);
+    }
+  }
+
+  private flushPendingRenegotiation(peerId: string): void {
+    if (this.pendingRenegotiation.has(peerId)) {
+      this.pendingRenegotiation.delete(peerId);
+      const pc = this.connections.get(peerId);
+      if (pc) this.renegotiate(peerId, pc);
     }
   }
 

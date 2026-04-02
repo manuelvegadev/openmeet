@@ -113,6 +113,20 @@ export class PeerConnectionManager {
     return directionChanged;
   }
 
+  /**
+   * Proactively attach the screen receiver track for a peer. Called when
+   * screen-share-state arrives — ontrack/onunmute may not fire during
+   * renegotiation for existing transceivers.
+   */
+  activateScreenTrack(peerId: string): void {
+    const pc = this.connections.get(peerId);
+    if (!pc) return;
+    const screenTrack = pc.getTransceivers()[SCREEN_INDEX]?.receiver?.track;
+    if (screenTrack) {
+      this.handleScreenTrack(peerId, screenTrack);
+    }
+  }
+
   /** Set up onunmute listener on the screen receiver track. */
   private setupScreenTrackListener(peerId: string, pc: RTCPeerConnection): void {
     const screenReceiverTrack = pc.getTransceivers()[SCREEN_INDEX]?.receiver?.track;

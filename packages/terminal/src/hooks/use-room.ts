@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { ChatMessage, Participant, WSMessage } from '@openmeet/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AudioManager } from '../lib/audio.js';
@@ -64,14 +67,19 @@ interface UseRoomReturn {
   isVideoMuted: boolean;
   videoEnabled: boolean;
   overlayEnabled: boolean;
+  isScreenSharing: boolean;
   error: string | null;
   debugMode: boolean;
   sendMessage: (content: string) => void;
   toggleMute: () => void;
   toggleVideo: () => void;
   toggleOverlay: () => void;
+  startScreenSharing: (device: import('../lib/devices.js').ScreenDevice) => void;
+  stopScreenSharing: () => void;
   peerVideoOpen: Record<string, boolean>;
+  peerScreenOpen: Record<string, boolean>;
   togglePeerVideo: (peerId: string) => void;
+  togglePeerScreen: (peerId: string) => void;
   setPeerVolume: (peerId: string, volume: number) => void;
   updateDevices: (envs: DeviceEnvs) => void;
   toggleDebug: () => void;
@@ -90,6 +98,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   const [remoteVideoMuteStates, setRemoteVideoMuteStates] = useState<Record<string, boolean>>({});
   const [remoteScreenShareStates, setRemoteScreenShareStates] = useState<Record<string, boolean>>({});
   const [peerVideoOpen, setPeerVideoOpen] = useState<Record<string, boolean>>({});
+  const [peerScreenOpen, setPeerScreenOpen] = useState<Record<string, boolean>>({});
   const [speakingStates, setSpeakingStates] = useState<Record<string, boolean>>({});
   const [audioLevels, setAudioLevels] = useState<Record<string, number>>({});
   const [peerVolumes, setPeerVolumes] = useState<Record<string, number>>({});
@@ -99,6 +108,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoMuted, setIsVideoMuted] = useState(true);
   const [overlayEnabled, setOverlayEnabled] = useState(() => loadSettings().videoOverlay);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [debugMode, setDebugMode] = useState(debug);
 
@@ -108,9 +118,20 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     setRoomEvents((prev) => [...prev, { timestamp: Date.now(), message, type }]);
   }, []);
 
+  const logFileRef = useRef<string | null>(null);
+
   const addDebugEvent = useCallback((message: string) => {
     if (debugModeRef.current) {
       setRoomEvents((prev) => [...prev, { timestamp: Date.now(), message, type: 'debug' }]);
+    }
+    // Always write to log file when debug is on
+    if (debugModeRef.current && logFileRef.current) {
+      try {
+        const ts = new Date().toISOString();
+        appendFileSync(logFileRef.current, `[${ts}] ${message}\n`);
+      } catch {
+        // Non-fatal
+      }
     }
   }, []);
 
@@ -151,6 +172,8 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   const remoteScreenRef = useRef<Record<string, boolean>>({});
   const screenTracksRef = useRef(new Map<string, any>());
   const webcamTracksRef = useRef(new Map<string, any>());
+  const screenSourceRef = useRef<{ source: any; track: any } | null>(null);
+  const isScreenSharingRef = useRef(false);
 
   const send = useCallback((msg: WSMessage) => {
     wsRef.current?.send(msg);
@@ -213,6 +236,41 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     }
   }, []);
 
+  const startScreenSharing = useCallback(
+    (device: import('../lib/devices.js').ScreenDevice) => {
+      const vm = videoManagerRef.current;
+      const pm = peerManagerRef.current;
+      if (!vm || !pm) return;
+
+      if (!screenSourceRef.current) {
+        screenSourceRef.current = createVideoSource();
+      }
+
+      vm.startScreenCapture(screenSourceRef.current.source, device);
+      pm.setScreenTrack(screenSourceRef.current.track);
+      isScreenSharingRef.current = true;
+      setIsScreenSharing(true);
+
+      if (myIdRef.current && joinedRef.current) {
+        send({ type: 'screen-share-state', fromId: myIdRef.current, isScreenSharing: true });
+      }
+    },
+    [send],
+  );
+
+  const stopScreenSharing = useCallback(() => {
+    const vm = videoManagerRef.current;
+    const pm = peerManagerRef.current;
+    vm?.stopScreenCapture();
+    pm?.setScreenTrack(null);
+    isScreenSharingRef.current = false;
+    setIsScreenSharing(false);
+
+    if (myIdRef.current && joinedRef.current) {
+      send({ type: 'screen-share-state', fromId: myIdRef.current, isScreenSharing: false });
+    }
+  }, [send]);
+
   const togglePeerVideo = useCallback((peerId: string) => {
     const vm = videoManagerRef.current;
     if (!vm) return;
@@ -234,6 +292,25 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     });
   }, []);
 
+  const togglePeerScreen = useCallback((peerId: string) => {
+    const vm = videoManagerRef.current;
+    if (!vm) return;
+
+    setPeerScreenOpen((prev) => {
+      const isOpen = prev[peerId];
+      if (isOpen) {
+        vm.removeRemotePeer(peerId, 'screen');
+        return { ...prev, [peerId]: false };
+      }
+      const track = screenTracksRef.current.get(peerId);
+      if (track) {
+        const name = participantsRef.current.find((p) => p.id === peerId)?.username ?? peerId.slice(0, 6);
+        vm.addRemotePeer(peerId, track, 'screen', name);
+      }
+      return { ...prev, [peerId]: true };
+    });
+  }, []);
+
   const setPeerVolume = useCallback((peerId: string, volume: number) => {
     const clamped = Math.max(0, Math.min(1, volume));
     setPeerVolumes((prev) => ({ ...prev, [peerId]: clamped }));
@@ -245,6 +322,8 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   }, []);
 
   const leave = useCallback(() => {
+    videoManagerRef.current?.stopScreenCapture();
+    peerManagerRef.current?.setScreenTrack(null);
     videoManagerRef.current?.shutdown();
     audioManagerRef.current?.shutdown();
     peerManagerRef.current?.closeAll();
@@ -253,6 +332,19 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
 
   // Main effect: connect WS, set up WebRTC + audio
   useEffect(() => {
+    // Set up debug log file
+    if (debugModeRef.current) {
+      try {
+        const logDir = join(homedir(), '.config', 'openmeet');
+        mkdirSync(logDir, { recursive: true });
+        const logPath = join(logDir, 'debug.log');
+        logFileRef.current = logPath;
+        appendFileSync(logPath, `\n--- Session started ${new Date().toISOString()} ---\n`);
+      } catch {
+        // Non-fatal
+      }
+    }
+
     const debugFn = debugModeRef.current ? (msg: string) => addDebugEvent(msg) : undefined;
 
     const ws = new WebSocketClient(serverUrl, { onDebug: debugFn });
@@ -398,6 +490,11 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
             delete next[msg.participantId];
             return next;
           });
+          setPeerScreenOpen((prev) => {
+            const next = { ...prev };
+            delete next[msg.participantId];
+            return next;
+          });
           delete remoteScreenRef.current[msg.participantId];
           setRemoteScreenShareStates((prev) => {
             const next = { ...prev };
@@ -443,15 +540,10 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
           }
           remoteScreenRef.current[msg.fromId] = msg.isScreenSharing;
           setRemoteScreenShareStates((prev) => ({ ...prev, [msg.fromId]: msg.isScreenSharing }));
-          if (msg.isScreenSharing) {
-            // Attach stored screen track now that sharing is confirmed
-            const screenTrack = screenTracksRef.current.get(msg.fromId);
-            if (screenTrack && videoManager) {
-              const name = participantsRef.current.find((p) => p.id === msg.fromId)?.username ?? msg.fromId.slice(0, 6);
-              videoManager.addRemotePeer(msg.fromId, screenTrack, 'screen', name);
-            }
-          } else {
+          if (!msg.isScreenSharing) {
+            // Close screen window if it was open
             videoManager?.removeRemotePeer(msg.fromId, 'screen');
+            setPeerScreenOpen((prev) => ({ ...prev, [msg.fromId]: false }));
           }
           break;
         }
@@ -505,7 +597,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
       send({
         type: 'screen-share-state',
         fromId: myId,
-        isScreenSharing: false,
+        isScreenSharing: isScreenSharingRef.current,
       });
     }
   }, [participants.length, myId, joined, send]);
@@ -688,14 +780,19 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     isVideoMuted,
     videoEnabled,
     overlayEnabled,
+    isScreenSharing,
     error,
     debugMode,
     sendMessage,
     toggleMute,
     toggleVideo,
     toggleOverlay,
+    startScreenSharing,
+    stopScreenSharing,
     peerVideoOpen,
+    peerScreenOpen,
     togglePeerVideo,
+    togglePeerScreen,
     setPeerVolume,
     updateDevices,
     toggleDebug,

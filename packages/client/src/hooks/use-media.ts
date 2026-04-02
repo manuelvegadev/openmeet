@@ -139,8 +139,8 @@ export function useMedia() {
   // Start with video only — no audio capture, so macOS won't duck system volume
   const startMedia = useCallback(async () => {
     const videoConstraints: MediaTrackConstraints = {
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
       frameRate: { ideal: 30 },
     };
 

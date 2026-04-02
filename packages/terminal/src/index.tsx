@@ -4,6 +4,7 @@ import { platform } from 'node:os';
 import { parseArgs } from 'node:util';
 import { render } from 'ink';
 import { App } from './app.js';
+import { listScreenDevices } from './lib/devices.js';
 import { getOrCreateEmoji } from './lib/emoji.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { APP_VERSION } from './version.js';
@@ -64,6 +65,7 @@ function checkMicPermission(): 'granted' | 'denied' | 'unknown' {
 }
 
 const { values } = parseArgs({
+  allowPositionals: true,
   options: {
     server: { type: 'string', default: 'wss://openmeet.mvega.pro/ws' },
     room: { type: 'string' },
@@ -73,6 +75,7 @@ const { values } = parseArgs({
     'video-device': { type: 'string' },
     'no-overlay': { type: 'boolean', default: false },
     'test-camera': { type: 'boolean', default: false },
+    'test-screen': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h' },
     debug: { type: 'boolean', default: false },
   },
@@ -91,6 +94,7 @@ Usage: openmeet [options]
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay (name, stream type, resolution)
   --test-camera          Test camera capture (opens ffplay preview, no room join)
+  --test-screen          Test screen capture (lists screens, opens ffplay preview)
   -h, --help             Show help
 `);
   process.exit(0);
@@ -175,6 +179,104 @@ if (values['test-camera']) {
     player.kill();
   });
   // eslint-disable-next-line -- keep process alive while test runs
+  setInterval(() => {}, 60000);
+} else if (values['test-screen']) {
+  const isMac = platform() === 'darwin';
+  const screens = listScreenDevices();
+  if (screens.length === 0) {
+    process.stderr.write('No screen devices found.\n');
+    process.exit(1);
+  }
+  process.stdout.write('Available screens:\n');
+  for (const s of screens) {
+    process.stdout.write(`  [${s.id}] ${s.name}${s.width && s.height ? ` (${s.width}x${s.height})` : ''}\n`);
+  }
+  const screen = screens[0];
+  process.stdout.write(`\nTesting screen capture: ${screen.name}... Press q or Esc in the ffplay window to close.\n`);
+
+  const scaleFilter =
+    'scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1920:1080:(ow-iw)/2:(oh-ih)/2';
+  const captureArgs = isMac
+    ? [
+        '-f',
+        'avfoundation',
+        '-capture_cursor',
+        '1',
+        '-framerate',
+        '30',
+        '-i',
+        `${screen.id}:none`,
+        '-vf',
+        scaleFilter,
+        '-r',
+        '30',
+        '-f',
+        'rawvideo',
+        '-pix_fmt',
+        'yuv420p',
+        '-loglevel',
+        'warning',
+        'pipe:1',
+      ]
+    : [
+        '-f',
+        'x11grab',
+        '-framerate',
+        '30',
+        '-video_size',
+        `${screen.width ?? 1920}x${screen.height ?? 1080}`,
+        '-i',
+        screen.id,
+        '-vf',
+        scaleFilter,
+        '-r',
+        '30',
+        '-f',
+        'rawvideo',
+        '-pix_fmt',
+        'yuv420p',
+        '-loglevel',
+        'warning',
+        'pipe:1',
+      ];
+
+  const capture: ChildProcess = spawn('ffmpeg', captureArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
+  const player: ChildProcess = spawn(
+    'ffplay',
+    [
+      '-f',
+      'rawvideo',
+      '-pixel_format',
+      'yuv420p',
+      '-video_size',
+      '1920x1080',
+      '-framerate',
+      '30',
+      '-window_title',
+      `Screen Test (${screen.name})`,
+      '-i',
+      'pipe:0',
+    ],
+    { stdio: ['pipe', 'ignore', 'ignore'] },
+  );
+
+  capture.stdout?.pipe(player.stdin!);
+  player.on('close', () => {
+    capture.kill();
+    process.exit(0);
+  });
+  capture.on('close', () => {
+    player.kill();
+    process.exit(0);
+  });
+  process.on('SIGINT', () => {
+    capture.kill();
+    player.kill();
+  });
+  process.on('SIGTERM', () => {
+    capture.kill();
+    player.kill();
+  });
   setInterval(() => {}, 60000);
 } else {
   // ─── Normal app flow ──────────────────────────────────────────────────
