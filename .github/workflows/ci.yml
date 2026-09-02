@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Type-check terminal
+        run: pnpm --filter openmeet-terminal exec tsc --noEmit
+
+      # Loads the native addons (wrtc, audify) on this platform. No audio devices on a
+      # runner, so device enumeration is expected to be empty — it must not throw.
+      - name: Smoke-test native modules
+        shell: bash
+        run: |
+          node packages/terminal/dist/index.js --help
+          node -e "
+            const w = require('@roamhq/wrtc');
+            const pc = new w.RTCPeerConnection();
+            pc.close();
+            const a = require('audify');
+            const rt = new a.RtAudio();
+            console.log('wrtc ok; audify api:', rt.getApi(), 'devices:', rt.getDevices().length);
+            process.exit(0);
+          "
