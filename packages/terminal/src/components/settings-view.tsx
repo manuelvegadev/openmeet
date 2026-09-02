@@ -2,6 +2,7 @@ import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import { useEffect, useState } from 'react';
 import { type AudioDevice, listAudioDevices } from '../engine/client.js';
+import { INPUT_CHANNEL_POLICIES } from '../lib/audio/channels.js';
 import { listVideoDevices, type VideoDevice } from '../lib/devices.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
 import { RENDER_PAUSE_POLICIES } from '../lib/window-state.js';
@@ -16,7 +17,7 @@ interface SettingRow {
   key: string;
   label: string;
   value: string;
-  action: 'pick-input' | 'pick-output' | 'pick-camera' | 'toggle-overlay' | 'cycle-pause';
+  action: 'pick-input' | 'pick-output' | 'pick-camera' | 'toggle-overlay' | 'cycle-channels' | 'cycle-pause';
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
@@ -54,6 +55,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     { key: 'output', label: 'Audio Output', value: outputName, action: 'pick-output' },
     { key: 'camera', label: 'Camera', value: cameraName, action: 'pick-camera' },
     { key: 'overlay', label: 'Video Overlay', value: settings.videoOverlay ? 'On' : 'Off', action: 'toggle-overlay' },
+    { key: 'channels', label: 'Mic Channels', value: settings.audioInputChannels, action: 'cycle-channels' },
     {
       key: 'pause',
       label: 'Pause Rendering',
@@ -92,6 +94,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       const row = rows[selectedIdx];
       if (row.action === 'toggle-overlay') {
         update({ videoOverlay: !settings.videoOverlay });
+      } else if (row.action === 'cycle-channels') {
+        update({ audioInputChannels: cycle(INPUT_CHANNEL_POLICIES, settings.audioInputChannels) });
       } else if (row.action === 'cycle-pause') {
         update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) });
       } else if (row.action === 'pick-input') {
