@@ -10,6 +10,7 @@ import { type ConnectionStats, initialRoomState, type RoomEvent, type RoomState 
 import type { AudioDeviceSelection } from '../lib/audio/backend.js';
 import type { ScreenDevice } from '../lib/devices.js';
 import { diagnosticsEnabled, drainRenderStats, formatRenderStats, startLoopDelayMonitor } from '../lib/diagnostics.js';
+import { loadSettings } from '../lib/settings.js';
 
 export type { ConnectionStats, RoomEvent };
 
@@ -73,9 +74,19 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
       }
     });
 
+    const s = loadSettings();
     engine.send({
       type: 'join',
-      options: { serverUrl, roomId, username, deviceSelection, debug, videoEnabled, videoDevice },
+      options: {
+        serverUrl,
+        roomId,
+        username,
+        deviceSelection,
+        input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
+        debug,
+        videoEnabled,
+        videoDevice,
+      },
     });
 
     return () => {

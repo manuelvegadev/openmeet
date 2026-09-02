@@ -142,7 +142,11 @@ export class RoomEngine {
     this.ws = ws;
 
     const { source, track } = createAudioSource();
-    const audioManager = new AudioManager(source, options.deviceSelection, { onDebug: debugFn });
+    const audioManager = new AudioManager(source, options.deviceSelection, {
+      onDebug: debugFn,
+      inputChannels: options.input.channels,
+      inputGainDb: options.input.gainDb,
+    });
     audioManager.setSpeakingCallback((id, speaking) => {
       this.patch({ speakingStates: { ...this.state.speakingStates, [id]: speaking } });
     });

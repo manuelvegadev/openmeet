@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import type { AudioBackendPreference } from './audio/backend.js';
+import type { InputChannelPolicy } from './audio/channels.js';
 
 /** ~/.config/openmeet on macOS/Linux, %APPDATA%\openmeet on Windows. */
 export const CONFIG_DIR =
@@ -22,6 +23,10 @@ export interface AppSettings {
   videoOverlay: boolean;
   /** Audio I/O backend: 'auto' picks the platform default (see lib/platform.ts). */
   audioBackend: AudioBackendPreference;
+  /** How the captured pair becomes the sent stereo frame (see lib/audio/channels.ts). */
+  audioInputChannels: InputChannelPolicy;
+  /** Capture gain in dB applied before sending (0 = as captured). */
+  audioInputGainDb: number;
 }
 
 const DEFAULTS: AppSettings = {
@@ -31,6 +36,8 @@ const DEFAULTS: AppSettings = {
   devicesConfigured: false,
   videoOverlay: false,
   audioBackend: 'auto',
+  audioInputChannels: 'auto',
+  audioInputGainDb: 0,
 };
 
 let cache: AppSettings | null = null;

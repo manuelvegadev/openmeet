@@ -5,6 +5,7 @@
  * cadence is only ever competing with signaling messages and a stats poll every 2 s.
  */
 
+import { InputConditioner } from '../lib/audio/channels.js';
 import { computeRMS } from '../lib/audio/constants.js';
 import {
   type AudioBackend,
@@ -13,7 +14,7 @@ import {
   createAudioBackend,
 } from '../lib/audio/index.js';
 import { ToneGenerator } from '../lib/audio/tone.js';
-import type { EngineCommand, EngineEvent } from './protocol.js';
+import type { EngineCommand, EngineEvent, InputOptions } from './protocol.js';
 import { RoomEngine } from './room-engine.js';
 
 /** Mic-test levels are sent at most this often (the meter itself updates every ~80 ms). */
@@ -77,8 +78,10 @@ export function runEngine(): Promise<never> {
     }
   }
 
-  async function startMicTest(selection: AudioDeviceSelection): Promise<void> {
+  async function startMicTest(selection: AudioDeviceSelection, input: InputOptions): Promise<void> {
     stopMicTest();
+    // Same conditioning as a call, so the meter shows what would be sent.
+    const conditioner = new InputConditioner(input.channels, input.gainDb);
     let peak = 0;
     let lastSent = 0;
     try {
@@ -86,6 +89,7 @@ export function runEngine(): Promise<never> {
       micTest = backend;
       await backend.start(selection, {
         onCapture: (samples) => {
+          conditioner.process(samples);
           // Peak over the reporting window, sent a few times per second instead of 100/s.
           peak = Math.max(peak, computeRMS(samples));
           const now = Date.now();
@@ -121,7 +125,7 @@ export function runEngine(): Promise<never> {
         send({ type: 'devices', requestId: cmd.requestId, ...(await listDevices()) });
         break;
       case 'mic-test-start':
-        await startMicTest(cmd.selection);
+        await startMicTest(cmd.selection, cmd.input);
         break;
       case 'mic-test-stop':
         stopMicTest();

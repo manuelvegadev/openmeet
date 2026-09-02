@@ -6,6 +6,13 @@ import { render } from 'ink';
 import { App } from './app.js';
 import { initEngineClient } from './engine/client.js';
 import { runEngine } from './engine/main.js';
+import {
+  INPUT_CHANNEL_POLICIES,
+  INPUT_GAIN_DB_MAX,
+  INPUT_GAIN_DB_MIN,
+  parseChannelsFlag,
+  parseGainFlag,
+} from './lib/audio/channels.js';
 import { parseBackendFlag, resolveBackendName, setActiveBackendName } from './lib/audio/index.js';
 import { listScreenDevices } from './lib/devices.js';
 import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
@@ -79,6 +86,8 @@ const { values } = parseArgs({
     'output-device': { type: 'string' },
     'no-video': { type: 'boolean', default: false },
     'audio-backend': { type: 'string' },
+    'input-channels': { type: 'string' },
+    'input-gain': { type: 'string' },
     'video-device': { type: 'string' },
     'no-overlay': { type: 'boolean', default: false },
     'test-camera': { type: 'boolean', default: false },
@@ -107,6 +116,8 @@ Usage: openmeet [options]
   --output-device <name> Output device name (skip device picker)
   --no-video             Disable video (audio-only mode)
   --audio-backend <name> Audio I/O backend: rtaudio (native; default on macOS/Windows) or sox (default on Linux)
+  --input-channels <p>   auto | stereo | mono | left | right — how the mic's channel pair is sent (saved)
+  --input-gain <dB>      Capture gain in dB, e.g. 6 or -3 (saved)
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay (name, stream type, resolution)
   --test-camera          Test camera capture (opens ffplay preview, no room join)
@@ -350,9 +361,25 @@ Your terminal app needs microphone permission on macOS:
     process.exit(1);
   }
 
-  // Persist --no-overlay flag to settings if provided
-  if (values['no-overlay']) {
-    saveSettings({ videoOverlay: false });
+  // Persist audio flags to settings (the engine process reads them at join)
+  if (values['no-overlay']) saveSettings({ videoOverlay: false });
+  if (values['input-channels'] !== undefined) {
+    const policy = parseChannelsFlag(values['input-channels']);
+    if (policy === null) {
+      process.stderr.write(`Error: --input-channels must be one of ${INPUT_CHANNEL_POLICIES.join(', ')} (got "${values['input-channels']}")
+`);
+      process.exit(1);
+    }
+    saveSettings({ audioInputChannels: policy });
+  }
+  if (values['input-gain'] !== undefined) {
+    const gainDb = parseGainFlag(values['input-gain']);
+    if (gainDb === null) {
+      process.stderr.write(`Error: --input-gain must be ${INPUT_GAIN_DB_MIN}..${INPUT_GAIN_DB_MAX} dB (got "${values['input-gain']}")
+`);
+      process.exit(1);
+    }
+    saveSettings({ audioInputGainDb: gainDb });
   }
 
   const emoji = getOrCreateEmoji();

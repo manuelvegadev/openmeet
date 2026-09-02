@@ -1,6 +1,7 @@
 import wrtc from '@roamhq/wrtc';
 import type { AudioBackend, AudioDeviceSelection } from './backend.js';
 import { createAudioBackend } from './backend.js';
+import { type InputChannelPolicy, InputConditioner } from './channels.js';
 import { CHANNELS, computeRMS, FRAME_SAMPLES, FRAME_SIZE, SAMPLE_RATE, SPEAKING_RMS_THRESHOLD } from './constants.js';
 import { FrameMixer, PeerPlayoutBuffer } from './mixer.js';
 import { PcmDump } from './pcm-dump.js';
@@ -45,6 +46,7 @@ interface RemotePeer {
 export class AudioManager {
   private readonly audioSource: AudioSource;
   private selection: AudioDeviceSelection;
+  private readonly conditioner: InputConditioner;
   private backend: AudioBackend | null = null;
   private readonly peers = new Map<string, RemotePeer>();
   private readonly mixer = new FrameMixer();
@@ -73,11 +75,13 @@ export class AudioManager {
   constructor(
     audioSource: AudioSource,
     selection: AudioDeviceSelection,
-    options?: { onDebug?: (msg: string) => void },
+    options?: { onDebug?: (msg: string) => void; inputChannels?: InputChannelPolicy; inputGainDb?: number },
   ) {
     this.audioSource = audioSource;
     this.selection = selection;
     this.onDebug = options?.onDebug;
+    this.conditioner = new InputConditioner(options?.inputChannels ?? 'auto', options?.inputGainDb ?? 0);
+    this.conditioner.onDecision = (policy, detail) => this.onDebug?.(`Input channels: ${policy} (${detail})`);
     this._ready = new Promise<void>((resolve) => {
       this._readyResolve = resolve;
     });
@@ -127,6 +131,8 @@ export class AudioManager {
   private async openBackend(): Promise<void> {
     if (this.opening) return;
     this.opening = true;
+    // A new device (or pair) may be mono-in-L where the previous one was stereo.
+    this.conditioner.reset();
     try {
       const backend = this.backend ?? (await createAudioBackend());
       this.backend = backend;
@@ -197,6 +203,9 @@ export class AudioManager {
 
   private handleCapture(samples: Int16Array): void {
     if (this.testTone) this.testTone.fill(samples);
+    // Channel policy (mono mic in a stereo pair, forced mono/left/right) and input gain,
+    // skipped while muted since the frame is replaced by silence anyway.
+    if (!this._isMuted) this.conditioner.process(samples);
 
     const rms = computeRMS(samples);
     this.updateSpeaking(LOCAL_ID, rms);

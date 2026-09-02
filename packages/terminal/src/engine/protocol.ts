@@ -7,6 +7,7 @@
  */
 import type { ChatMessage, Participant } from '@openmeet/shared';
 import type { AudioDevice, AudioDeviceSelection } from '../lib/audio/backend.js';
+import type { InputChannelPolicy } from '../lib/audio/channels.js';
 import type { ScreenDevice } from '../lib/devices.js';
 
 export interface ConnectionStats {
@@ -78,11 +79,18 @@ export function initialRoomState(): RoomState {
   };
 }
 
+/** Capture conditioning chosen by the user (settings, possibly overridden by CLI flags). */
+export interface InputOptions {
+  channels: InputChannelPolicy;
+  gainDb: number;
+}
+
 export interface JoinOptions {
   serverUrl: string;
   roomId: string;
   username: string;
   deviceSelection: AudioDeviceSelection;
+  input: InputOptions;
   debug: boolean;
   videoEnabled: boolean;
   videoDevice?: string;
@@ -92,7 +100,7 @@ export interface JoinOptions {
 
 export type EngineCommand =
   | { type: 'list-devices'; requestId: number }
-  | { type: 'mic-test-start'; selection: AudioDeviceSelection }
+  | { type: 'mic-test-start'; selection: AudioDeviceSelection; input: InputOptions }
   | { type: 'mic-test-stop' }
   | { type: 'play-test-tone'; selection: AudioDeviceSelection }
   | { type: 'join'; options: JoinOptions }

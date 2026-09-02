@@ -4,6 +4,7 @@
  */
 import { getEngine } from '../engine/client.js';
 import type { AudioDeviceSelection } from './audio/backend.js';
+import { loadSettings } from './settings.js';
 
 export type LevelCallback = (rms: number) => void;
 
@@ -21,7 +22,12 @@ export class MicTester {
     this.unsubscribe = engine.subscribe((event) => {
       if (event.type === 'mic-level') this.onLevel?.(event.rms);
     });
-    engine.send({ type: 'mic-test-start', selection });
+    const s = loadSettings();
+    engine.send({
+      type: 'mic-test-start',
+      selection,
+      input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
+    });
   }
 
   stop(): void {
