@@ -6,8 +6,6 @@
  * echo cancellation plug in without touching the backend or the WebRTC wiring.
  *
  * Contract for implementations:
- * - Frames are 48 kHz. When a device captures natively at another rate the manager
- *   bypasses the chain (a resampling step would be needed first).
  * - `process()` is called on the audio cadence (every 10 ms) on the main thread. Keep it
  *   well under 1 ms; allocate buffers up front, never per frame.
  * - Return the frame to forward. Returning `samples` (mutated in place) is fine; returning

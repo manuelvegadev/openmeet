@@ -6,6 +6,11 @@ export interface AudioDevice {
   name: string;
   type: 'input' | 'output';
   isDefault?: boolean;
+  /**
+   * First channel of the pair on multichannel interfaces (0 unless the entry is "[ch 3-4]"
+   * etc.). Only the RtAudio backend can address channel pairs; sox always opens the first.
+   */
+  firstChannel?: number;
 }
 
 export interface AudioDeviceList {
@@ -24,13 +29,11 @@ export type AudioBackendPreference = 'auto' | AudioBackendName;
 
 export interface AudioStreamCallbacks {
   /**
-   * One 10 ms frame of interleaved stereo Int16 PCM (sampleRate / 100 frames × 2), clocked
-   * by the capture device. `sampleRate` is 48 kHz unless the device runs natively at
-   * another rate, in which case frames are delivered at that rate and WebRTC resamples
-   * (its resampler is far better than the driver-level one). The array may be reused by
-   * the backend after the call returns.
+   * One 10 ms frame of interleaved stereo Int16 PCM (480 × 2 samples) at 48 kHz, clocked by
+   * the capture device. Backends resample and upmix from whatever the device delivers. The
+   * array may be reused by the backend after the call returns.
    */
-  onCapture: (samples: Int16Array, sampleRate: number) => void;
+  onCapture: (samples: Int16Array) => void;
   /**
    * Called when the backend needs the next 10 ms output frame. The callee fills `out`
    * (480 × 2 interleaved Int16) — silence if there is nothing to play.

@@ -37,7 +37,6 @@ let maxRms = 0;
 let playbackFrames = 0;
 const gain = Number(process.argv[5] ?? 0.2);
 const tone = new ToneGenerator({ hz: 440, seconds: dumpPath ? seconds + 1 : 0.5, gain });
-let captureRate = 0;
 // OPENMEET_SMOKE_TIMING=1: histogram of intervals between capture / playback callbacks.
 const timing = process.env.OPENMEET_SMOKE_TIMING === '1';
 const inGaps: number[] = [];
@@ -54,14 +53,13 @@ const selection = {
   output: pick(devs.outputs, process.env.OPENMEET_SMOKE_OUTPUT),
 };
 await backend.start(selection, {
-  onCapture: (s, rate) => {
+  onCapture: (s) => {
     frames++;
     if (timing) {
       const now = performance.now();
       if (lastIn) inGaps.push(now - lastIn);
       lastIn = now;
     }
-    captureRate = rate;
     maxRms = Math.max(maxRms, computeRMS(s));
     if (dumpPath) appendFileSync(dumpPath, Buffer.from(s.buffer, s.byteOffset, s.byteLength));
   },
@@ -96,7 +94,7 @@ if (timing) {
   console.log(`[${name}] capture callback intervals: ${hist(inGaps)}`);
   console.log(`[${name}] playback callback intervals: ${hist(outGaps)}`);
 }
-if (dumpPath) console.log(`[${name}] capture dump: ${dumpPath} (s16le, stereo, ${captureRate} Hz)`);
+if (dumpPath) console.log(`[${name}] capture dump: ${dumpPath} (s16le, stereo, 48000 Hz)`);
 console.log(
   `[${name}] ${frames} capture frames in ${ms} ms (expected ~${Math.round(ms / 10)}), ${playbackFrames} playback frames, peak mic RMS ${Math.round(maxRms)}`,
 );

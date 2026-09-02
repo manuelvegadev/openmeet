@@ -5,14 +5,17 @@ import {
   downmixStereoToMono,
   FRAME_SAMPLES,
   FRAME_SIZE,
+  framesPer10ms,
   SAMPLE_RATE,
   upmixMonoToStereo,
 } from './constants.js';
+import { Resampler } from './resampler.js';
 
 // audify (RtAudio) types — imported lazily so machines using sox never load the native addon.
 type AudifyModule = typeof import('audify');
 type RtAudioInstance = InstanceType<AudifyModule['RtAudio']>;
 type RtDeviceInfo = ReturnType<RtAudioInstance['getDevices']>[number];
+type RtStreamParams = Parameters<RtAudioInstance['openStream']>[0];
 
 // audify declares its enums as `const enum`, which TypeScript refuses to reference as
 // values from another module, so spell out the two we use.
@@ -81,26 +84,78 @@ function pickApi(audify: AudifyModule): number | undefined {
   }
 }
 
-interface ResolvedDevice {
+/** A device entry as exposed to the UI: multichannel interfaces appear once per channel pair. */
+interface Entry {
   info: RtDeviceInfo;
+  /** Display name, also the persisted id. */
+  name: string;
+  firstChannel: number;
   channels: number;
+  type: 'input' | 'output';
+}
+
+interface ResolvedDevice {
+  entry: Entry;
+  rate: number;
 }
 
 /**
- * The rate to open the capture stream at: the device's preferred (shared-mode) rate when
- * it is not 48 kHz and can be cut into 10 ms frames, else 48 kHz.
+ * The rate to open a stream at: the device's preferred (shared-mode / nominal) rate. We
+ * resample in-process, so the driver never converts and CoreAudio's nominal rate is left
+ * as the user set it. Falls back to 48 kHz when the driver reports nothing usable.
  */
-function nativeCaptureRate(info: RtDeviceInfo): number {
+function nativeRate(info: RtDeviceInfo): number {
   const rate = info.preferredSampleRate;
-  if (!rate || rate === SAMPLE_RATE || rate % 100 !== 0) return SAMPLE_RATE;
+  if (!rate || rate < 8000) return SAMPLE_RATE;
   if (info.sampleRates.length > 0 && !info.sampleRates.includes(rate)) return SAMPLE_RATE;
   return rate;
 }
 
+/** Growable Int16 FIFO used to re-chunk between the driver period and 10 ms frames. */
+class SampleQueue {
+  private buf: Int16Array;
+  length = 0;
+
+  constructor(initial: number) {
+    this.buf = new Int16Array(initial);
+  }
+
+  append(samples: Int16Array): void {
+    const needed = this.length + samples.length;
+    if (needed > this.buf.length) {
+      const grown = new Int16Array(needed * 2);
+      grown.set(this.buf.subarray(0, this.length));
+      this.buf = grown;
+    }
+    this.buf.set(samples, this.length);
+    this.length += samples.length;
+  }
+
+  /** View of the first `n` samples (valid until the next append/consume). */
+  peek(n: number): Int16Array {
+    return this.buf.subarray(0, n);
+  }
+
+  /** Byte view of the first `n` samples (valid until the next append/consume). */
+  peekBytes(n: number): Buffer {
+    return Buffer.from(this.buf.buffer, this.buf.byteOffset, n * 2);
+  }
+
+  consume(n: number): void {
+    this.buf.copyWithin(0, n, this.length);
+    this.length -= n;
+  }
+
+  clear(): void {
+    this.length = 0;
+  }
+}
+
 /**
  * Native backend on top of audify (RtAudio): WASAPI on Windows, CoreAudio on macOS.
- * One duplex stream when the driver allows it, otherwise separate input/output streams.
- * Frames are re-chunked to 480 samples regardless of the driver's period.
+ * Streams open at each device's native rate and channel count; capture is resampled and
+ * upmixed to the pipeline's 48 kHz stereo, playback is downmixed/resampled back. One duplex
+ * stream when input and output share a rate, otherwise separate streams.
  */
 export class RtAudioBackend implements AudioBackend {
   readonly name = 'rtaudio' as const;
@@ -110,20 +165,19 @@ export class RtAudioBackend implements AudioBackend {
   private callbacks: AudioStreamCallbacks | null = null;
   private clockTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Capture re-chunking (driver period → 10 ms stereo frames at the capture rate)
+  // Capture: driver period at native rate/channels → [resample] → 480-frame stereo at 48 kHz
   private inChannels = CHANNELS;
-  private inRate = SAMPLE_RATE;
-  private inFrames = FRAME_SIZE;
-  private inAccum = new Int16Array(0);
-  private inAccumLen = 0;
-  private captureFrame = new Int16Array(FRAME_SAMPLES);
+  private inResampler: Resampler | null = null;
+  private readonly inQueue = new SampleQueue(FRAME_SAMPLES * 4);
+  private readonly captureFrame = new Int16Array(FRAME_SAMPLES);
 
-  // Playback re-chunking (480-frame stereo frames → driver period)
+  // Playback: 480-frame stereo at 48 kHz → [downmix][resample] → driver period at native rate/channels
   private outChannels = CHANNELS;
+  private outResampler: Resampler | null = null;
   private outPeriod = FRAME_SIZE;
-  private outAccum = new Int16Array(0);
-  private outAccumLen = 0;
+  private readonly outQueue = new SampleQueue(FRAME_SAMPLES * 4);
   private readonly playbackFrame = new Int16Array(FRAME_SAMPLES);
+  private readonly playbackMono = new Int16Array(FRAME_SIZE);
   private queuedPeriods = 0;
   private targetPeriods = 2;
   private maxPeriods = 5;
@@ -137,15 +191,18 @@ export class RtAudioBackend implements AudioBackend {
 
   async listDevices(): Promise<{ inputs: AudioDevice[]; outputs: AudioDevice[] }> {
     const audify = await loadAudify();
-    const rt = getProbe(audify);
-    const inputs: AudioDevice[] = [];
-    const outputs: AudioDevice[] = [];
-    for (const { info, id } of this.enumerate(rt)) {
-      if (info.inputChannels > 0) inputs.push({ id, name: info.name, type: 'input', isDefault: !!info.isDefaultInput });
-      if (info.outputChannels > 0)
-        outputs.push({ id, name: info.name, type: 'output', isDefault: !!info.isDefaultOutput });
-    }
-    return { inputs, outputs };
+    const entries = this.enumerate(getProbe(audify));
+    const toDevice = (e: Entry): AudioDevice => ({
+      id: e.name,
+      name: e.name,
+      type: e.type,
+      isDefault: e.firstChannel === 0 && !!(e.type === 'input' ? e.info.isDefaultInput : e.info.isDefaultOutput),
+      firstChannel: e.firstChannel,
+    });
+    return {
+      inputs: entries.filter((e) => e.type === 'input').map(toDevice),
+      outputs: entries.filter((e) => e.type === 'output').map(toDevice),
+    };
   }
 
   async start(selection: AudioDeviceSelection, callbacks: AudioStreamCallbacks): Promise<void> {
@@ -154,51 +211,60 @@ export class RtAudioBackend implements AudioBackend {
     this.callbacks = callbacks;
 
     const probe = getProbe(audify);
-    const devices = this.enumerate(probe); // one native sweep for both lookups
-    const inDev = this.resolve(probe, devices, selection.input, 'input');
-    const outDev = this.resolve(probe, devices, selection.output, 'output');
+    const entries = this.enumerate(probe); // one native sweep for both lookups
+    const inDev = this.resolve(probe, entries, selection.input, 'input');
+    const outDev = this.resolve(probe, entries, selection.output, 'output');
     if (!inDev && !outDev) throw new Error('No audio devices found');
 
-    this.inChannels = inDev?.channels ?? CHANNELS;
-    this.outChannels = outDev?.channels ?? CHANNELS;
-    // Capture at the device's native shared-mode rate when it is not 48 kHz: RtAudio's
-    // WASAPI capture resampler produces audible artifacts ("robotic" voice), while
-    // libwebrtc resamples the pushed frames cleanly. Playback keeps 48 kHz — the render
-    // side of the driver resampler is fine.
-    this.inRate = inDev ? nativeCaptureRate(inDev.info) : SAMPLE_RATE;
-    this.inFrames = this.inRate / 100;
-    this.resetChunkers();
+    const inRate = inDev?.rate ?? SAMPLE_RATE;
+    const outRate = outDev?.rate ?? SAMPLE_RATE;
+    this.inChannels = inDev?.entry.channels ?? CHANNELS;
+    this.outChannels = outDev?.entry.channels ?? CHANNELS;
+    this.inResampler = inRate === SAMPLE_RATE ? null : new Resampler(inRate, SAMPLE_RATE, this.inChannels);
+    this.outResampler = outRate === SAMPLE_RATE ? null : new Resampler(SAMPLE_RATE, outRate, this.outChannels);
+    this.inQueue.clear();
+    this.outQueue.clear();
+    this.queuedPeriods = 0;
 
-    const inParams = inDev ? { deviceId: inDev.info.id, nChannels: inDev.channels, firstChannel: 0 } : null;
-    const outParams = outDev ? { deviceId: outDev.info.id, nChannels: outDev.channels, firstChannel: 0 } : null;
-
+    const params = (d: ResolvedDevice): RtStreamParams => ({
+      deviceId: d.entry.info.id,
+      nChannels: d.entry.channels,
+      firstChannel: d.entry.firstChannel,
+    });
+    const describe = (d: ResolvedDevice | null) =>
+      d ? `${d.entry.name} @ ${d.rate} Hz ${d.entry.channels}ch` : 'none';
     const onError = (type: number, msg: string) => {
       // The callback is shared by every RtAudio instance; warnings (e.g. a collected
       // instance closing a stream it never opened) must not restart the pipeline.
       if (type < RT_FIRST_REAL_ERROR) callbacks.onDebug?.(`RtAudio warning: ${msg}`);
       else callbacks.onError?.(`RtAudio: ${msg}`);
     };
+    /** Open one stream at `rate` with 10 ms periods; returns it and the period the driver granted. */
+    const open = (label: string, out: ResolvedDevice | null, inp: ResolvedDevice | null, rate: number) => {
+      const rt = new audify.RtAudio(pickApi(audify));
+      const period = rt.openStream(
+        out ? params(out) : null,
+        inp ? params(inp) : null,
+        FORMAT_SINT16,
+        rate,
+        framesPer10ms(rate),
+        label,
+        inp ? (data) => this.onInput(data) : null,
+        out ? () => this.onPeriodPlayed() : null,
+        STREAM_FLAGS,
+        onError,
+      );
+      return { rt, period };
+    };
 
-    if (inParams && outParams && this.inRate === SAMPLE_RATE) {
+    if (inDev && outDev && inRate === outRate) {
       // Preferred: one duplex stream, input and output share a clock.
       try {
-        const rt = new audify.RtAudio(pickApi(audify));
-        const period = rt.openStream(
-          outParams,
-          inParams,
-          FORMAT_SINT16,
-          SAMPLE_RATE,
-          FRAME_SIZE,
-          'openmeet',
-          (data) => this.onInput(data),
-          () => this.onPeriodPlayed(),
-          STREAM_FLAGS,
-          onError,
-        );
-        this.setPeriod(period);
+        const { rt, period } = open('openmeet', outDev, inDev, outRate);
+        this.setPeriod(period, outRate);
         this.duplex = rt;
         callbacks.onDebug?.(
-          `Audio (${rt.getApi()}): duplex ${inDev!.info.name} → ${outDev!.info.name}, period ${this.outPeriod}, in ${this.inChannels}ch out ${this.outChannels}ch`,
+          `Audio (${rt.getApi()}): duplex in ${describe(inDev)}, out ${describe(outDev)}, period ${this.outPeriod}`,
         );
         this.prime();
         rt.start();
@@ -211,40 +277,16 @@ export class RtAudioBackend implements AudioBackend {
       }
     }
 
-    // Fallback: separate streams (different drivers, or duplex unsupported).
-    if (outParams) {
-      const rt = new audify.RtAudio(pickApi(audify));
-      const period = rt.openStream(
-        outParams,
-        null,
-        FORMAT_SINT16,
-        SAMPLE_RATE,
-        FRAME_SIZE,
-        'openmeet-out',
-        null,
-        () => this.onPeriodPlayed(),
-        STREAM_FLAGS,
-        onError,
-      );
-      this.setPeriod(period);
+    // Separate streams: different rates, different drivers, or duplex unsupported.
+    if (outDev) {
+      const { rt, period } = open('openmeet-out', outDev, null, outRate);
+      this.setPeriod(period, outRate);
       this.output = rt;
       this.prime();
       rt.start();
     }
-    if (inParams) {
-      const rt = new audify.RtAudio(pickApi(audify));
-      rt.openStream(
-        null,
-        inParams,
-        FORMAT_SINT16,
-        this.inRate,
-        this.inFrames,
-        'openmeet-in',
-        (data) => this.onInput(data),
-        null,
-        STREAM_FLAGS,
-        onError,
-      );
+    if (inDev) {
+      const { rt } = open('openmeet-in', null, inDev, inRate);
       this.input = rt;
       rt.start();
     } else {
@@ -252,7 +294,7 @@ export class RtAudioBackend implements AudioBackend {
       this.clockTimer = setInterval(() => this.feedOutput(), 10);
     }
     callbacks.onDebug?.(
-      `Audio (${(this.output ?? this.input)?.getApi()}): split streams, in ${inDev?.info.name ?? 'none'} @ ${this.inRate} Hz, out ${outDev?.info.name ?? 'none'} @ ${SAMPLE_RATE} Hz`,
+      `Audio (${(this.output ?? this.input)?.getApi()}): split streams, in ${describe(inDev)}, out ${describe(outDev)}`,
     );
     this.startStats();
   }
@@ -293,61 +335,71 @@ export class RtAudioBackend implements AudioBackend {
     this.duplex = null;
     this.input = null;
     this.output = null;
+    this.inResampler = null;
+    this.outResampler = null;
     this.callbacks = null;
   }
 
   // ─── Device resolution ───────────────────────────────────────────────
 
-  private enumerate(rt: RtAudioInstance): Array<{ info: RtDeviceInfo; id: string }> {
+  /**
+   * Numeric RtAudio ids change across reboots and hot-plugs, so ids are names (duplicates
+   * disambiguated by order). Interfaces with more than two channels get one entry per
+   * stereo pair — "Scarlett 18i8 [ch 3-4]" — so a mic plugged into input 3 is reachable.
+   */
+  private enumerate(rt: RtAudioInstance): Entry[] {
     const seen = new Map<string, number>();
-    const result: Array<{ info: RtDeviceInfo; id: string }> = [];
+    const result: Entry[] = [];
     for (const info of rt.getDevices()) {
-      // Numeric RtAudio ids change across reboots and hot-plugs; persist names instead,
-      // disambiguating duplicates by order.
       const n = (seen.get(info.name) ?? 0) + 1;
       seen.set(info.name, n);
-      result.push({ info, id: n === 1 ? info.name : `${info.name} (${n})` });
+      const base = n === 1 ? info.name : `${info.name} (${n})`;
+      for (const type of ['input', 'output'] as const) {
+        const total = type === 'input' ? info.inputChannels : info.outputChannels;
+        if (total <= 0) continue;
+        if (total <= CHANNELS) {
+          result.push({ info, name: base, firstChannel: 0, channels: total, type });
+          continue;
+        }
+        for (let first = 0; first < total; first += CHANNELS) {
+          const channels = Math.min(CHANNELS, total - first);
+          const label = channels === 2 ? `ch ${first + 1}-${first + 2}` : `ch ${first + 1}`;
+          result.push({ info, name: `${base} [${label}]`, firstChannel: first, channels, type });
+        }
+      }
     }
     return result;
   }
 
   private resolve(
     rt: RtAudioInstance,
-    all: Array<{ info: RtDeviceInfo; id: string }>,
+    all: Entry[],
     wanted: AudioDevice | undefined,
     type: 'input' | 'output',
   ): ResolvedDevice | null {
-    const devices = all.filter(({ info }) => (type === 'input' ? info.inputChannels > 0 : info.outputChannels > 0));
-    if (devices.length === 0) return null;
+    const entries = all.filter((e) => e.type === type);
+    if (entries.length === 0) return null;
 
-    let match = wanted ? devices.find((d) => d.id === wanted.id || d.info.name === wanted.name) : undefined;
+    let match = wanted
+      ? (entries.find((e) => e.name === wanted.id) ??
+        entries.find((e) => e.info.name === wanted.name && e.firstChannel === (wanted.firstChannel ?? 0)))
+      : undefined;
     if (wanted && !match) {
       this.callbacks?.onDebug?.(`Audio ${type} device "${wanted.name}" not found, using default`);
     }
     if (!match) {
       const defaultId = type === 'input' ? rt.getDefaultInputDevice() : rt.getDefaultOutputDevice();
-      match = devices.find((d) => d.info.id === defaultId) ?? devices[0];
+      match = entries.find((e) => e.info.id === defaultId && e.firstChannel === 0) ?? entries[0];
     }
-    const available = type === 'input' ? match.info.inputChannels : match.info.outputChannels;
-    return { info: match.info, channels: Math.min(CHANNELS, available) };
+    return { entry: match, rate: nativeRate(match.info) };
   }
 
   // ─── Capture path ────────────────────────────────────────────────────
 
-  private resetChunkers(): void {
-    this.inAccum = new Int16Array(this.inFrames * this.inChannels * 4);
-    this.inAccumLen = 0;
-    if (this.captureFrame.length !== this.inFrames * CHANNELS)
-      this.captureFrame = new Int16Array(this.inFrames * CHANNELS);
-    this.outAccum = new Int16Array(0);
-    this.outAccumLen = 0;
-    this.queuedPeriods = 0;
-  }
-
   /** Queue depth is defined in milliseconds; convert once the driver period is known. */
-  private setPeriod(period: number): void {
-    this.outPeriod = period || FRAME_SIZE;
-    const periodMs = (this.outPeriod * 1000) / SAMPLE_RATE;
+  private setPeriod(period: number, rate: number): void {
+    this.outPeriod = period || framesPer10ms(rate);
+    const periodMs = (this.outPeriod * 1000) / rate;
     this.targetPeriods = Math.max(1, Math.ceil(TARGET_QUEUE_MS / periodMs));
     this.maxPeriods = Math.max(this.targetPeriods + 1, Math.ceil(MAX_QUEUE_MS / periodMs));
   }
@@ -364,31 +416,20 @@ export class RtAudioBackend implements AudioBackend {
       }
     }
     this.lastInputAt = now;
-    const incoming = new Int16Array(data.buffer, data.byteOffset, data.byteLength >> 1);
-    const perFrame = this.inFrames * this.inChannels;
 
-    // Accumulate the driver period and emit whole 10 ms chunks.
-    if (this.inAccumLen + incoming.length > this.inAccum.length) {
-      const grown = new Int16Array((this.inAccumLen + incoming.length) * 2);
-      grown.set(this.inAccum.subarray(0, this.inAccumLen));
-      this.inAccum = grown;
-    }
-    this.inAccum.set(incoming, this.inAccumLen);
-    this.inAccumLen += incoming.length;
-
-    let offset = 0;
-    while (this.inAccumLen - offset >= perFrame) {
-      const chunk = this.inAccum.subarray(offset, offset + perFrame);
+    // Driver samples → 48 kHz samples (still inChannels wide), then whole 10 ms frames,
+    // upmixing mono to the pipeline's stereo.
+    const raw = new Int16Array(data.buffer, data.byteOffset, data.byteLength >> 1);
+    this.inQueue.append(this.inResampler ? this.inResampler.process(raw) : raw);
+    const perFrame = FRAME_SIZE * this.inChannels;
+    while (this.inQueue.length >= perFrame) {
+      const chunk = this.inQueue.peek(perFrame);
       if (this.inChannels === 2) this.captureFrame.set(chunk);
-      else upmixMonoToStereo(chunk, this.captureFrame, this.inFrames);
-      cb.onCapture(this.captureFrame, this.inRate);
-      offset += perFrame;
+      else upmixMonoToStereo(chunk, this.captureFrame, FRAME_SIZE);
+      this.inQueue.consume(perFrame);
+      cb.onCapture(this.captureFrame);
       // In duplex (and split) mode the input clock drives the output queue.
       if (!this.clockTimer) this.feedOutput();
-    }
-    if (offset > 0) {
-      this.inAccum.copyWithin(0, offset, this.inAccumLen);
-      this.inAccumLen -= offset;
     }
   }
 
@@ -424,24 +465,20 @@ export class RtAudioBackend implements AudioBackend {
     if (this.queuedPeriods >= this.maxPeriods) return; // stall recovery: don't pile up latency
 
     const periodSamples = this.outPeriod * this.outChannels;
-    while (this.outAccumLen < periodSamples) {
+    while (this.outQueue.length < periodSamples) {
       cb.onPlayback(this.playbackFrame);
-      const needed = this.outAccumLen + FRAME_SIZE * this.outChannels;
-      if (needed > this.outAccum.length) {
-        const grown = new Int16Array(needed * 2);
-        grown.set(this.outAccum.subarray(0, this.outAccumLen));
-        this.outAccum = grown;
+      let frame: Int16Array = this.playbackFrame;
+      if (this.outChannels === 1) {
+        downmixStereoToMono(this.playbackFrame, this.playbackMono, FRAME_SIZE);
+        frame = this.playbackMono;
       }
-      if (this.outChannels === 2) this.outAccum.set(this.playbackFrame, this.outAccumLen);
-      else downmixStereoToMono(this.playbackFrame, this.outAccum, FRAME_SIZE, this.outAccumLen);
-      this.outAccumLen += FRAME_SIZE * this.outChannels;
+      this.outQueue.append(this.outResampler ? this.outResampler.process(frame) : frame);
     }
 
     // audify copies the buffer synchronously inside write(), so a view is enough.
-    out.write(Buffer.from(this.outAccum.buffer, this.outAccum.byteOffset, periodSamples * 2));
+    out.write(this.outQueue.peekBytes(periodSamples));
+    this.outQueue.consume(periodSamples);
     this.queuedPeriods++;
-    this.outAccum.copyWithin(0, periodSamples, this.outAccumLen);
-    this.outAccumLen -= periodSamples;
 
     // Keep a small cushion so a late callback doesn't underrun.
     if (this.queuedPeriods < this.targetPeriods) this.feedOutput();

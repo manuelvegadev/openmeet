@@ -19,6 +19,34 @@ export const VU_MAX_RMS = 8000;
 /** RMS above this counts as "speaking" (~2.5% of full scale). */
 export const SPEAKING_RMS_THRESHOLD = 800;
 
+/** Frames in one 10 ms period at `rate`. */
+export function framesPer10ms(rate: number): number {
+  return rate / 100;
+}
+
+/** Saturate to the Int16 range (typed-array stores would wrap instead). */
+export function clampInt16(v: number): number {
+  return v > 32767 ? 32767 : v < -32768 ? -32768 : Math.round(v);
+}
+
+/** Sum of squares per channel of an interleaved stereo frame (no sqrt: cheap to compare). */
+export function channelEnergy(samples: Int16Array): [number, number] {
+  let l = 0;
+  let r = 0;
+  for (let i = 0; i < samples.length; i += 2) {
+    l += samples[i] * samples[i];
+    r += samples[i + 1] * samples[i + 1];
+  }
+  return [l, r];
+}
+
+/** RMS per channel of an interleaved stereo frame. */
+export function computeChannelRMS(samples: Int16Array): [number, number] {
+  const [l, r] = channelEnergy(samples);
+  const n = samples.length >> 1;
+  return [Math.sqrt(l / n), Math.sqrt(r / n)];
+}
+
 export function computeRMS(samples: Int16Array): number {
   let sum = 0;
   for (let i = 0; i < samples.length; i++) {

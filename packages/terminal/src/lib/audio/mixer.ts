@@ -1,4 +1,4 @@
-import { FRAME_SAMPLES, FRAME_SIZE, upmixMonoToStereo } from './constants.js';
+import { clampInt16, FRAME_SAMPLES, FRAME_SIZE, upmixMonoToStereo } from './constants.js';
 
 /**
  * Per-peer playout buffer: a ring of stereo 10 ms frames fed by RTCAudioSink and drained
@@ -97,9 +97,6 @@ export class FrameMixer {
       out.fill(0);
       return;
     }
-    for (let i = 0; i < FRAME_SAMPLES; i++) {
-      const v = this.acc[i];
-      out[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
-    }
+    for (let i = 0; i < FRAME_SAMPLES; i++) out[i] = clampInt16(this.acc[i]);
   }
 }

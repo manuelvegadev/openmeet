@@ -65,7 +65,6 @@ export class SoxBackend implements AudioBackend {
   private framesWritten = 0;
   private callbacks: AudioStreamCallbacks | null = null;
   private readonly playbackFrame = new Int16Array(FRAME_SAMPLES);
-  private _running = false;
 
   async listDevices(): Promise<{ inputs: AudioDevice[]; outputs: AudioDevice[] }> {
     // Enumeration runs in the engine process alongside live audio: never block here.
@@ -84,11 +83,9 @@ export class SoxBackend implements AudioBackend {
     const args = deviceArgs(selection);
     this.startPlayback(args);
     this.startCapture(args);
-    this._running = true;
   }
 
   stop(): void {
-    this._running = false;
     if (this.clockTimer) {
       clearInterval(this.clockTimer);
       this.clockTimer = null;
@@ -155,7 +152,7 @@ export class SoxBackend implements AudioBackend {
           continue;
         }
 
-        this.callbacks?.onCapture(frame, SAMPLE_RATE);
+        this.callbacks?.onCapture(frame);
       }
     });
 
