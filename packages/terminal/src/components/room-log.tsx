@@ -64,7 +64,7 @@ export function RoomLog({ events, joinedAt }: RoomLogProps) {
           <Text dimColor>No events yet</Text>
         ) : (
           visible.map((event) => (
-            <Box key={`${event.timestamp}-${event.message}`}>
+            <Box key={event.id}>
               <Text dimColor>[{formatTime(event.timestamp)}] </Text>
               {event.type === 'debug' ? (
                 <Text color="magenta" dimColor>

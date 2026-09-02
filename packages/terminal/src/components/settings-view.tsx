@@ -1,8 +1,8 @@
 import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import { useEffect, useState } from 'react';
-import type { AudioDevice, VideoDevice } from '../lib/devices.js';
-import { listAudioDevices, listVideoDevices } from '../lib/devices.js';
+import { type AudioDevice, listAudioDevices } from '../engine/client.js';
+import { listVideoDevices, type VideoDevice } from '../lib/devices.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
 
 interface SettingsViewProps {

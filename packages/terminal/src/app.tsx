@@ -5,7 +5,7 @@ import { DevicePicker } from './components/device-picker.js';
 import { HomeScreen } from './components/home-screen.js';
 import { RoomView } from './components/room-view.js';
 import { SettingsView } from './components/settings-view.js';
-import { type AudioDevice, type DeviceEnvs, getDeviceEnv, listAudioDevices } from './lib/devices.js';
+import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from './engine/client.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 
 interface AppProps {
@@ -81,7 +81,7 @@ export function App({
     outputs: [],
   });
   const [devicesLoaded, setDevicesLoaded] = useState(false);
-  const [deviceEnvs, setDeviceEnvs] = useState<DeviceEnvs>({ recExtra: {}, playExtra: {} });
+  const [deviceSelection, setDeviceSelection] = useState<AudioDeviceSelection>({});
   const [creating, setCreating] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
 
@@ -93,7 +93,7 @@ export function App({
     });
   }, []);
 
-  // Resolve device envs from saved settings when transitioning to devices screen
+  // Resolve device selection from saved settings when transitioning to devices screen
   useEffect(() => {
     if (screen !== 'devices' || !devicesLoaded) return;
 
@@ -103,7 +103,7 @@ export function App({
     if (inputDevice && outputDevice) {
       const input = devices.inputs.find((d) => d.name === inputDevice);
       const output = devices.outputs.find((d) => d.name === outputDevice);
-      setDeviceEnvs(getDeviceEnv(input, output));
+      setDeviceSelection({ input, output });
       setScreen('room');
       return;
     }
@@ -117,7 +117,7 @@ export function App({
         const output = settings.audioOutputId
           ? devices.outputs.find((d) => d.id === settings.audioOutputId)
           : undefined;
-        setDeviceEnvs(getDeviceEnv(input, output));
+        setDeviceSelection({ input, output });
         setScreen('room');
       }
     }
@@ -180,7 +180,7 @@ export function App({
               audioOutputId: output?.id ?? null,
               devicesConfigured: true,
             });
-            setDeviceEnvs(getDeviceEnv(input, output));
+            setDeviceSelection({ input, output });
             setScreen('room');
           }}
         />
@@ -191,7 +191,7 @@ export function App({
           roomId={roomId}
           username={emoji}
           version={version}
-          deviceEnvs={deviceEnvs}
+          deviceSelection={deviceSelection}
           videoEnabled={videoEnabled}
           videoDevice={videoDevice}
           debug={debug}

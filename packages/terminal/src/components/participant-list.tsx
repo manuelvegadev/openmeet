@@ -2,8 +2,7 @@ import type { Participant } from '@openmeet/shared';
 import { Box, Text } from 'ink';
 import type { ConnectionStats } from '../hooks/use-room.js';
 
-const BAR_COUNT = 20;
-const MAX_RMS = 8000;
+import { VU_BAR_COUNT as BAR_COUNT, VU_MAX_RMS as MAX_RMS } from '../lib/audio/constants.js';
 
 function vuColor(level: number, volume: number): string {
   const normalized = Math.min(level / MAX_RMS, 1) * volume;

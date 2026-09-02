@@ -1,12 +1,11 @@
 import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import { useEffect, useRef, useState } from 'react';
+import type { AudioDevice } from '../engine/client.js';
+import { VU_MAX_RMS as MAX_RMS } from '../lib/audio/constants.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
-import type { AudioDevice } from '../lib/devices.js';
-import { getDeviceEnv } from '../lib/devices.js';
 
 const BAR_WIDTH = 30;
-const MAX_RMS = 8000;
 
 function renderBar(level: number): string {
   const normalized = Math.min(level / MAX_RMS, 1);
@@ -50,7 +49,6 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
       return;
     }
 
-    const envs = getDeviceEnv(selectedInput, selectedOutput);
     const tester = new MicTester();
     testerRef.current = tester;
 
@@ -64,7 +62,7 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
       }
     });
 
-    tester.start(envs);
+    tester.start({ input: selectedInput, output: selectedOutput });
 
     return () => {
       tester.stop();
@@ -83,8 +81,7 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
     // Test step keybindings
     if (step === 'test') {
       if (input === 't') {
-        const envs = getDeviceEnv(selectedInput, selectedOutput);
-        playTestTone(envs);
+        playTestTone({ input: selectedInput, output: selectedOutput });
       }
       if (key.return) {
         onConfirm(selectedInput, selectedOutput);

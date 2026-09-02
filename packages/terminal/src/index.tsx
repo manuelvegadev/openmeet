@@ -4,8 +4,13 @@ import { platform } from 'node:os';
 import { parseArgs } from 'node:util';
 import { render } from 'ink';
 import { App } from './app.js';
+import { initEngineClient } from './engine/client.js';
+import { runEngine } from './engine/main.js';
+import { parseBackendFlag, resolveBackendName, setActiveBackendName } from './lib/audio/index.js';
 import { listScreenDevices } from './lib/devices.js';
+import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
 import { getOrCreateEmoji } from './lib/emoji.js';
+import { getPlatformSupport } from './lib/platform.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { APP_VERSION } from './version.js';
 
@@ -67,11 +72,13 @@ function checkMicPermission(): 'granted' | 'denied' | 'unknown' {
 const { values } = parseArgs({
   allowPositionals: true,
   options: {
+    engine: { type: 'boolean', default: false },
     server: { type: 'string', default: 'wss://openmeet.mvega.pro/ws' },
     room: { type: 'string' },
     'input-device': { type: 'string' },
     'output-device': { type: 'string' },
     'no-video': { type: 'boolean', default: false },
+    'audio-backend': { type: 'string' },
     'video-device': { type: 'string' },
     'no-overlay': { type: 'boolean', default: false },
     'test-camera': { type: 'boolean', default: false },
@@ -81,7 +88,15 @@ const { values } = parseArgs({
   },
 });
 
-if (values.help) {
+// ─── Engine process ───────────────────────────────────────────────────
+// Forked by the TUI (see engine/client.ts). Owns audio, WebRTC and signaling so the
+// 10 ms audio path never shares an event loop with terminal rendering.
+if (values.engine) {
+  // The TUI passes the resolved backend name; runEngine() never resolves (the process
+  // exits from inside when the TUI disconnects).
+  setActiveBackendName(resolveBackendName(parseBackendFlag(values['audio-backend']) ?? 'auto'));
+  await runEngine();
+} else if (values.help) {
   process.stdout.write(`openmeet-terminal v${APP_VERSION}
 
 Usage: openmeet [options]
@@ -91,6 +106,7 @@ Usage: openmeet [options]
   --input-device <name>  Input device name (skip device picker)
   --output-device <name> Output device name (skip device picker)
   --no-video             Disable video (audio-only mode)
+  --audio-backend <name> Audio I/O backend: rtaudio (native; default on Windows) or sox (default on macOS/Linux)
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay (name, stream type, resolution)
   --test-camera          Test camera capture (opens ffplay preview, no room join)
@@ -281,7 +297,19 @@ if (values['test-camera']) {
 } else {
   // ─── Normal app flow ──────────────────────────────────────────────────
 
-  if (!checkSox()) {
+  // Audio backend: CLI flag > saved setting > platform default
+  const backendFlag = parseBackendFlag(values['audio-backend']);
+  if (backendFlag === null) {
+    process.stderr.write(`Error: --audio-backend must be "rtaudio" or "sox" (got "${values['audio-backend']}")\n`);
+    process.exit(1);
+  }
+  const audioBackend = resolveBackendName(backendFlag === 'auto' ? loadSettings().audioBackend : backendFlag);
+  // The engine gets the resolved backend explicitly; start it now so device listing
+  // and the first join don't pay the fork + native-module load.
+  const engine = initEngineClient(['--audio-backend', audioBackend]);
+  engine.start();
+
+  if (audioBackend === 'sox' && !checkSox()) {
     process.stderr.write(`Error: sox is required but not found on PATH.
 
 Install sox:
@@ -292,8 +320,8 @@ Install sox:
     process.exit(1);
   }
 
-  // Video support: soft-fail if ffmpeg/ffplay missing (unlike sox which is hard-fail)
-  let videoEnabled = !values['no-video'];
+  // Video support: soft-fail if ffmpeg/ffplay missing. Gated per platform (see lib/platform.ts).
+  let videoEnabled = !values['no-video'] && getPlatformSupport().video;
   if (videoEnabled) {
     const ffStatus = checkFfmpeg();
     if (!ffStatus.ffplay || !ffStatus.ffmpeg) {
@@ -309,7 +337,8 @@ Install ffmpeg for video support:
     }
   }
 
-  const micStatus = checkMicPermission();
+  // The sox probe uses `rec`; with rtaudio a denied mic surfaces as a stream error instead.
+  const micStatus = audioBackend === 'sox' ? checkMicPermission() : 'unknown';
   if (micStatus === 'denied') {
     process.stderr.write(`Error: Microphone access denied.
 
@@ -333,20 +362,20 @@ Your terminal app needs microphone permission on macOS:
   console.error = () => {};
   console.warn = () => {};
 
-  // Enter alternate screen buffer (like nano/vim) — restores terminal on exit
-  process.stdout.write('\x1b[?1049h');
-
   // Ink uses ansiEscapes.clearTerminal (\x1b[2J\x1b[3J\x1b[H]) when output fills the screen.
   // \x1b[3J clears the scrollback buffer, which on macOS leaks through to the main buffer
   // even when inside the alt screen. Strip it so the user's terminal history is preserved.
   const origStdoutWrite = process.stdout.write;
-  process.stdout.write = function (chunk, ...args: any[]) {
+  process.stdout.write = function (this: NodeJS.WriteStream, chunk, ...args: any[]) {
     if (typeof chunk === 'string') {
       chunk = chunk.replaceAll('\x1b[3J', '');
     }
     return origStdoutWrite.call(this, chunk, ...args);
   } as typeof process.stdout.write;
 
+  // alternateScreen: Ink enters/leaves the alt buffer itself (like vim/htop).
+  // incrementalRendering: only changed lines are written. On Windows a full-frame write
+  // to ConPTY blocks the event loop for 50-70 ms, which the 10 ms audio path cannot absorb.
   const instance = render(
     <App
       serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
@@ -359,16 +388,17 @@ Your terminal app needs microphone permission on macOS:
       videoDevice={values['video-device']}
       debug={values.debug ?? false}
     />,
+    {
+      alternateScreen: true,
+      incrementalRendering: true,
+      onRender: diagnosticsEnabled(values.debug ?? false) ? recordRender : undefined,
+    },
   );
 
-  // After Ink unmounts, trigger process exit
+  // After Ink unmounts, stop the engine and exit
   instance.waitUntilExit().then(() => {
-    process.exit(0);
+    engine.dispose();
+    setTimeout(() => process.exit(0), 100);
   });
-
-  // Registered AFTER render() so this runs AFTER Ink's own exit handler.
-  // Ink's cleanup writes to the alt buffer, then we leave it — normal buffer untouched.
-  process.on('exit', () => {
-    process.stdout.write('\x1b[?1049l');
-  });
+  process.on('exit', () => engine.dispose());
 } // end else (test-camera)

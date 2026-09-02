@@ -1,10 +1,12 @@
 import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import { useEffect, useRef, useState } from 'react';
+import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from '../engine/client.js';
 import { useRoom } from '../hooks/use-room.js';
+import { VU_MAX_RMS as MAX_RMS } from '../lib/audio/constants.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
-import type { AudioDevice, DeviceEnvs, ScreenDevice } from '../lib/devices.js';
-import { getDeviceEnv, listAudioDevices, listScreenDevices } from '../lib/devices.js';
+import { listScreenDevices, type ScreenDevice } from '../lib/devices.js';
+import { getPlatformSupport } from '../lib/platform.js';
 import { saveSettings } from '../lib/settings.js';
 import { ChatInput } from './chat-input.js';
 import { ChatLog } from './chat-log.js';
@@ -13,7 +15,6 @@ import { RoomLog } from './room-log.js';
 import { StatusBar } from './status-bar.js';
 
 const BAR_WIDTH = 30;
-const MAX_RMS = 8000;
 
 function renderBar(level: number): string {
   const normalized = Math.min(level / MAX_RMS, 1);
@@ -33,7 +34,7 @@ interface RoomViewProps {
   roomId: string;
   username: string;
   version: string;
-  deviceEnvs: DeviceEnvs;
+  deviceSelection: AudioDeviceSelection;
   videoEnabled?: boolean;
   videoDevice?: string;
   debug?: boolean;
@@ -42,18 +43,20 @@ interface RoomViewProps {
 
 type DevicePickerStep = null | 'loading' | 'input' | 'output' | 'test';
 
+const platformName = getPlatformSupport().name;
+
 export function RoomView({
   serverUrl,
   roomId,
   username,
   version,
-  deviceEnvs,
+  deviceSelection,
   videoEnabled,
   videoDevice,
   debug = false,
   onBack,
 }: RoomViewProps) {
-  const room = useRoom({ serverUrl, roomId, username, deviceEnvs, debug, videoEnabled, videoDevice });
+  const room = useRoom({ serverUrl, roomId, username, deviceSelection, debug, videoEnabled, videoDevice });
   const [inputFocused, setInputFocused] = useState(true);
   const [deviceStep, setDeviceStep] = useState<DevicePickerStep>(null);
   const [devices, setDevices] = useState<{ inputs: AudioDevice[]; outputs: AudioDevice[] }>({
@@ -90,7 +93,6 @@ export function RoomView({
       return;
     }
 
-    const envs = getDeviceEnv(selectedInput, selectedOutput);
     const tester = new MicTester();
     testerRef.current = tester;
 
@@ -104,7 +106,7 @@ export function RoomView({
       }
     });
 
-    tester.start(envs);
+    tester.start({ input: selectedInput, output: selectedOutput });
 
     return () => {
       tester.stop();
@@ -117,8 +119,7 @@ export function RoomView({
       audioOutputId: newOutput?.id ?? null,
       devicesConfigured: true,
     });
-    const newEnvs = getDeviceEnv(newInput, newOutput);
-    room.updateDevices(newEnvs);
+    room.updateDevices({ input: newInput, output: newOutput });
     setDeviceStep(null);
   };
 
@@ -135,8 +136,7 @@ export function RoomView({
     if (deviceStep && deviceStep !== 'loading') {
       if (deviceStep === 'test') {
         if (input === 't') {
-          const envs = getDeviceEnv(selectedInput, selectedOutput);
-          playTestTone(envs);
+          playTestTone({ input: selectedInput, output: selectedOutput });
           return;
         }
         if (key.return) {
@@ -369,7 +369,7 @@ export function RoomView({
       <Box paddingX={1} gap={1} justifyContent="space-between">
         <Box gap={1}>
           <Text bold color="blue">
-            OpenMeet <Text dimColor>v{version}</Text>
+            OpenMeet <Text dimColor>v{version}</Text> <Text dimColor>({platformName})</Text>
           </Text>
           <Text dimColor>|</Text>
           <Text>
