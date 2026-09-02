@@ -63,7 +63,7 @@ The app shows the platform and its feature set next to the version on the home s
 
 - **Node.js 22+** — [download](https://nodejs.org)
 - **ffmpeg** _(optional, macOS/Linux)_ — required for video and screen sharing
-- **sox** _(optional, macOS/Linux)_ — only for the legacy `--audio-backend sox`
+- **sox** _(optional)_ — only for `--audio-backend sox` (the default on Linux)
 
 Audio I/O talks to CoreAudio (macOS) and WASAPI (Windows) directly through a bundled native
 module, so nothing else is needed for audio. On Windows nothing besides Node.js is required;
@@ -129,7 +129,7 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--room <id>` | Room ID to join directly | _(interactive)_ |
 | `--input-device <name>` | Audio input device name | _(device picker)_ |
 | `--output-device <name>` | Audio output device name | _(device picker)_ |
-| `--audio-backend <name>` | Audio I/O: `rtaudio` (native CoreAudio/WASAPI) or `sox` (legacy) | `rtaudio` on Windows, `sox` elsewhere |
+| `--audio-backend <name>` | Audio I/O: `rtaudio` (native CoreAudio/WASAPI) or `sox` (fallback) | `rtaudio` on macOS/Windows, `sox` on Linux |
 | `--no-video` | Disable video (audio-only mode; always off on Windows) | |
 | `--video-device <id>` | Video capture device (e.g., `"0"`) | |
 | `--no-overlay` | Disable video overlay | |
