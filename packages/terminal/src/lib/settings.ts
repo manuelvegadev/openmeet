@@ -1,8 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
+import type { AudioBackendPreference } from './audio/backend.js';
 
-const CONFIG_DIR = join(homedir(), '.config', 'openmeet');
+/** ~/.config/openmeet on macOS/Linux, %APPDATA%\openmeet on Windows. */
+export const CONFIG_DIR =
+  platform() === 'win32'
+    ? join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'openmeet')
+    : join(homedir(), '.config', 'openmeet');
 const SETTINGS_FILE = join(CONFIG_DIR, 'settings.json');
 
 // Legacy device files (pre-settings.json)
@@ -15,6 +20,8 @@ export interface AppSettings {
   videoDeviceId: string | null;
   devicesConfigured: boolean;
   videoOverlay: boolean;
+  /** Audio I/O backend: 'auto' picks the platform default (see lib/platform.ts). */
+  audioBackend: AudioBackendPreference;
 }
 
 const DEFAULTS: AppSettings = {
@@ -23,6 +30,7 @@ const DEFAULTS: AppSettings = {
   videoDeviceId: null,
   devicesConfigured: false,
   videoOverlay: false,
+  audioBackend: 'auto',
 };
 
 let cache: AppSettings | null = null;
