@@ -19,6 +19,14 @@ import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
 import { getOrCreateEmoji } from './lib/emoji.js';
 import { getPlatformSupport } from './lib/platform.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
+import {
+  createFocusFilteredStdin,
+  parsePausePolicyFlag,
+  RENDER_PAUSE_POLICIES,
+  setTerminalTitle,
+  startMinimizedWatcher,
+  WINDOW_TITLE,
+} from './lib/window-state.js';
 import { APP_VERSION } from './version.js';
 
 function checkSox(): boolean {
@@ -88,6 +96,7 @@ const { values } = parseArgs({
     'audio-backend': { type: 'string' },
     'input-channels': { type: 'string' },
     'input-gain': { type: 'string' },
+    'pause-rendering': { type: 'string' },
     'video-device': { type: 'string' },
     'no-overlay': { type: 'boolean', default: false },
     'test-camera': { type: 'boolean', default: false },
@@ -118,6 +127,7 @@ Usage: openmeet [options]
   --audio-backend <name> Audio I/O backend: rtaudio (native; default on macOS/Windows) or sox (default on Linux)
   --input-channels <p>   auto | stereo | mono | left | right — how the mic's channel pair is sent (saved)
   --input-gain <dB>      Capture gain in dB, e.g. 6 or -3 (saved)
+  --pause-rendering <p>  minimized (default) | unfocused | never — when to pause TUI rendering (saved)
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay (name, stream type, resolution)
   --test-camera          Test camera capture (opens ffplay preview, no room join)
@@ -381,6 +391,16 @@ Your terminal app needs microphone permission on macOS:
     }
     saveSettings({ audioInputGainDb: gainDb });
   }
+  if (values['pause-rendering'] !== undefined) {
+    const policy = parsePausePolicyFlag(values['pause-rendering']);
+    if (policy === null) {
+      process.stderr.write(
+        `Error: --pause-rendering must be one of ${RENDER_PAUSE_POLICIES.join(', ')} (got "${values['pause-rendering']}")\n`,
+      );
+      process.exit(1);
+    }
+    saveSettings({ pauseRendering: policy });
+  }
 
   const emoji = getOrCreateEmoji();
 
@@ -403,6 +423,14 @@ Your terminal app needs microphone permission on macOS:
   // alternateScreen: Ink enters/leaves the alt buffer itself (like vim/htop).
   // incrementalRendering: only changed lines are written. On Windows a full-frame write
   // to ConPTY blocks the event loop for 50-70 ms, which the 10 ms audio path cannot absorb.
+  // Rendering pause policy (see lib/window-state.ts). The window title lets the OS-side
+  // minimized watchers find our window; Windows Terminal's profile pins it anyway.
+  const pausePolicy = loadSettings().pauseRendering;
+  setTerminalTitle(WINDOW_TITLE);
+  const engineLog = (message: string) => engine.send({ type: 'log', message });
+  const stopWatcher = pausePolicy === 'minimized' ? startMinimizedWatcher(engineLog) : () => {};
+  const stdinForInk = pausePolicy === 'unfocused' ? createFocusFilteredStdin(process.stdin) : undefined;
+
   const instance = render(
     <App
       serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
@@ -417,6 +445,9 @@ Your terminal app needs microphone permission on macOS:
     />,
     {
       alternateScreen: true,
+      // Only override stdin when we actually filter it: an explicit `undefined` makes Ink
+      // believe there is no TTY and it stops rendering until unmount.
+      ...(stdinForInk ? { stdin: stdinForInk } : {}),
       incrementalRendering: true,
       onRender: diagnosticsEnabled(values.debug ?? false) ? recordRender : undefined,
     },
@@ -424,8 +455,14 @@ Your terminal app needs microphone permission on macOS:
 
   // After Ink unmounts, stop the engine and exit
   instance.waitUntilExit().then(() => {
+    stopWatcher();
     engine.dispose();
     setTimeout(() => process.exit(0), 100);
   });
-  process.on('exit', () => engine.dispose());
+  process.on('exit', () => {
+    stopWatcher();
+    engine.dispose();
+  });
+  // A plain SIGTERM would skip the 'exit' handlers above.
+  process.on('SIGTERM', () => process.exit(0));
 } // end else (test-camera)

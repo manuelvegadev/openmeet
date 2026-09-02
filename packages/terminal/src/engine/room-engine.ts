@@ -61,6 +61,7 @@ export class RoomEngine {
   private readonly fileOnlyLog = fileLoggingEnabled();
   private levelTimer: ReturnType<typeof setInterval> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
+  private visible = true;
   private stopLoopMonitor: (() => void) | null = null;
 
   constructor(emit: (event: EngineEvent) => void) {
@@ -201,8 +202,10 @@ export class RoomEngine {
     });
 
     ws.connect();
-    this.startLevelPolling();
-    this.startStatsPolling();
+    if (this.visible) {
+      this.startLevelPolling();
+      this.startStatsPolling();
+    }
     this.startDiagnostics();
     this.flushSnapshot();
   }
@@ -234,10 +237,14 @@ export class RoomEngine {
     else this.stopTimers();
   }
 
-  private stopTimers(): void {
+  private stopPolling(): void {
     for (const t of [this.levelTimer, this.statsTimer]) if (t) clearInterval(t);
     this.levelTimer = null;
     this.statsTimer = null;
+  }
+
+  private stopTimers(): void {
+    this.stopPolling();
     this.stopLoopMonitor?.();
     this.stopLoopMonitor = null;
     if (this.snapshotTimer) {
@@ -462,6 +469,23 @@ export class RoomEngine {
     void this.audioManager?.updateDevices(selection);
   }
 
+  /**
+   * Nobody is looking: stop the polls that only feed the display (VU levels, stats). Audio
+   * and signaling are untouched. On return, resume and push a fresh snapshot.
+   */
+  setVisible(visible: boolean): void {
+    if (visible === this.visible) return;
+    this.visible = visible;
+    if (!this.options) return;
+    if (visible) {
+      this.startLevelPolling();
+      this.startStatsPolling();
+      this.flushSnapshot();
+    } else {
+      this.stopPolling();
+    }
+  }
+
   toggleDebug(): void {
     const next = !this.state.debugMode;
     this.patch({ debugMode: next });
@@ -477,6 +501,7 @@ export class RoomEngine {
   // ─── Periodic work ───────────────────────────────────────────────────
 
   private startLevelPolling(): void {
+    if (this.levelTimer) return;
     this.levelTimer = setInterval(() => {
       const am = this.audioManager;
       if (!am) return;
@@ -500,6 +525,7 @@ export class RoomEngine {
   }
 
   private startStatsPolling(): void {
+    if (this.statsTimer) return;
     let prev: PrevStatsEntry | null = null;
     const peerPrevStats = new Map<string, PeerPrevStats>();
 

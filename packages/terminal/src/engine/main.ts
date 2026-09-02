@@ -173,6 +173,9 @@ export function runEngine(): Promise<never> {
       case 'toggle-debug':
         room.toggleDebug();
         break;
+      case 'set-visible':
+        room.setVisible(cmd.visible);
+        break;
       case 'log':
         room.log(cmd.message);
         break;

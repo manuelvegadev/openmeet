@@ -116,6 +116,8 @@ export type EngineCommand =
   | { type: 'set-peer-volume'; peerId: string; volume: number }
   | { type: 'update-devices'; selection: AudioDeviceSelection }
   | { type: 'toggle-debug' }
+  /** TUI hidden (minimized/unfocused per policy): the engine stops level/stats polling until visible. */
+  | { type: 'set-visible'; visible: boolean }
   /** Append a line from the TUI process to the engine's debug log (e.g. render stats). */
   | { type: 'log'; message: string }
   | { type: 'shutdown' };

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { type AudioDevice, listAudioDevices } from '../engine/client.js';
 import { listVideoDevices, type VideoDevice } from '../lib/devices.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
+import { RENDER_PAUSE_POLICIES } from '../lib/window-state.js';
 
 interface SettingsViewProps {
   onBack: () => void;
@@ -15,7 +16,7 @@ interface SettingRow {
   key: string;
   label: string;
   value: string;
-  action: 'pick-input' | 'pick-output' | 'pick-camera' | 'toggle-overlay';
+  action: 'pick-input' | 'pick-output' | 'pick-camera' | 'toggle-overlay' | 'cycle-pause';
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
@@ -53,7 +54,15 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     { key: 'output', label: 'Audio Output', value: outputName, action: 'pick-output' },
     { key: 'camera', label: 'Camera', value: cameraName, action: 'pick-camera' },
     { key: 'overlay', label: 'Video Overlay', value: settings.videoOverlay ? 'On' : 'Off', action: 'toggle-overlay' },
+    {
+      key: 'pause',
+      label: 'Pause Rendering',
+      value: `when ${settings.pauseRendering} (applies on next start)`,
+      action: 'cycle-pause',
+    },
   ];
+  const cycle = <T extends string>(list: readonly T[], current: T): T =>
+    list[(list.indexOf(current) + 1) % list.length];
 
   const update = (patch: Partial<AppSettings>) => {
     const next = { ...settings, ...patch };
@@ -83,6 +92,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       const row = rows[selectedIdx];
       if (row.action === 'toggle-overlay') {
         update({ videoOverlay: !settings.videoOverlay });
+      } else if (row.action === 'cycle-pause') {
+        update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) });
       } else if (row.action === 'pick-input') {
         setStep('pick-input');
       } else if (row.action === 'pick-output') {

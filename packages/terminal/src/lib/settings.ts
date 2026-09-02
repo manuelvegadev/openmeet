@@ -3,6 +3,7 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import type { AudioBackendPreference } from './audio/backend.js';
 import type { InputChannelPolicy } from './audio/channels.js';
+import type { RenderPausePolicy } from './window-state.js';
 
 /** ~/.config/openmeet on macOS/Linux, %APPDATA%\openmeet on Windows. */
 export const CONFIG_DIR =
@@ -27,6 +28,8 @@ export interface AppSettings {
   audioInputChannels: InputChannelPolicy;
   /** Capture gain in dB applied before sending (0 = as captured). */
   audioInputGainDb: number;
+  /** Pause TUI rendering when the window is minimized (default) or unfocused, or never. */
+  pauseRendering: RenderPausePolicy;
 }
 
 const DEFAULTS: AppSettings = {
@@ -38,6 +41,7 @@ const DEFAULTS: AppSettings = {
   audioBackend: 'auto',
   audioInputChannels: 'auto',
   audioInputGainDb: 0,
+  pauseRendering: 'minimized',
 };
 
 let cache: AppSettings | null = null;

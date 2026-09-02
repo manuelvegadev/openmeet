@@ -11,6 +11,7 @@ import type { AudioDeviceSelection } from '../lib/audio/backend.js';
 import type { ScreenDevice } from '../lib/devices.js';
 import { diagnosticsEnabled, drainRenderStats, formatRenderStats, startLoopDelayMonitor } from '../lib/diagnostics.js';
 import { loadSettings } from '../lib/settings.js';
+import { visibility } from '../lib/window-state.js';
 
 export type { ConnectionStats, RoomEvent };
 
@@ -54,19 +55,46 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   const [engineError, setEngineError] = useState<string | null>(null);
   const leftRef = useRef(false);
 
+  // While the window is hidden (see lib/window-state.ts) nothing is applied to React state,
+  // so Ink renders nothing; everything is held and flushed on return.
+  const hiddenRef = useRef(visibility.hidden);
+  const heldState = useRef<RoomState | null>(null);
+  const heldChat = useRef<ChatMessage[]>([]);
+  const heldEvents = useRef<RoomEvent[]>([]);
+
   // Join on mount, leave on unmount. The engine process itself outlives the room screen.
   useEffect(() => {
     leftRef.current = false;
+    const flushHeld = () => {
+      if (heldState.current) setState(heldState.current);
+      if (heldChat.current.length) setChatMessages((prev) => [...prev, ...heldChat.current]);
+      if (heldEvents.current.length) setRoomEvents((prev) => [...prev, ...heldEvents.current].slice(-MAX_ROOM_EVENTS));
+      heldState.current = null;
+      heldChat.current = [];
+      heldEvents.current = [];
+    };
+    const onVisibility = (hidden: boolean) => {
+      hiddenRef.current = hidden;
+      engine.send({ type: 'set-visible', visible: !hidden });
+      if (!hidden) flushHeld();
+    };
+    visibility.on('change', onVisibility);
+    if (visibility.hidden) engine.send({ type: 'set-visible', visible: false });
+
     const unsubscribe = engine.subscribe((event) => {
+      const hidden = hiddenRef.current;
       switch (event.type) {
         case 'state':
-          setState(event.state);
+          if (hidden) heldState.current = event.state;
+          else setState(event.state);
           break;
         case 'chat':
-          setChatMessages((prev) => [...prev, event.message]);
+          if (hidden) heldChat.current.push(event.message);
+          else setChatMessages((prev) => [...prev, event.message]);
           break;
         case 'room-event':
-          setRoomEvents((prev) => [...prev.slice(-(MAX_ROOM_EVENTS - 1)), event.event]);
+          if (hidden) heldEvents.current.push(event.event);
+          else setRoomEvents((prev) => [...prev.slice(-(MAX_ROOM_EVENTS - 1)), event.event]);
           break;
         case 'engine-exited':
           if (!leftRef.current) setEngineError(event.reason);
@@ -91,6 +119,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
 
     return () => {
       unsubscribe();
+      visibility.off('change', onVisibility);
       if (!leftRef.current) {
         leftRef.current = true;
         engine.send({ type: 'leave' });
