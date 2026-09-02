@@ -29,6 +29,24 @@ Info "Installing openmeet-terminal..."
 & npm install -g openmeet-terminal
 if ($LASTEXITCODE -ne 0) { Fail "npm install failed" }
 
+# --- Windows Terminal profile + desktop shortcut (own window, app icon) ---
+$wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+if ($wt) {
+  try {
+    $pkg = Join-Path (& npm root -g) 'openmeet-terminal\windows'
+    $dest = Join-Path $env:LOCALAPPDATA 'openmeet'
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Copy-Item (Join-Path $pkg 'openmeet-icon.png'), (Join-Path $pkg 'openmeet.ico') -Destination $dest -Force
+    & node (Join-Path $pkg 'wt-profile.cjs')
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $pkg 'create-shortcut.ps1')
+    Info "Windows Terminal profile and desktop shortcut created"
+  } catch {
+    Warn "Could not set up the Windows Terminal profile: $_"
+  }
+} else {
+  Warn "Windows Terminal not found; install it from the Microsoft Store for the best experience."
+}
+
 Info "Installed successfully!"
 Write-Host ""
 Write-Host "  Usage:" -ForegroundColor White

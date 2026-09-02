@@ -172,7 +172,8 @@ The engine is the same bundle forked with `--engine` (`engine/client.ts`), start
 | `src/version.ts` | App version: build-time `__APP_VERSION__` via esbuild `define`, runtime fallback reads `package.json` |
 | `build.mjs` | esbuild bundler: ESM, Node 22, bundles source + shared, externals for deps, injects `__APP_VERSION__` |
 | `install.sh` | Curl-pipe installer for macOS/Linux (checks Node 22, warns about sox, then `npm install -g`) |
-| `install.ps1` | PowerShell installer for Windows (installs Node LTS via winget if missing, then `npm install -g`) |
+| `install.ps1` | PowerShell installer for Windows (installs Node LTS via winget if missing, `npm install -g`, then registers the Windows Terminal profile and desktop shortcut) |
+| `windows/wt-profile.cjs`, `windows/create-shortcut.ps1`, `windows/openmeet.ico`/`.png` | "Own window" on Windows: an OpenMeet profile + theme in Windows Terminal (tab row painted `#282c34` as the title bar, app icon, `closeOnExit: always`) and a desktop `.lnk` running `wt -w new --size 110,34 -p OpenMeet`. Shipped in the npm package (`files`). Limits: WT cannot hide the new-tab/dropdown buttons nor change the taskbar icon; the theme is global to the user's terminal |
 | `src/engine/protocol.ts` | IPC contract: `EngineCommand` (TUI → engine), `EngineEvent` (engine → TUI), `RoomState` snapshot, `InputOptions` (channel policy + gain, sent with `join` and `mic-test-start` so the picker's meter shows what a call would send) |
 | `src/engine/room-engine.ts` | `RoomEngine`: the room session without React — signaling, WebRTC, audio, video, stats, debug log. Snapshots coalesced to one per 100 ms |
 | `src/engine/main.ts` | Engine process entry: IPC dispatch, mic test / test tone, crash → `fatal` event, exits on IPC disconnect |

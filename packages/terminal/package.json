@@ -7,7 +7,8 @@
     "openmeet": "./dist/index.js"
   },
   "files": [
-    "dist/index.js"
+    "dist/index.js",
+    "windows/"
   ],
   "scripts": {
     "dev": "tsx src/index.tsx --server ws://localhost:3001/ws",
