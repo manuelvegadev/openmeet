@@ -15,6 +15,9 @@ const MAX_CAPTURE_BACKLOG_FRAMES = 8;
 /** Skip a capture frame when the pipe delivered audio this far ahead of wall-clock. */
 const MAX_DRIFT_MS = 50;
 
+/** Playback runs this many frames ahead of wall-clock so a late timer tick never starves `play`. */
+const PLAYBACK_LEAD_FRAMES = 3;
+
 interface SoxDeviceArgs {
   /** Extra env for `rec` / `play` (Linux PulseAudio routing). */
   recEnv: Record<string, string>;
@@ -58,6 +61,8 @@ export class SoxBackend implements AudioBackend {
   private fifoPath: string | null = null;
   private fifoStream: WriteStream | null = null;
   private clockTimer: ReturnType<typeof setInterval> | null = null;
+  private playbackStartMs = 0;
+  private framesWritten = 0;
   private callbacks: AudioStreamCallbacks | null = null;
   private readonly playbackFrame = new Int16Array(FRAME_SAMPLES);
   private _running = false;
@@ -150,21 +155,15 @@ export class SoxBackend implements AudioBackend {
           continue;
         }
 
-        this.callbacks?.onCapture(frame);
-        // Capture clocks playback: one output frame per input frame.
-        this.tickPlayback();
+        this.callbacks?.onCapture(frame, SAMPLE_RATE);
       }
     });
 
-    proc.on('error', (err) => {
-      this.callbacks?.onError?.(`sox capture failed: ${err.message}`);
-      this.ensureClock();
-    });
+    proc.on('error', (err) => this.callbacks?.onError?.(`sox capture failed: ${err.message}`));
     proc.on('close', () => {
       if (this.recProcess === proc) {
         this.recProcess = null;
         this.callbacks?.onDebug?.('Audio capture stopped');
-        this.ensureClock();
       }
     });
   }
@@ -199,22 +198,33 @@ export class SoxBackend implements AudioBackend {
       }
     });
     this.callbacks?.onDebug?.('Audio playback started (sox, stereo)');
+
+    // Playback is paced by wall-clock, not by capture: `rec` delivers its pipe in bursts
+    // and on a different device clock, and clocking the mixer from it produced a glitch
+    // every few frames. A short timer tops the FIFO up to exactly real-time plus a small
+    // lead; `play` drains it at the device rate and the OS pipe absorbs the timer jitter.
+    this.playbackStartMs = performance.now();
+    this.framesWritten = 0;
+    this.clockTimer = setInterval(() => this.tickPlayback(), 5);
   }
 
   private tickPlayback(): void {
     const stream = this.fifoStream;
     if (!stream?.writable || !this.callbacks) return;
-    // Bursts after an event-loop stall would pile up in the OS pipe and add latency that
-    // never recovers, so skip frames while the FIFO is already well ahead.
-    if (stream.writableLength >= MAX_PLAYBACK_BUFFER) return;
-    this.callbacks.onPlayback(this.playbackFrame);
-    stream.write(Buffer.from(this.playbackFrame.buffer, this.playbackFrame.byteOffset, this.playbackFrame.byteLength));
-  }
-
-  /** Fallback clock when capture is not running (no mic, rec died): timer-driven playback. */
-  private ensureClock(): void {
-    if (this.clockTimer || !this._running) return;
-    this.clockTimer = setInterval(() => this.tickPlayback(), 10);
+    const due = Math.floor((performance.now() - this.playbackStartMs) / 10) + PLAYBACK_LEAD_FRAMES;
+    while (this.framesWritten < due) {
+      // Node only buffers here when the OS pipe is full, i.e. `play` has fallen far behind
+      // (or died): drop what is due instead of building latency that never recovers.
+      if (stream.writableLength >= MAX_PLAYBACK_BUFFER) {
+        this.framesWritten = due;
+        break;
+      }
+      this.callbacks.onPlayback(this.playbackFrame);
+      // Copy: the stream may queue the chunk and write it later, and playbackFrame is
+      // reused on the next tick. Writing a view here corrupted every queued frame.
+      stream.write(Buffer.from(this.playbackFrame.buffer.slice(0, this.playbackFrame.byteLength)));
+      this.framesWritten++;
+    }
   }
 
   private removeFifo(): void {
