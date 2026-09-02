@@ -35,6 +35,11 @@ jobs:
       - name: Type-check terminal
         run: pnpm --filter openmeet-terminal exec tsc --noEmit
 
+      - name: Audio unit checks (resampler, channel policy)
+        run: |
+          pnpm --filter openmeet-terminal exec tsx scripts/resampler-test.ts
+          pnpm --filter openmeet-terminal exec tsx scripts/channels-test.ts
+
       # Loads the native addons (wrtc, audify) on this platform. No audio devices on a
       # runner, so device enumeration is expected to be empty — it must not throw.
       - name: Smoke-test native modules
