@@ -1,6 +1,6 @@
 # WebSocket + WebRTC Architecture
 
-This document explains how OpenMeet uses WebSocket signaling and WebRTC peer connections to deliver real-time video conferencing with simultaneous webcam and screen sharing.
+This document explains how OpenMeet uses WebSocket signaling and WebRTC peer connections to deliver real-time audio, webcam and screen sharing between terminal clients.
 
 ## High-Level Architecture
 
@@ -17,20 +17,14 @@ Client A <──── WebRTC P2P (media) ────> Client B
 
 ## WebSocket Layer
 
-### Client (`packages/client/src/lib/websocket.ts`)
+### Client (`packages/terminal/src/lib/websocket.ts`)
 
-`WebSocketClient` is a standalone class (no React dependency) that manages a single WebSocket connection.
+`WebSocketClient` wraps a single `ws` connection.
 
 **Key features:**
-- **Auto-reconnect**: Exponential backoff (1s, 2s, 4s, ... up to 10s), max 10 attempts.
+- **Auto-reconnect**: Exponential backoff, max 10 attempts.
 - **Pub/sub**: `subscribe(handler)` and `onConnectionChange(handler)` return unsubscribe functions.
-- **Disposed flag**: When `disconnect()` is called, `disposed = true` suppresses `onclose`/`onerror` handlers to prevent spurious reconnect attempts during intentional teardown (important for React Strict Mode).
-
-### React Hook (`packages/client/src/hooks/use-websocket.ts`)
-
-`useWebSocket(onMessage)` creates a `WebSocketClient` on mount, subscribes to messages, and cleans up on unmount. Returns `{ send, connected }`.
-
-The `onMessage` callback is stored in a ref to avoid effect re-runs when the handler identity changes.
+- **Disposed flag**: When `disconnect()` is called, `disposed = true` suppresses `close`/`error` handlers to prevent spurious reconnect attempts during intentional teardown.
 
 ### Server (`packages/server/src/signaling.ts`)
 
@@ -60,7 +54,7 @@ All messages are a discriminated union (`WSMessage`) keyed by `type`. Key messag
 | `ice-candidate` | Client → Client (via server) | ICE candidate for NAT traversal |
 | `mute-state` | Client → Clients (broadcast) | Audio/video mute state (`isAudioMuted`, `isVideoMuted`) |
 | `screen-share-state` | Client → Clients (broadcast) | Screen sharing on/off (`isScreenSharing`) |
-| `chat-message` | Client → Server | Chat text/file message |
+| `chat-message` | Client → Server | Chat text message |
 | `chat-broadcast` | Server → Clients | Delivered chat message |
 
 ## WebRTC Layer
@@ -94,53 +88,42 @@ Every peer connection creates exactly 3 transceivers in a fixed order:
 
 This fixed ordering is critical — both sides create transceivers in the same order so that after SDP exchange, `getTransceivers()` returns them in m-line order.
 
-### PeerConnectionManager (`packages/client/src/lib/webrtc.ts`)
+### PeerConnectionManager (`packages/terminal/src/lib/webrtc.ts`)
 
-Manages all peer connections and track routing.
-
-**Key methods:**
+Manages all peer connections with `@roamhq/wrtc`.
 
 | Method | Purpose |
 |---|---|
-| `createConnection(peerId)` | Offerer path: create PC, create offer, send via signaling |
-| `handleOffer(peerId, sdp)` | Answerer path: create/get PC, set remote desc, create answer |
+| `createConnection(peerId)` | Offerer path: create PC with 3 transceivers, create offer, send via signaling |
+| `handleOffer(peerId, sdp)` | Answerer path: create PC via `addTrack`, set remote desc, force `sendrecv` directions, create answer |
 | `handleAnswer(peerId, sdp)` | Set remote description from answer |
 | `handleIceCandidate(peerId, candidate)` | Add ICE candidate |
-| `setLocalStream(stream)` | Attach webcam/mic to existing connections (transceivers 0+1) |
-| `setScreenStream(stream)` | Attach screen to transceiver 2, toggle direction, renegotiate |
-| `removeConnection(peerId)` | Close PC, clean up streams |
+| `setVideoTrack(track)` | Attach webcam to transceiver 1 |
+| `setScreenTrack(track)` | Attach screen to transceiver 2, toggle direction, renegotiate |
+| `removeConnection(peerId)` | Close PC, cancel retries |
+
+**Answerer path detail:** only `addTrack`-created transceivers are eligible for m-line matching during `setRemoteDescription`, so the answerer pre-attaches audio with `addTrack` and lets `setRemoteDescription` create the two video transceivers. Those default to `recvonly`, so directions are explicitly set to `sendrecv` before `createAnswer()`.
 
 ### Track Routing (ontrack handler)
 
-The `ontrack` handler routes incoming tracks to the correct stream using **arrival order** rather than transceiver identification:
-
-```
-ontrack fires for video track
-  → Does the remote webcam stream already have a video track?
-    → YES: This must be the screen share track → handleScreenTrack()
-    → NO:  This is the first (webcam) video track → add to webcam stream
-ontrack fires for audio track
-  → Always goes to the webcam stream
-```
-
-This approach avoids comparing transceiver references or mids, which can fail during renegotiation when browsers return different wrapper objects. The `ontrack` event is guaranteed to fire in m-line order (audio → webcam video → screen video), so the first video track is always the webcam.
+Incoming tracks are routed by arrival order: the audio track goes to the peer's audio sink, the first video track is the webcam, and the second video track is the screen share. Tracks are stored in refs and attached to `VideoManager` (ffplay windows) on demand when the user presses `w` or `e`.
 
 ### Screen Share Flow
 
 ```
 User A starts screen sharing:
 
-1. getDisplayMedia() → screenStream
-2. setScreenStream(screenStream) on PeerConnectionManager:
+1. ffmpeg captures the screen → RTCVideoSource track
+2. setScreenTrack(track) on PeerConnectionManager:
    - replaceTrack(screenTrack) on transceiver 2's sender
    - Change transceiver 2 direction: recvonly → sendrecv
-   - Renegotiate (new offer/answer exchange)
+   - Renegotiate (new offer/answer exchange, SDP munged to force a=sendrecv on the screen m-line)
 3. Broadcast screen-share-state { isScreenSharing: true } via WebSocket
 
 User B receives:
-4. WebSocket message: screen-share-state → sets remoteScreenShareStates[A] = true
-5. WebRTC renegotiation → ontrack fires for screen video (or onunmute fallback)
-6. Track routed to screen stream → VideoGrid shows separate screen tile
+4. WebSocket message: screen-share-state → marks A as sharing
+5. WebRTC renegotiation → ontrack fires for screen video
+6. Pressing `e` on A opens an ffplay window with the screen track
 
 User A stops screen sharing:
 7. replaceTrack(null) on transceiver 2's sender
@@ -149,77 +132,38 @@ User A stops screen sharing:
 10. Broadcast screen-share-state { isScreenSharing: false }
 
 User B receives:
-11. WebSocket message: screen-share-state → immediately sets screenStream to null
-    (prevents showing last decoded frame)
+11. WebSocket message: screen-share-state → closes A's screen window
 ```
 
-### Screen Track `onunmute` Fallback
+### Glare Handling (perfect negotiation)
 
-During renegotiation, `ontrack` may not fire for the screen transceiver when its direction changes from `inactive` to `sendrecv` (the receiver track already exists, it just becomes unmuted). To handle this:
+If both peers send offers simultaneously, the peer with the lexicographically smaller ID is *polite* and yields; the other is *impolite* and ignores the incoming offer. `@roamhq/wrtc` does not support `setLocalDescription({ type: 'rollback' })`, so the polite peer closes its connection and recreates it as the answerer.
 
-```typescript
-// Set up during createPeerConnection, after creating transceiver 2:
-const screenReceiverTrack = getScreenTransceiver(pc)?.receiver?.track;
-screenReceiverTrack.onunmute = () => {
-  this.handleScreenTrack(peerId, screenReceiverTrack);
-};
-```
+### Connection Retry
 
-The `unmute` event on the receiver track fires reliably when the remote side starts sending, regardless of whether `ontrack` fires.
-
-### Glare Handling
-
-If both peers send offers simultaneously (both in `have-local-offer` state), the receiver rolls back its own offer before processing the remote one:
-
-```typescript
-if (pc.signalingState === 'have-local-offer') {
-  await pc.setLocalDescription({ type: 'rollback' });
-}
-await pc.setRemoteDescription(sdp);
-```
+Failed connections are retried with exponential backoff (1s, 2s, 4s, max 3 attempts). Only the impolite peer retries, avoiding simultaneous retry storms.
 
 ### SDP Modification
 
-`enableStereoOpus()` patches the SDP to enable stereo audio:
+`boostOpusQuality()` (`packages/terminal/src/lib/sdp.ts`) patches Opus `fmtp` lines to enable stereo at 256kbps:
 
 ```
 a=fmtp:111 minptime=10;useinbandfec=1
-→ a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1
+→ a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=256000
 ```
 
 ### Renegotiation
 
-Renegotiation (new offer/answer exchange on an existing connection) is triggered by:
-- **Screen share start/stop**: Transceiver 2 direction changes
-- **Late camera arrival**: Transceiver direction upgrade from `recvonly` to `sendrecv`
-- **New track added**: When `replaceTrack` isn't sufficient
+Renegotiation (new offer/answer exchange on an existing connection) is triggered by screen share start/stop (transceiver 2 direction change). The `makingOffer` set prevents concurrent renegotiations with the same peer.
 
-The `makingOffer` set prevents concurrent renegotiations with the same peer.
+## Room Orchestration (`packages/terminal/src/hooks/use-room.ts`)
 
-## React Integration (`packages/client/src/hooks/use-webrtc.ts`)
+`useRoom` wires `WebSocketClient`, `PeerConnectionManager`, the sox audio pipeline and `VideoManager` together and exposes room state to the Ink UI:
 
-`useWebRTC(send, localStream, screenStream)` wraps `PeerConnectionManager` with React state:
-
-**State managed:**
-- `remoteStreams: RemoteStream[]` — per-peer webcam + screen streams
-- `participants: Participant[]` — room membership
-- `screenShareStates: Record<string, boolean>` — who is screen sharing
-
-**Key behavior:**
-- `handleSignalingMessage` dispatches WebSocket messages to the manager
-- `screen-share-state: false` immediately clears `screenStream` to `null` (prevents last-frame persistence)
-- Local stream/screen stream changes are forwarded to the manager via effects
-
-### RemoteStream Interface
-
-```typescript
-interface RemoteStream {
-  peerId: string;
-  username: string;
-  webcamStream: MediaStream;      // Audio + webcam video
-  screenStream: MediaStream | null; // Screen video (null when not sharing)
-}
-```
+- `participants` — room membership
+- `remoteMuteStates`, `remoteVideoMuteStates`, `remoteScreenShareStates` — per-peer media state from WebSocket broadcasts
+- `messages` — chat history
+- `stats` — bitrate, RTT, packet loss and per-peer latency estimates from the WebRTC stats loop
 
 ## Mute/Video State Broadcasting
 
@@ -230,12 +174,12 @@ Media state is broadcast via WebSocket (not WebRTC) for reliability:
 send({
   type: 'mute-state',
   fromId: myId,
-  isAudioMuted: !media.isAudioEnabled,
-  isVideoMuted: !media.isVideoEnabled,
+  isAudioMuted,
+  isVideoMuted,
 });
 ```
 
-Re-broadcasting on `participants.length` change ensures newcomers immediately learn the mute/video state of all existing participants.
+Re-broadcasting on `participants.length` change ensures newcomers immediately learn the mute/video and screen share state of all existing participants.
 
 ## Connection Resilience
 
@@ -245,35 +189,5 @@ Re-broadcasting on `participants.length` change ensures newcomers immediately le
 | Re-join on reconnect | `connected` state change triggers `join-room` |
 | State re-broadcast | Mute/screen-share state re-sent when participants change |
 | Server keepalive | WebSocket ping every 25s |
-| Connection failure | `onconnectionstatechange` → remove failed peer connection |
+| Connection failure | `onconnectionstatechange` → retry with backoff (impolite peer only), then remove |
 | Disposed flag | Prevents reconnect storms during intentional teardown |
-
-## Data Flow Diagram
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Room Page                            │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
-│  │useWebSocket│  │useWebRTC │  │ useMedia │  │  useState   │ │
-│  │  send()   │  │ manager  │  │ stream   │  │ muteStates │  │
-│  │  connected│  │ remotes  │  │ screen   │  │ videoMutes │  │
-│  └─────┬─────┘  └────┬─────┘  └────┬─────┘  └──────┬─────┘  │
-│        │             │             │               │         │
-│        ▼             ▼             ▼               ▼         │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │                    VideoGrid                          │   │
-│  │  localWebcam + localScreen + remoteStreams[]          │   │
-│  │  + remoteMuteStates + remoteVideoMuteStates          │   │
-│  │  + remoteScreenShareStates                           │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-
-WebSocket Messages:                WebRTC Media:
-  join-room ──────►                  Audio ◄──────►
-  room-joined ◄────                  Webcam ◄─────►
-  offer/answer ◄──►                  Screen ◄─────►
-  ice-candidate ◄─►
-  mute-state ──────►
-  screen-share-state►
-  chat-message ────►
-```

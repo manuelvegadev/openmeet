@@ -67,9 +67,6 @@ export interface ChatMessage {
   roomId: string;
   username: string;
   content: string;
-  contentType: 'text' | 'image' | 'file';
-  fileUrl?: string;
-  fileName?: string;
   timestamp: number;
 }
 

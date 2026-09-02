@@ -9,16 +9,17 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml .npmrc pnpm-lock.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/
-COPY packages/client/package.json ./packages/client/
+COPY packages/terminal/package.json ./packages/terminal/
 
-RUN pnpm install --frozen-lockfile
+# Install only what the server needs (skips the terminal's native WebRTC build)
+RUN pnpm install --frozen-lockfile --filter "@openmeet/server..."
 
 # Copy source
-COPY packages/ ./packages/
+COPY packages/shared/ ./packages/shared/
+COPY packages/server/ ./packages/server/
 
-# Build in order: shared -> client -> server
+# Build in order: shared -> server
 RUN pnpm --filter @openmeet/shared build
-RUN pnpm --filter @openmeet/client build
 RUN pnpm --filter @openmeet/server build
 
 # Prune dev dependencies
@@ -38,9 +39,6 @@ COPY --from=builder /app/packages/shared/package.json ./packages/shared/
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
 COPY --from=builder /app/packages/server/package.json ./packages/server/
 COPY --from=builder /app/packages/server/node_modules ./packages/server/node_modules
-COPY --from=builder /app/packages/client/dist ./packages/client/dist
-
-RUN mkdir -p /app/uploads
 
 ENV NODE_ENV=production
 ENV PORT=3001

@@ -4,5 +4,4 @@ dist
 */dist
 .git
 .env
-uploads
 *.md

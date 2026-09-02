@@ -1,19 +1,20 @@
 # OpenMeet
 
-Lightweight, self-hosted video conferencing. Create or join a room, share your webcam, mic, screen, and chat — all peer-to-peer with no account required.
+Lightweight, self-hosted audio/video conferencing from the terminal. Create or join a room, talk over stereo Opus audio, share your webcam or screen, and chat — all peer-to-peer with no account required.
+
+The project has two parts:
+
+- **Server** — a small Express + WebSocket signaling server (no database, no auth)
+- **Terminal client** — a TUI published to npm as [`openmeet-terminal`](packages/terminal/README.md)
 
 ## Features
 
-- **Video & audio calls** — WebRTC peer-to-peer mesh (up to 6 participants)
-- **Screen sharing** — share your screen with fullscreen mode
-- **System audio sharing** — mix mic + system audio (music, presentations) into a single stream
-- **Chat** — text messages, image previews, and file sharing
-- **Fun identities** — random emoji avatars (animals, fruits, funny faces) assigned per user
-- **Spotlight view** — click any tile to focus it full-size (Discord-style)
-- **Debug overlay** — real-time WebRTC stats (codec, bitrate, resolution, RTT, packet loss)
-- **Device preferences** — camera, mic, and echo cancellation settings saved across sessions
-- **Responsive layout** — adapts grid to portrait/landscape orientation
-- **No sign-up** — join via room code or direct URL
+- **Audio calls** — WebRTC peer-to-peer mesh (up to 6 participants), stereo Opus at 256kbps
+- **Webcam and screen sharing** — 1080p video sent via ffmpeg, received in native ffplay windows
+- **Chat** — text messages alongside the call
+- **Per-peer volume, VU meters and latency estimates** — see who is talking and how far away they are
+- **Emoji identities** — random emoji usernames, no sign-up
+- **Connection recovery** — automatic retry with exponential backoff
 
 ## Architecture
 
@@ -23,25 +24,24 @@ Client A <──WebRTC P2P──> Client B
    │   WebSocket (signaling) │
    └──────> Server <─────────┘
               │
-        SQLite (in-memory)
+        In-memory Maps
 ```
 
 - **Signaling** — WebSocket server relays SDP offers/answers and ICE candidates
 - **Media** — direct P2P connections between clients (no SFU/MCU)
-- **Storage** — in-memory SQLite for rooms and participants (ephemeral by design)
-- **Files** — uploaded to the server via HTTP, URL shared through chat
+- **Storage** — in-memory Maps for rooms and participants (ephemeral by design)
+
+See [docs/websocket-webrtc-architecture.md](docs/websocket-webrtc-architecture.md) for the full signaling and WebRTC flow.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 19, Vite 7, TypeScript, Tailwind CSS 4 |
-| Routing | TanStack Router (file-based) |
-| UI components | shadcn/ui, Lucide icons |
-| Backend | Express 5, ws (WebSocket), Node.js 22 |
-| Database | better-sqlite3 (in-memory) |
-| File uploads | Multer |
+| Server | Express 5, ws (WebSocket), Node.js 22 |
+| Terminal client | Ink 5 (React for terminals), @roamhq/wrtc, sox, ffmpeg |
+| Shared types | TypeScript |
 | Monorepo | pnpm workspaces |
+| Lint/format | Biome |
 | Containerization | Docker (multi-stage Alpine build) |
 
 ## Project Structure
@@ -50,13 +50,8 @@ Client A <──WebRTC P2P──> Client B
 openmeet/
 ├── packages/
 │   ├── shared/          # TypeScript types (WebSocket messages, Room, Participant)
-│   ├── server/          # Express + WebSocket signaling + chat + file uploads
-│   └── client/          # React SPA
-│       └── src/
-│           ├── routes/          # TanStack file-based routes
-│           ├── components/      # VideoTile, VideoGrid, TopBar, ControlsBar, ChatPanel
-│           ├── hooks/           # useWebSocket, useWebRTC, useMedia, useAudioLevel
-│           └── lib/             # WebRTC manager, utilities
+│   ├── server/          # Express + WebSocket signaling + chat
+│   └── terminal/        # openmeet-terminal TUI client (npm package)
 ├── Dockerfile
 ├── docker-compose.yml
 └── pnpm-workspace.yaml
@@ -68,6 +63,7 @@ openmeet/
 
 - Node.js >= 22
 - pnpm (`corepack enable`)
+- sox (audio) and ffmpeg (video, optional) for the terminal client
 
 ### Setup
 
@@ -75,11 +71,12 @@ openmeet/
 # Install dependencies
 pnpm install
 
-# Start dev servers (client on :5173, server on :3001)
+# Start the server on :3001 (and the shared package in watch mode)
 pnpm dev
-```
 
-The client dev server proxies `/api` and `/uploads` requests to the server at `localhost:3001`.
+# Run the terminal client against the local server
+pnpm --filter openmeet-terminal dev
+```
 
 ### Building
 
@@ -87,7 +84,7 @@ The client dev server proxies `/api` and `/uploads` requests to the server at `l
 pnpm build
 ```
 
-Builds all packages in order: shared → client → server.
+Builds all packages in order: shared → server → terminal.
 
 ## Deployment
 
@@ -99,10 +96,10 @@ docker compose up --build
 
 # Or build the image directly
 docker build -t openmeet .
-docker run -p 3001:3001 -v uploads:/app/uploads openmeet
+docker run -p 3001:3001 openmeet
 ```
 
-The production server serves the client SPA and handles API/WebSocket on port **3001**.
+The production container runs the signaling server on port **3001**.
 
 ### Manual
 
@@ -117,7 +114,6 @@ NODE_ENV=production node packages/server/dist/index.js
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3001` | Server port |
-| `NODE_ENV` | — | Set to `production` to serve the built client |
 
 ## Network Notes
 

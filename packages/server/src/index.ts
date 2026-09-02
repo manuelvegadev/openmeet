@@ -1,23 +1,13 @@
 import { createServer } from 'node:http';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import cors from 'cors';
 import express from 'express';
 import { config } from './config.js';
-import { uploadRouter } from './file-upload.js';
 import { createRoom, getRoom, listRooms } from './room-manager.js';
 import { setupSignaling } from './signaling.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const server = createServer(app);
 
-app.use(cors({ origin: config.corsOrigin }));
 app.use(express.json());
-
-// Serve uploaded files
-app.use('/uploads', express.static(config.uploadDir));
 
 // REST API
 app.get('/api/rooms', (_req, res) => {
@@ -42,27 +32,6 @@ app.get('/api/rooms/:id', (req, res) => {
   }
   res.json(room);
 });
-
-// File upload
-app.use(uploadRouter);
-
-// In production, serve the built client
-if (process.env.NODE_ENV === 'production') {
-  const clientDist = path.resolve(__dirname, '../../client/dist');
-  const indexPath = path.join(clientDist, 'index.html');
-  app.use(express.static(clientDist));
-  // SPA fallback: serve index.html for all non-API/upload GET requests
-  app.get('/', (_req, res) => {
-    res.sendFile(indexPath);
-  });
-  app.get('{*path}', (req, res, next) => {
-    if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads') && !req.path.startsWith('/ws')) {
-      res.sendFile(indexPath);
-    } else {
-      next();
-    }
-  });
-}
 
 // Setup WebSocket signaling
 setupSignaling(server);

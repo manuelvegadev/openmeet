@@ -188,7 +188,6 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         roomId,
         username,
         content: content.trim(),
-        contentType: 'text',
         timestamp: 0,
       });
     },

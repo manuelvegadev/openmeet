@@ -178,8 +178,7 @@ export class PeerConnectionManager {
     let pc = this.connections.get(peerId);
 
     // Perfect negotiation — detect offer collision (glare).
-    // Uses the same lexicographic ID comparison as the web client so both
-    // sides agree on who yields and who ignores.
+    // Lexicographic ID comparison so both sides agree on who yields and who ignores.
     const offerCollision = this.makingOffer.has(peerId) || (pc && pc.signalingState !== 'stable');
     const polite = this.myId < peerId;
 

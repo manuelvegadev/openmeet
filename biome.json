@@ -39,6 +39,6 @@
     }
   },
   "files": {
-    "includes": ["packages/**/*.ts", "packages/**/*.tsx", "packages/**/*.json", "!**/routeTree.gen.ts", "!**/dist"]
+    "includes": ["packages/**/*.ts", "packages/**/*.tsx", "packages/**/*.json", "!**/dist"]
   }
 }
