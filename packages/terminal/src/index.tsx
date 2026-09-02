@@ -106,7 +106,7 @@ Usage: openmeet [options]
   --input-device <name>  Input device name (skip device picker)
   --output-device <name> Output device name (skip device picker)
   --no-video             Disable video (audio-only mode)
-  --audio-backend <name> Audio I/O backend: rtaudio (native; default on Windows) or sox (default on macOS/Linux)
+  --audio-backend <name> Audio I/O backend: rtaudio (native; default on macOS/Windows) or sox (default on Linux)
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay (name, stream type, resolution)
   --test-camera          Test camera capture (opens ffplay preview, no room join)

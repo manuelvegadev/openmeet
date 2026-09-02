@@ -19,7 +19,12 @@ export interface PlatformSupport {
 export function getPlatformSupport(): PlatformSupport {
   switch (platform()) {
     case 'darwin':
-      return { name: 'macOS', features: 'audio, chat, video, screen share', video: true, defaultAudioBackend: 'sox' };
+      return {
+        name: 'macOS',
+        features: 'audio, chat, video, screen share',
+        video: true,
+        defaultAudioBackend: 'rtaudio',
+      };
     case 'win32':
       return { name: 'Windows', features: 'audio, chat', video: false, defaultAudioBackend: 'rtaudio' };
     case 'linux':
