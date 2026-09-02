@@ -87,6 +87,17 @@ interface ResolvedDevice {
 }
 
 /**
+ * The rate to open the capture stream at: the device's preferred (shared-mode) rate when
+ * it is not 48 kHz and can be cut into 10 ms frames, else 48 kHz.
+ */
+function nativeCaptureRate(info: RtDeviceInfo): number {
+  const rate = info.preferredSampleRate;
+  if (!rate || rate === SAMPLE_RATE || rate % 100 !== 0) return SAMPLE_RATE;
+  if (info.sampleRates.length > 0 && !info.sampleRates.includes(rate)) return SAMPLE_RATE;
+  return rate;
+}
+
+/**
  * Native backend on top of audify (RtAudio): WASAPI on Windows, CoreAudio on macOS.
  * One duplex stream when the driver allows it, otherwise separate input/output streams.
  * Frames are re-chunked to 480 samples regardless of the driver's period.
@@ -99,11 +110,13 @@ export class RtAudioBackend implements AudioBackend {
   private callbacks: AudioStreamCallbacks | null = null;
   private clockTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Capture re-chunking (driver period → 480-frame stereo frames)
+  // Capture re-chunking (driver period → 10 ms stereo frames at the capture rate)
   private inChannels = CHANNELS;
+  private inRate = SAMPLE_RATE;
+  private inFrames = FRAME_SIZE;
   private inAccum = new Int16Array(0);
   private inAccumLen = 0;
-  private readonly captureFrame = new Int16Array(FRAME_SAMPLES);
+  private captureFrame = new Int16Array(FRAME_SAMPLES);
 
   // Playback re-chunking (480-frame stereo frames → driver period)
   private outChannels = CHANNELS;
@@ -148,6 +161,12 @@ export class RtAudioBackend implements AudioBackend {
 
     this.inChannels = inDev?.channels ?? CHANNELS;
     this.outChannels = outDev?.channels ?? CHANNELS;
+    // Capture at the device's native shared-mode rate when it is not 48 kHz: RtAudio's
+    // WASAPI capture resampler produces audible artifacts ("robotic" voice), while
+    // libwebrtc resamples the pushed frames cleanly. Playback keeps 48 kHz — the render
+    // side of the driver resampler is fine.
+    this.inRate = inDev ? nativeCaptureRate(inDev.info) : SAMPLE_RATE;
+    this.inFrames = this.inRate / 100;
     this.resetChunkers();
 
     const inParams = inDev ? { deviceId: inDev.info.id, nChannels: inDev.channels, firstChannel: 0 } : null;
@@ -160,7 +179,7 @@ export class RtAudioBackend implements AudioBackend {
       else callbacks.onError?.(`RtAudio: ${msg}`);
     };
 
-    if (inParams && outParams) {
+    if (inParams && outParams && this.inRate === SAMPLE_RATE) {
       // Preferred: one duplex stream, input and output share a clock.
       try {
         const rt = new audify.RtAudio(pickApi(audify));
@@ -218,8 +237,8 @@ export class RtAudioBackend implements AudioBackend {
         null,
         inParams,
         FORMAT_SINT16,
-        SAMPLE_RATE,
-        FRAME_SIZE,
+        this.inRate,
+        this.inFrames,
         'openmeet-in',
         (data) => this.onInput(data),
         null,
@@ -233,7 +252,7 @@ export class RtAudioBackend implements AudioBackend {
       this.clockTimer = setInterval(() => this.feedOutput(), 10);
     }
     callbacks.onDebug?.(
-      `Audio (${(this.output ?? this.input)?.getApi()}): split streams, in ${inDev?.info.name ?? 'none'} out ${outDev?.info.name ?? 'none'}`,
+      `Audio (${(this.output ?? this.input)?.getApi()}): split streams, in ${inDev?.info.name ?? 'none'} @ ${this.inRate} Hz, out ${outDev?.info.name ?? 'none'} @ ${SAMPLE_RATE} Hz`,
     );
     this.startStats();
   }
@@ -316,8 +335,10 @@ export class RtAudioBackend implements AudioBackend {
   // ─── Capture path ────────────────────────────────────────────────────
 
   private resetChunkers(): void {
-    this.inAccum = new Int16Array(FRAME_SIZE * this.inChannels * 4);
+    this.inAccum = new Int16Array(this.inFrames * this.inChannels * 4);
     this.inAccumLen = 0;
+    if (this.captureFrame.length !== this.inFrames * CHANNELS)
+      this.captureFrame = new Int16Array(this.inFrames * CHANNELS);
     this.outAccum = new Int16Array(0);
     this.outAccumLen = 0;
     this.queuedPeriods = 0;
@@ -344,9 +365,9 @@ export class RtAudioBackend implements AudioBackend {
     }
     this.lastInputAt = now;
     const incoming = new Int16Array(data.buffer, data.byteOffset, data.byteLength >> 1);
-    const perFrame = FRAME_SIZE * this.inChannels;
+    const perFrame = this.inFrames * this.inChannels;
 
-    // Accumulate the driver period and emit whole 480-frame chunks.
+    // Accumulate the driver period and emit whole 10 ms chunks.
     if (this.inAccumLen + incoming.length > this.inAccum.length) {
       const grown = new Int16Array((this.inAccumLen + incoming.length) * 2);
       grown.set(this.inAccum.subarray(0, this.inAccumLen));
@@ -359,8 +380,8 @@ export class RtAudioBackend implements AudioBackend {
     while (this.inAccumLen - offset >= perFrame) {
       const chunk = this.inAccum.subarray(offset, offset + perFrame);
       if (this.inChannels === 2) this.captureFrame.set(chunk);
-      else upmixMonoToStereo(chunk, this.captureFrame, FRAME_SIZE);
-      cb.onCapture(this.captureFrame);
+      else upmixMonoToStereo(chunk, this.captureFrame, this.inFrames);
+      cb.onCapture(this.captureFrame, this.inRate);
       offset += perFrame;
       // In duplex (and split) mode the input clock drives the output queue.
       if (!this.clockTimer) this.feedOutput();

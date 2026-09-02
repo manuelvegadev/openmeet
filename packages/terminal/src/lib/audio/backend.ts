@@ -24,11 +24,13 @@ export type AudioBackendPreference = 'auto' | AudioBackendName;
 
 export interface AudioStreamCallbacks {
   /**
-   * One 10 ms frame of interleaved stereo Int16 PCM (480 × 2 samples), clocked by the
-   * capture device. The array is owned by the callee and may be reused by the backend
-   * after the call returns.
+   * One 10 ms frame of interleaved stereo Int16 PCM (sampleRate / 100 frames × 2), clocked
+   * by the capture device. `sampleRate` is 48 kHz unless the device runs natively at
+   * another rate, in which case frames are delivered at that rate and WebRTC resamples
+   * (its resampler is far better than the driver-level one). The array may be reused by
+   * the backend after the call returns.
    */
-  onCapture: (samples: Int16Array) => void;
+  onCapture: (samples: Int16Array, sampleRate: number) => void;
   /**
    * Called when the backend needs the next 10 ms output frame. The callee fills `out`
    * (480 × 2 interleaved Int16) — silence if there is nothing to play.

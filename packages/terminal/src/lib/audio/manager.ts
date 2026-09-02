@@ -1,7 +1,7 @@
 import wrtc from '@roamhq/wrtc';
 import type { AudioBackend, AudioDeviceSelection } from './backend.js';
 import { createAudioBackend } from './backend.js';
-import { CHANNELS, computeRMS, FRAME_SAMPLES, FRAME_SIZE, SAMPLE_RATE, SPEAKING_RMS_THRESHOLD } from './constants.js';
+import { CHANNELS, computeRMS, FRAME_SAMPLES, SAMPLE_RATE, SPEAKING_RMS_THRESHOLD } from './constants.js';
 import { FrameMixer, PeerPlayoutBuffer } from './mixer.js';
 import { type CaptureProcessor, CaptureProcessorChain } from './processors.js';
 
@@ -47,6 +47,7 @@ export class AudioManager {
   private readonly mixer = new FrameMixer();
   private readonly processors = new CaptureProcessorChain();
   private _isMuted = false;
+  private warnedProcessorRate = false;
   private started = false;
   private opening = false;
   private restarts = 0;
@@ -122,7 +123,7 @@ export class AudioManager {
       const backend = this.backend ?? (await createAudioBackend());
       this.backend = backend;
       await backend.start(this.selection, {
-        onCapture: (samples) => this.handleCapture(samples),
+        onCapture: (samples, sampleRate) => this.handleCapture(samples, sampleRate),
         onPlayback: (out) => this.handlePlayback(out),
         onError: (msg) => this.handleBackendError(msg),
         onDebug: this.onDebug ? (msg) => this.onDebug?.(msg) : undefined,
@@ -184,28 +185,38 @@ export class AudioManager {
 
   // ─── Capture path ────────────────────────────────────────────────────
 
-  private handleCapture(samples: Int16Array): void {
+  private handleCapture(samples: Int16Array, sampleRate: number): void {
     const rms = computeRMS(samples);
     this.updateSpeaking(LOCAL_ID, rms);
     this.audioLevels.set(LOCAL_ID, rms);
 
     let frame: Int16Array;
     if (this._isMuted) {
-      frame = this.silence;
+      frame = samples.length === FRAME_SAMPLES ? this.silence : new Int16Array(samples.length);
+    } else if (this.processors.isEmpty) {
+      frame = samples;
+    } else if (sampleRate === SAMPLE_RATE) {
+      frame = this.processors.process(samples);
     } else {
-      frame = this.processors.isEmpty ? samples : this.processors.process(samples);
+      // Processors are written for 48 kHz frames; a native-rate capture bypasses them.
+      if (!this.warnedProcessorRate) {
+        this.warnedProcessorRate = true;
+        this.onDebug?.(`Capture at ${sampleRate} Hz: capture processors skipped`);
+      }
+      frame = samples;
     }
 
     // RTCAudioSource.onData requires an ArrayBuffer whose byteLength matches the frame
     // exactly, so hand it a dedicated copy rather than a view into a reused buffer.
-    const owned = new Int16Array(FRAME_SAMPLES);
+    // libwebrtc resamples to the encoder rate when sampleRate is not 48 kHz.
+    const owned = new Int16Array(frame.length);
     owned.set(frame);
     this.audioSource.onData({
       samples: owned,
-      sampleRate: SAMPLE_RATE,
+      sampleRate,
       bitsPerSample: 16,
       channelCount: CHANNELS,
-      numberOfFrames: FRAME_SIZE,
+      numberOfFrames: frame.length / CHANNELS,
     });
 
     if (!this._isReady) {
@@ -241,7 +252,12 @@ export class AudioManager {
     this.removeRemotePeer(peerId);
     try {
       const sink = new RTCAudioSink(track);
-      const peer: RemotePeer = { sink, track, buffer: new PeerPlayoutBuffer(), volume: 1 };
+      const peer: RemotePeer = {
+        sink,
+        track,
+        buffer: new PeerPlayoutBuffer(),
+        volume: 1,
+      };
       this.peers.set(peerId, peer);
       sink.ondata = (data: any) => {
         const samples: Int16Array = data.samples;
