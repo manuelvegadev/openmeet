@@ -15,12 +15,12 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "esbuild",
-      "@roamhq/wrtc"
+      "@roamhq/wrtc",
+      "audify",
+      "esbuild"
     ]
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.6"
+    "@biomejs/biome": "^2.5.11"
   }
 }

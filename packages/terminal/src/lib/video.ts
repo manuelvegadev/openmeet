@@ -4,7 +4,8 @@ import wrtc from '@roamhq/wrtc';
 import type { ScreenDevice } from './devices.js';
 import { renderOverlay } from './overlay.js';
 
-const { RTCVideoSink, RTCVideoSource } = wrtc.nonstandard;
+// @roamhq/wrtc's type definitions omit the video nonstandard APIs
+const { RTCVideoSink, RTCVideoSource } = wrtc.nonstandard as any;
 
 // Display: ffplay output resolution (fixed — we rescale any input to this in JS)
 const DISPLAY_WIDTH = 1280;
@@ -107,17 +108,6 @@ interface PeerVideoPlayback {
   streamType: 'webcam' | 'screen';
   peerName: string;
   windowClosed: boolean;
-}
-
-/** Compute output dimensions to fit within max bounds, preserving aspect ratio. */
-function fitDimensions(srcW: number, srcH: number, maxW: number, maxH: number): { width: number; height: number } {
-  const scale = Math.min(maxW / srcW, maxH / srcH, 1); // don't upscale
-  let width = Math.round(srcW * scale);
-  let height = Math.round(srcH * scale);
-  // Ensure even dimensions (required for I420)
-  width &= ~1;
-  height &= ~1;
-  return { width: Math.max(width, 2), height: Math.max(height, 2) };
 }
 
 export class VideoManager {
@@ -267,7 +257,7 @@ export class VideoManager {
       if (fitW === DISPLAY_WIDTH && fitH === DISPLAY_HEIGHT) {
         // Perfect fit — no letterboxing needed
         if (width === DISPLAY_WIDTH && height === DISPLAY_HEIGHT) {
-          data.copy ? (data as any).copy(scaledFrame) : scaledFrame.set(data);
+          scaledFrame.set(data);
         } else {
           scaleI420(data, width, height, scaledFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);
         }

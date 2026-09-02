@@ -13,14 +13,15 @@
   },
   "dependencies": {
     "@openmeet/shared": "workspace:*",
-    "express": "^5.1.0",
-    "ws": "^8.18.0",
-    "nanoid": "^5.1.5"
+    "express": "^5.2.1",
+    "nanoid": "^6.0.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
-    "@types/ws": "^8.5.0",
-    "tsx": "^4.0.0",
-    "typescript": "^5.7.0"
+    "@types/express": "^5",
+    "@types/node": "^22.20.1",
+    "@types/ws": "^8",
+    "tsx": "^4.23.13",
+    "typescript": "^6.0.3"
   }
 }
