@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useEffect, useRef, useState } from 'react';
+import { getPlatformSupport } from '../lib/platform.js';
 
 interface HomeScreenProps {
   emoji: string;
@@ -12,6 +13,8 @@ interface HomeScreenProps {
   onSettings: () => void;
   onQuit: () => void;
 }
+
+const support = getPlatformSupport();
 
 export function HomeScreen({
   emoji,
@@ -86,7 +89,10 @@ export function HomeScreen({
   return (
     <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
       <Text bold color="blue">
-        {'\u{1F3A5}'} OpenMeet Terminal <Text dimColor>v{version}</Text>
+        {'\u{1F3A5}'} OpenMeet Terminal <Text dimColor>v{version}</Text>{' '}
+        <Text dimColor>
+          · {support.name}: {support.features}
+        </Text>
       </Text>
       <Text dimColor>Lightweight video conferencing</Text>
       <Box height={1} />
