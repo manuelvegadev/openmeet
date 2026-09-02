@@ -4,6 +4,8 @@
 
 OpenMeet is a lightweight, terminal-first audio/video conferencing app. Users create/join rooms from a TUI to talk, share webcam and screen, and send text messages. P2P mesh topology (max 6 participants), WebSocket signaling, in-memory Maps (no database), no authentication (emoji usernames generated locally).
 
+**Platform priorities (decided Sept 2026)**: macOS and Windows first; Linux is paused (keep it compiling, don't invest). Windows v1.0 scope is rooms + audio + chat; video stays macOS/Linux only for now. **Versioning**: one version number for the `openmeet-terminal` package on every platform (0.4.0 introduced Windows + the engine process); platform maturity is expressed by the support matrix in the README and the label next to the version in the TUI, not by per-platform versions. 1.0 = macOS/Windows feature parity. The stack stays on Node.js (see `docs/go-migration-analysis.md` for the research behind that decision).
+
 ## Architecture
 
 ```
@@ -30,13 +32,14 @@ Client A <──WebRTC P2P──> Client B
 | WebSocket | ws | v8 |
 | Storage | In-memory Maps | (no database) |
 | IDs | nanoid | v5 |
-| Linting/Formatting | Biome | v2.4+ |
-| TypeScript | typescript | v5.7+ |
-| Terminal TUI | Ink | v5 |
-| Node WebRTC | @roamhq/wrtc | v0.8 |
-| Audio I/O | sox (rec/play) | system |
-| Video I/O | ffmpeg / ffplay | system |
-| Terminal Bundler | esbuild | v0.27 |
+| Linting/Formatting | Biome | v2.5+ |
+| TypeScript | typescript | v6 |
+| Terminal TUI | Ink (React 19) | v7 |
+| Node WebRTC | @roamhq/wrtc (libwebrtc M106) | v0.10 |
+| Audio I/O | audify (RtAudio: CoreAudio / WASAPI) | v1.10 |
+| Audio I/O (legacy) | sox (rec/play) | system, macOS/Linux only |
+| Video I/O | ffmpeg / ffplay | system, macOS/Linux only |
+| Terminal Bundler | esbuild | v0.28 |
 | CI/CD | GitHub Actions | — |
 
 ## Monorepo Structure
@@ -51,6 +54,7 @@ openmeet/
 ├── docker-compose.yml        # Single service, port 3001
 ├── docs/                     # Architecture docs
 ├── .github/workflows/        # CI/CD workflows
+│   ├── ci.yml                # lint/build/type-check + native-module smoke on ubuntu/macos/windows
 │   └── publish-terminal.yml  # npm publish on terminal-v* tags
 └── packages/
     ├── shared/               # @openmeet/shared - WS message types
@@ -144,15 +148,39 @@ Displayed in participant list as `~Xms` with color coding: dim (≤80ms), yellow
 
 Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, video, screen share and text messaging from the terminal. Published to npm as `openmeet-terminal`.
 
+### Two processes: TUI and engine
+
+```
+openmeet (TUI process)                     openmeet --engine (child process)
+  Ink rendering, keyboard, settings          WebSocket signaling
+  hooks/use-room.ts (thin IPC client)        PeerConnectionManager (wrtc)
+        │ commands (join, mute, chat, …)     AudioManager (audify capture → mix → playback)
+        ├──────────────────────────────▶     VideoManager (ffmpeg / ffplay)
+        ◀──────────────────────────────┤     stats poll, debug log file
+        state snapshots (≤10/s), chat,
+        room events, mic-test levels
+```
+
+The engine is the same bundle forked with `--engine` (`engine/client.ts`), started at app launch and killed when Ink unmounts. Everything with a 10 ms deadline lives in the engine; the TUI can stall for a full second and audio is unaffected. `hooks/use-room.ts` keeps the exact return shape the components always had, so UI code never touches wrtc, audify or ffmpeg. Device listing and the picker's mic test / test tone also go through the engine, so the native audio module is never loaded in the TUI process.
+
 ### Key files
 
 | File | Purpose |
 |------|---------|
-| `src/index.tsx` | CLI entry point: arg parsing, sox/mic checks, alt screen buffer, Ink `render()` |
+| `src/index.tsx` | CLI entry point: arg parsing, audio backend selection, sox/mic checks (sox backend only), Ink `render()` with `alternateScreen` |
 | `src/app.tsx` | App shell: screen routing (home → device picker → room), room creation via `POST /api/rooms` |
 | `src/version.ts` | App version: build-time `__APP_VERSION__` via esbuild `define`, runtime fallback reads `package.json` |
 | `build.mjs` | esbuild bundler: ESM, Node 22, bundles source + shared, externals for deps, injects `__APP_VERSION__` |
-| `install.sh` | Curl-pipe installer script (checks Node 22, sox, then `npm install -g`) |
+| `install.sh` | Curl-pipe installer for macOS/Linux (checks Node 22, warns about sox, then `npm install -g`) |
+| `install.ps1` | PowerShell installer for Windows (installs Node LTS via winget if missing, then `npm install -g`) |
+| `src/engine/protocol.ts` | IPC contract: `EngineCommand` (TUI → engine), `EngineEvent` (engine → TUI), `RoomState` snapshot |
+| `src/engine/room-engine.ts` | `RoomEngine`: the room session without React — signaling, WebRTC, audio, video, stats, debug log. Snapshots coalesced to one per 100 ms |
+| `src/engine/main.ts` | Engine process entry: IPC dispatch, mic test / test tone, crash → `fatal` event, exits on IPC disconnect |
+| `src/engine/client.ts` | TUI-side `EngineClient`: forks the bundle with `--engine`, `send()`, `subscribe()`, `listDevices()`, `dispose()` |
+| `src/lib/platform.ts` | `getPlatformSupport()`: per-OS policy (name, features label, video gate, default audio backend). One package version for all platforms; this is how the UI and the CLI express what that version enables on the current OS |
+| `src/lib/diagnostics.ts` | Shared diagnostics: `diagnosticsEnabled()` (`--debug` or `OPENMEET_LOG=1`), `startLoopDelayMonitor()`, Ink render timings from the `onRender` hook |
+| `src/lib/audio/tone.ts` | `ToneGenerator`: test tone frames for the device picker and the smoke script |
+| `scripts/audio-smoke.ts` | Audio backend smoke test: lists devices, captures for N seconds, plays a tone. Run with `pnpm exec tsx scripts/audio-smoke.ts [rtaudio\|sox] [seconds]` |
 
 ### Components
 
@@ -172,7 +200,7 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, video, screen 
 
 | Hook | Purpose |
 |------|---------|
-| `use-room.ts` | WebSocket + WebRTC orchestration, audio/video pipeline, chat state, per-peer latency estimation (`ConnectionStats.peerLatencyMs`) |
+| `use-room.ts` | Thin binding over the engine process: sends commands, mirrors `RoomState` snapshots, chat and room events into React state. Logic lives in `engine/room-engine.ts` |
 
 ### Lib modules
 
@@ -180,8 +208,13 @@ Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, video, screen 
 |--------|---------|
 | `websocket.ts` | WebSocket client for signaling (auto-reconnect with backoff, pub/sub) |
 | `webrtc.ts` | `PeerConnectionManager` with `@roamhq/wrtc` |
-| `audio.ts` | sox-based audio capture/playback pipelines |
-| `audio-test.ts` | Audio device testing utilities |
+| `audio/backend.ts` | `AudioBackend` interface, `AudioDevice`/`AudioDeviceSelection`, backend selection (platform default from `lib/platform.ts`, `--audio-backend` overrides via `parseBackendFlag`) |
+| `audio/rtaudio-backend.ts` | Native backend via audify/RtAudio: one duplex stream (CoreAudio/WASAPI), re-chunks driver periods to 480 frames, playback queue kept at ~20 ms |
+| `audio/sox-backend.ts` | Legacy backend: `rec` pipe for capture, one `play` process on a FIFO for the mixed output; device listing via `system_profiler`/`pactl` |
+| `audio/manager.ts` | `AudioManager`: backend-agnostic pipeline — capture → mute → `CaptureProcessorChain` → `RTCAudioSource`; `RTCAudioSink` per peer → `PeerPlayoutBuffer` → `FrameMixer` → backend. Auto-restarts the backend on device errors (3 attempts, then defaults) |
+| `audio/processors.ts` | `CaptureProcessor` interface + chain. **This is the hook for noise suppression** (RNNoise via `@shiguredo/rnnoise-wasm`): a processor gets each 10 ms stereo frame before WebRTC. Add it with `AudioManager.addCaptureProcessor()`; add a settings flag only when the processor lands |
+| `audio/mixer.ts` | Per-peer ring buffer (12 frames, 2-frame prefill, drops oldest on overflow) and int32 mixing with per-peer gain |
+| `audio-test.ts` | Mic level meter and test tone for the device picker, built on the active backend |
 | `video.ts` | VideoManager: ffmpeg webcam + screen capture (send), ffplay display (receive), I420 bilinear scaling with aspect-ratio-preserving letterbox/pillarbox, overlay |
 | `overlay.ts` | 8×8 bitmap font overlay renderer burned into I420 video frames |
 | `devices.ts` | Audio/video/screen device enumeration (macOS avfoundation, Linux xrandr/pactl) |
@@ -206,7 +239,8 @@ openmeet [options]
   --room <id>            Room ID to join directly
   --input-device <name>  Input device name (skip device picker)
   --output-device <name> Output device name (skip device picker)
-  --no-video             Disable video (audio-only mode)
+  --no-video             Disable video (audio-only mode; always off on Windows)
+  --audio-backend <name> rtaudio (native; default on Windows) or sox (default on macOS/Linux)
   --video-device <id>    Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay
   --test-camera          Test camera capture (opens ffplay preview, no room join)
@@ -220,6 +254,10 @@ openmeet [options]
 Published to npm via GitHub Actions. See [CI/CD](#cicd) section.
 
 ## CI/CD
+
+### Workflow: `ci.yml`
+
+On every push to `main` and every PR: `pnpm install`, lint, build, `tsc --noEmit` on the terminal, and a smoke script that loads `@roamhq/wrtc` and `audify` on ubuntu, macOS and Windows runners (runners have no audio devices; enumeration must simply not throw).
 
 ### Workflow: `publish-terminal.yml`
 
@@ -257,6 +295,7 @@ git push && git push --tags
 | `pnpm dev` | Start server (3001) + shared in watch mode |
 | `pnpm --filter openmeet-terminal dev` | Run the terminal client against `ws://localhost:3001/ws` |
 | `pnpm build` | Build shared → server → terminal (order matters) |
+| `pnpm --filter openmeet-terminal exec tsx scripts/audio-smoke.ts rtaudio 3` | Validate a machine's audio stack without joining a room |
 | `pnpm lint` | `biome check .` |
 | `pnpm lint:fix` | `biome check --write .` |
 | `pnpm format` | `biome format --write .` |
@@ -276,9 +315,9 @@ git push && git push --tags
 5. **Transceiver ordering**: Both sides must end up with 3 transceivers in identical order (audio, webcam, screen) after SDP exchange. Do not reorder or skip.
 6. **Screen share state re-broadcast**: Must re-broadcast on `participants.length` change so newcomers learn the current screen share state.
 7. **Terminal npm publish**: Requires `NPM_TOKEN` secret in GitHub repo settings. Tags must match `terminal-v*` pattern to trigger the workflow.
-8. **Terminal sox dependency**: `sox` must be installed on the user's system for audio. The CLI checks for `rec` and `play` on startup and exits with instructions if missing.
+8. **Terminal sox dependency**: only for `--audio-backend sox` (default on macOS/Linux until the RtAudio backend is promoted). The CLI checks for `rec`/`play` on startup only in that case.
 9. **Terminal esbuild bundle**: `@openmeet/shared` is aliased and inlined; all npm dependencies are kept external (`packages: 'external'`). The output is a single ESM file with a `#!/usr/bin/env node` shebang. `__APP_VERSION__` is injected via esbuild `define`; `src/version.ts` provides a runtime fallback for `tsx` dev mode.
-10. **Terminal alt screen + Ink clearTerminal**: Ink writes `\x1b[2J\x1b[3J\x1b[H` when output fills the screen. The `\x1b[3J` (clear scrollback) leaks through the alternate screen buffer on macOS, wiping terminal history. `index.tsx` patches `process.stdout.write` to strip `\x1b[3J`.
+10. **Terminal alt screen + Ink clearTerminal**: Ink writes `\x1b[2J\x1b[3J\x1b[H` when output fills the screen. The `\x1b[3J` (clear scrollback) leaks through the alternate screen buffer on macOS, wiping terminal history. `index.tsx` patches `process.stdout.write` to strip `\x1b[3J` (Ink now owns the alt screen via `alternateScreen: true`).
 11. **Terminal video answerer SDP direction**: In the answerer path, `setRemoteDescription` creates transceivers defaulting to `recvonly`. Must explicitly set transceiver directions to `sendrecv` BEFORE `createAnswer()` (not via post-creation SDP munging). This applies to audio (index 0), webcam (index 1), and screen (index 2 when sharing).
 12. **Terminal video capture FPS**: macOS avfoundation rejects `-framerate 15` despite listing it as supported. Use 30fps for reliable capture.
 13. **Terminal ffmpeg device listing**: `ffmpeg -list_devices` exits non-zero (because `-i ""` is invalid). Must use `spawnSync` (not `execSync`) to capture stderr without throwing.
@@ -288,4 +327,11 @@ git push && git push --tags
 17. **Terminal screen capture resolution**: Captures at 1080p@30fps via ffmpeg scale+pad filter (`scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1920:1080:(ow-iw)/2:(oh-ih)/2`). Fixed output ensures predictable I420 frame sizes. Higher resolutions (2K@60fps) overwhelm the Node.js event loop with raw frame data (~330MB/s).
 18. **Terminal renegotiation for screen share**: `setScreenTrack()` toggles transceiver 2 direction and triggers renegotiation. The renegotiation offer SDP is munged to force `a=sendrecv` on the screen m-line because @roamhq/wrtc may not reflect direction changes.
 19. **Terminal debug log file**: When `--debug` is on, all debug events are written to `~/.config/openmeet/debug.log` via `appendFileSync`. Tail with `tail -f ~/.config/openmeet/debug.log`.
-20. **Audio format**: Terminal always captures stereo via sox for @roamhq/wrtc compatibility. Playback always stereo with mono→stereo upmix. `boostOpusQuality()` sets `stereo=1;sprop-stereo=1;maxaveragebitrate=256000` (256kbps).
+20. **Audio format**: Every frame crossing the backend boundary is interleaved stereo Int16, 480 frames (10 ms). Backends upmix mono mics and downmix to mono outputs themselves. `boostOpusQuality()` sets `stereo=1;sprop-stereo=1;maxaveragebitrate=256000` (256kbps).
+21. **audify (RtAudio) quirks**: (a) its error callback is a *static* shared by every `RtAudio` instance and its destructor calls `closeStream()` unconditionally, so a garbage-collected throwaway instance emits `RtApiCore::closeStream(): no open stream to close!` — keep one long-lived probe instance and treat error types below `UNSPECIFIED` (2) as warnings. (b) `RTAUDIO_MINIMIZE_LATENCY` makes CoreAudio pick the device's *minimum* period (15 frames on common hardware → ~3000 callbacks/s); never pass it. (c) Thread-safe callbacks are only released when a stream is reopened or the object is collected, so a process with an open RtAudio stream will not exit on its own — the CLI already calls `process.exit()` after Ink unmounts; scripts must too. (d) `openStream` returns the driver's actual period; the backend re-chunks both directions to 480 frames. (e) No default-device-change notifications: a device that disappears surfaces as an error and `AudioManager` reopens (falling back to system defaults). (f) Prebuilds exist for darwin arm64/x64, linux x64/arm64, win32 x64/ia32 — no win32-arm64.
+22. **Device ids differ between backends**: sox lists macOS devices by `system_profiler` name (`MIC (BRIDGE CAST X V2-II)`), RtAudio by CoreAudio name (`Roland: MIC (BRIDGE CAST X V2-II)`). Settings persist ids by name, so switching backends shows the device picker once. RtAudio duplicates are disambiguated with ` (2)`, ` (3)`.
+23. **Windows**: config/debug log live in `%APPDATA%\openmeet` (`CONFIG_DIR` in settings.ts). Video is force-disabled in `index.tsx`. The sox backend throws on Windows (no mkfifo). The Windows VM (`ssh winvm`) is QEMU without a sound device: WASAPI enumerates zero endpoints over SSH, and only "Remote Audio" endpoints exist inside an RDP session with audio redirection.
+24. **Ink 7**: `render(..., { alternateScreen: true, incrementalRendering: true })` replaces the manual `\x1b[?1049h` handling. The `\x1b[3J` strip patch on `process.stdout.write` is still applied. Ink 7 requires React 19.2 and Node 22.
+25. **Audio and the TUI are separate processes — keep it that way.** Before the split, a render (10–40 ms on a 2-vCPU Windows VM) on the same loop as the 10 ms audio path caused ~7 capture gaps/s and 10% dropped playout. Now the engine loop only sees audio callbacks, signaling and a stats poll; on the same VM its p99 dropped from ~50 ms to single digits. Diagnostics with `--debug` (or `OPENMEET_LOG=1`, log file without the in-TUI feed), every 10 s in `debug.log`: `Engine loop delay`, `TUI loop delay` (both from `startLoopDelayMonitor` in `lib/diagnostics.ts`), `Ink render` (frames + ms per frame, sent from the TUI through the `log` command), `Audio clock` (input-callback gaps >30 ms). Device enumeration in the engine must stay async (`execFile`, never `execSync`): it runs next to live audio. Snapshots are quantized (VU levels to bar steps) and coalesced (≤10/s) so the TUI renders only when something visible changed. Do not add anything time-sensitive to the TUI process, and do not add heavy work to the engine's loop (RNNoise at <1 ms/frame is fine; anything blocking is not).
+26. **Test rig**: the Roland BRIDGE CAST X-I V2 on the Ubuntu host is USB-passed to the Windows VM (WASAPI device names `MIC (BRIDGE CAST X V2-I)` / `Speakers (BRIDGE CAST X V2-I)`). `wss://openmeet.mvega.pro/ws` is currently not deployed; for tests run the `openmeet-test` image on the server (`docker run -d --name openmeet-test -p 3999:3001 openmeet-test`) and point both clients at `ws://192.168.68.64:3999/ws`. Run the Windows client over `ssh -tt winvm` so Ink gets a ConPTY; kill it with `taskkill /IM node.exe /F`.
+27. **Noise suppression (future)**: implement as a `CaptureProcessor` (RNNoise expects 480-sample mono float frames at 48 kHz: downmix → process → upmix), add it via `AudioManager.addCaptureProcessor()` and introduce a settings flag with it. Keep per-frame cost well under 1 ms — it runs on the main thread, on the 10 ms audio cadence. Echo cancellation is deferred (headphones-first); Windows' driver AEC/Voice Clarity would need `AudioCategory_Communications`, which RtAudio doesn't set.

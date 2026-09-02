@@ -156,9 +156,9 @@ a=fmtp:111 minptime=10;useinbandfec=1
 
 Renegotiation (new offer/answer exchange on an existing connection) is triggered by screen share start/stop (transceiver 2 direction change). The `makingOffer` set prevents concurrent renegotiations with the same peer.
 
-## Room Orchestration (`packages/terminal/src/hooks/use-room.ts`)
+## Room Orchestration (`packages/terminal/src/engine/room-engine.ts`)
 
-`useRoom` wires `WebSocketClient`, `PeerConnectionManager`, the sox audio pipeline and `VideoManager` together and exposes room state to the Ink UI:
+`RoomEngine` runs in a separate engine process (forked by the TUI, see `engine/client.ts`) and wires `WebSocketClient`, `PeerConnectionManager`, `AudioManager` and `VideoManager` together. It reports to the TUI over IPC as coalesced `RoomState` snapshots plus chat and room events; `hooks/use-room.ts` mirrors them into React state:
 
 - `participants` — room membership
 - `remoteMuteStates`, `remoteVideoMuteStates`, `remoteScreenShareStates` — per-peer media state from WebSocket broadcasts

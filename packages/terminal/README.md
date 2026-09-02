@@ -45,28 +45,44 @@ No browser needed. Just your terminal, a mic, and speakers.
 - **Room management** — create new rooms or join existing ones by room code
 - **Emoji identities** — auto-assigned persistent emoji username (e.g., 🐶, 🦊, 🐸)
 - **Debug logging** — optional file-based debug log at `~/.config/openmeet/debug.log`
-- **Cross-platform** — works on macOS and Linux
+- **Cross-platform** — macOS and Windows (audio + chat), Linux (best effort)
+
+## Platform support
+
+One package, one version number, for every platform. What that version can do depends on the OS:
+
+| Platform | Status | Features |
+|----------|--------|----------|
+| macOS | Supported | Audio, chat, webcam, screen sharing |
+| Windows 10/11 (x64) | Supported | Audio, chat. Video not available yet |
+| Linux | Best effort | Audio, chat, webcam, screen sharing (X11 + PulseAudio); not actively tested |
+
+The app shows the platform and its feature set next to the version on the home screen. Version 1.0 will mean feature parity between macOS and Windows.
 
 ## Prerequisites
 
 - **Node.js 22+** — [download](https://nodejs.org)
-- **sox** — audio capture and playback engine
-- **ffmpeg** _(optional)_ — required for video and screen sharing
+- **ffmpeg** _(optional, macOS/Linux)_ — required for video and screen sharing
+- **sox** _(optional, macOS/Linux)_ — only for the legacy `--audio-backend sox`
 
-Install dependencies:
+Audio I/O talks to CoreAudio (macOS) and WASAPI (Windows) directly through a bundled native
+module, so nothing else is needed for audio. On Windows nothing besides Node.js is required;
+video is not available there yet.
+
+Optional dependencies:
 
 ```bash
 # macOS
-brew install sox ffmpeg
+brew install ffmpeg
 
 # Ubuntu / Debian
-sudo apt install sox ffmpeg
+sudo apt install ffmpeg
 
 # Fedora
-sudo dnf install sox ffmpeg
+sudo dnf install ffmpeg
 
 # Arch
-sudo pacman -S sox ffmpeg
+sudo pacman -S ffmpeg
 ```
 
 ## Install
@@ -78,8 +94,16 @@ npm install -g openmeet-terminal
 Or with the one-liner installer (checks prerequisites for you):
 
 ```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/manuvega/openmeet/main/packages/terminal/install.sh | bash
 ```
+
+```powershell
+# Windows (PowerShell) — installs Node.js LTS via winget if missing
+irm https://raw.githubusercontent.com/manuvega/openmeet/main/packages/terminal/install.ps1 | iex
+```
+
+On Windows use [Windows Terminal](https://aka.ms/terminal) (the default on Windows 11); the legacy console host is not supported.
 
 ## Usage
 
@@ -105,12 +129,13 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--room <id>` | Room ID to join directly | _(interactive)_ |
 | `--input-device <name>` | Audio input device name | _(device picker)_ |
 | `--output-device <name>` | Audio output device name | _(device picker)_ |
-| `--no-video` | Disable video (audio-only mode) | |
+| `--audio-backend <name>` | Audio I/O: `rtaudio` (native CoreAudio/WASAPI) or `sox` (legacy) | `rtaudio` on Windows, `sox` elsewhere |
+| `--no-video` | Disable video (audio-only mode; always off on Windows) | |
 | `--video-device <id>` | Video capture device (e.g., `"0"`) | |
 | `--no-overlay` | Disable video overlay | |
 | `--test-camera` | Test camera capture (opens ffplay preview) | |
 | `--test-screen` | Test screen capture (lists screens, opens ffplay preview) | |
-| `--debug` | Enable debug logging (writes to `~/.config/openmeet/debug.log`) | |
+| `--debug` | Enable debug logging (writes to `~/.config/openmeet/debug.log`, `%APPDATA%\openmeet\debug.log` on Windows) | |
 | `-h, --help` | Show help | |
 
 ### Keyboard shortcuts
@@ -135,18 +160,19 @@ Once inside a room:
 ## How it works
 
 ```
-Terminal ──sox rec──▶ WebRTC Audio ──▶ Remote Peers
+Terminal ──mic (RtAudio)──▶ WebRTC Audio ──▶ Remote Peers
 Terminal ──ffmpeg──▶ WebRTC Video ──▶ Remote Peers (webcam + screen)
                                             │
-Remote Peers ──▶ WebRTC Audio ──sox play──▶ Terminal
+Remote Peers ──▶ WebRTC Audio ──mix──▶ speakers (RtAudio)
 Remote Peers ──▶ WebRTC Video ──ffplay────▶ Terminal (separate windows)
                                             │
 Terminal ◀────────── WebSocket ──────────▶ Server
                    (signaling + chat)
 ```
 
-1. **Audio capture**: `sox rec` records from your mic at 48kHz/16-bit stereo and feeds 10ms PCM frames into a WebRTC audio track (256kbps Opus)
-2. **Audio playback**: incoming WebRTC audio is piped to `sox play` via FIFOs for each remote peer, with per-peer volume control
+0. **Two processes**: the TUI forks an audio/network engine (`openmeet --engine`). Rendering the terminal never delays audio; the interface just paints the latest state it received.
+1. **Audio capture**: the engine opens the microphone in-process (RtAudio → CoreAudio/WASAPI) at 48kHz/16-bit stereo; the sound card clocks 10 ms frames straight into a WebRTC audio track (256kbps Opus). A capture-processor chain sits between the mic and WebRTC, where noise suppression will plug in.
+2. **Audio playback**: each remote peer's decoded audio lands in a small playout buffer; the output callback mixes all peers (with per-peer volume) into one stereo stream. `--audio-backend sox` keeps the old `rec`/`play` subprocess pipeline on macOS/Linux.
 3. **Video capture**: `ffmpeg` captures webcam (1080p) or screen (1080p@30fps) and feeds raw I420 frames into WebRTC video tracks
 4. **Video display**: `ffplay` opens separate windows for remote webcam and screen share streams, with aspect-ratio-preserving letterboxing
 5. **Signaling**: WebSocket connection to the OpenMeet server handles SDP/ICE exchange, chat messages, and room state
@@ -170,7 +196,11 @@ openmeet --server ws://localhost:3001/ws
 
 ### "sox is required but not found"
 
-Install sox using your package manager (see [Prerequisites](#prerequisites)).
+Only shown with `--audio-backend sox` (the default on macOS/Linux). Either install sox with your package manager or run with `--audio-backend rtaudio` to use the native backend.
+
+### No audio devices found (Windows)
+
+Windows must expose at least one input or output endpoint (Settings > System > Sound). Inside a VM or over Remote Desktop, endpoints only exist while a session with audio redirection is connected. Check **Settings > Privacy & security > Microphone** allows desktop apps.
 
 ### "Microphone access denied" (macOS)
 
