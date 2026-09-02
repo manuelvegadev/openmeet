@@ -538,6 +538,17 @@ export class RoomEngine {
               totalPacketsRecv += stat.packetsReceived ?? 0;
               totalPacketsLost += stat.packetsLost ?? 0;
               if (stat.jitter != null) jitterSec = stat.jitter;
+              if (this.state.debugMode) {
+                // NetEQ's time-stretching (accel/decel) and concealment are what make speech
+                // sound metallic when packet arrival is irregular.
+                const jbMs =
+                  stat.jitterBufferEmittedCount > 0
+                    ? Math.round((stat.jitterBufferDelay / stat.jitterBufferEmittedCount) * 1000)
+                    : 0;
+                this.debugFn(
+                  `NetEQ ${peerId.slice(0, 6)}: jitter ${Math.round((stat.jitter ?? 0) * 1000)}ms, jb ${jbMs}ms, accel ${stat.removedSamplesForAcceleration ?? 0}, decel ${stat.insertedSamplesForDeceleration ?? 0}, concealed ${stat.concealedSamples ?? 0}, events ${stat.concealmentEvents ?? 0}`,
+                );
+              }
             }
             if (stat.type === 'candidate-pair' && stat.state === 'succeeded' && stat.currentRoundTripTime != null) {
               rttSum += stat.currentRoundTripTime * 1000;

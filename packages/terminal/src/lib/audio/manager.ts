@@ -3,7 +3,9 @@ import type { AudioBackend, AudioDeviceSelection } from './backend.js';
 import { createAudioBackend } from './backend.js';
 import { CHANNELS, computeRMS, FRAME_SAMPLES, SAMPLE_RATE, SPEAKING_RMS_THRESHOLD } from './constants.js';
 import { FrameMixer, PeerPlayoutBuffer } from './mixer.js';
+import { PcmDump } from './pcm-dump.js';
 import { type CaptureProcessor, CaptureProcessorChain } from './processors.js';
+import { ToneGenerator } from './tone.js';
 
 const { RTCAudioSink } = wrtc.nonstandard;
 
@@ -29,6 +31,7 @@ interface RemotePeer {
   track: any;
   buffer: PeerPlayoutBuffer;
   volume: number;
+  dump: PcmDump | null;
 }
 
 /**
@@ -48,6 +51,12 @@ export class AudioManager {
   private readonly processors = new CaptureProcessorChain();
   private _isMuted = false;
   private warnedProcessorRate = false;
+  // Diagnostics (see pcm-dump.ts): OPENMEET_DUMP_DIR records each stage; OPENMEET_TEST_TONE=1
+  // replaces the microphone with a 440 Hz tone so the far end can judge the transport alone.
+  private readonly captureDump = PcmDump.fromEnv('capture');
+  private readonly mixDump = PcmDump.fromEnv('mix');
+  private readonly testTone =
+    process.env.OPENMEET_TEST_TONE === '1' ? new ToneGenerator({ hz: 440, seconds: 1e9, gain: 0.2 }) : null;
   private started = false;
   private opening = false;
   private restarts = 0;
@@ -174,6 +183,8 @@ export class AudioManager {
 
   shutdown(): void {
     this.stop();
+    this.captureDump?.close();
+    this.mixDump?.close();
     for (const peerId of [...this.peers.keys()]) this.removeRemotePeer(peerId);
     const localTimer = this.speakingTimers.get(LOCAL_ID);
     if (localTimer) clearTimeout(localTimer);
@@ -191,6 +202,7 @@ export class AudioManager {
     this.audioLevels.set(LOCAL_ID, rms);
 
     let frame: Int16Array;
+    if (this.testTone) this.testTone.fill(samples);
     if (this._isMuted) {
       frame = samples.length === FRAME_SAMPLES ? this.silence : new Int16Array(samples.length);
     } else if (this.processors.isEmpty) {
@@ -211,6 +223,7 @@ export class AudioManager {
     // libwebrtc resamples to the encoder rate when sampleRate is not 48 kHz.
     const owned = new Int16Array(frame.length);
     owned.set(frame);
+    this.captureDump?.write(owned);
     this.audioSource.onData({
       samples: owned,
       sampleRate,
@@ -246,6 +259,7 @@ export class AudioManager {
       return;
     }
     this.mixer.mix(out, this.peers.values());
+    this.mixDump?.write(out);
   }
 
   addRemotePeer(peerId: string, track: any): void {
@@ -257,6 +271,7 @@ export class AudioManager {
         track,
         buffer: new PeerPlayoutBuffer(),
         volume: 1,
+        dump: PcmDump.fromEnv(`sink-${peerId.slice(0, 6)}`),
       };
       this.peers.set(peerId, peer);
       sink.ondata = (data: any) => {
@@ -266,6 +281,7 @@ export class AudioManager {
         this.audioLevels.set(peerId, rms);
         // The addon may reuse the underlying buffer; the ring copies on push.
         peer.buffer.push(samples, data.numberOfFrames);
+        peer.dump?.write(samples);
       };
       this.onDebug?.(`Audio peer added: ${peerId.slice(0, 6)}`);
     } catch {
@@ -277,6 +293,7 @@ export class AudioManager {
     const peer = this.peers.get(peerId);
     if (peer) {
       peer.sink.stop();
+      peer.dump?.close();
       this.peers.delete(peerId);
       if (peer.buffer.dropped || peer.buffer.underruns) {
         this.onDebug?.(

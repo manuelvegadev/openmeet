@@ -1,4 +1,4 @@
-import { FRAME_SIZE, SAMPLE_RATE } from './constants.js';
+import { SAMPLE_RATE } from './constants.js';
 
 export interface ToneOptions {
   /** Frequency in Hz. */
@@ -35,8 +35,10 @@ export class ToneGenerator {
     return this.pos >= this.totalFrames;
   }
 
+  /** Fills `out` (interleaved stereo, any frame count) with the next samples. */
   fill(out: Int16Array): void {
-    for (let i = 0; i < FRAME_SIZE; i++) {
+    const frames = out.length >> 1;
+    for (let i = 0; i < frames; i++) {
       let gain = 0;
       if (this.pos < this.totalFrames) {
         gain = this.gain;
