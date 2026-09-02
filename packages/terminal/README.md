@@ -132,6 +132,7 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--audio-backend <name>` | Audio I/O: `rtaudio` (native CoreAudio/WASAPI) or `sox` (fallback) | `rtaudio` on macOS/Windows, `sox` on Linux |
 | `--input-channels <p>` | How the mic's channel pair is sent: `auto`, `stereo`, `mono`, `left`, `right` (saved) | `auto` |
 | `--input-gain <dB>` | Capture gain in dB, -30 to 30 (saved) | `0` |
+| `--pause-rendering <p>` | Pause TUI rendering (audio keeps running) when the window is `minimized`, when it is `unfocused`, or `never` (saved; also in Settings) | `minimized` |
 | `--no-video` | Disable video (audio-only mode; always off on Windows) | |
 | `--video-device <id>` | Video capture device (e.g., `"0"`) | |
 | `--no-overlay` | Disable video overlay | |
@@ -179,6 +180,12 @@ Terminal ◀────────── WebSocket ─────────
 4. **Video display**: `ffplay` opens separate windows for remote webcam and screen share streams, with aspect-ratio-preserving letterboxing
 5. **Signaling**: WebSocket connection to the OpenMeet server handles SDP/ICE exchange, chat messages, and room state
 6. **WebRTC**: peer-to-peer connections using `@roamhq/wrtc` (native WebRTC bindings for Node.js) with 3 transceivers per connection (audio, webcam, screen)
+
+## Pausing rendering in the background
+
+The audio engine runs in its own process and never pauses. The TUI, however, redraws whenever a VU meter or a stat changes, which costs a few percent of a core during a conversation. With `--pause-rendering minimized` (the default) it stops applying updates while the terminal window is minimized and catches up the moment it is restored; `unfocused` does the same whenever the window loses focus (handy on a single screen, wrong if you keep the app visible on a second monitor); `never` disables it.
+
+How "minimized" is detected: on Windows the app asks the OS about the Windows Terminal (or console) window hosting it; on macOS it asks Terminal.app or iTerm2 through Apple Events, which triggers the Automation permission prompt once — deny it and rendering is simply never paused. Other macOS terminals (WezTerm, kitty, Ghostty…) have no such hook; use `unfocused` there if you want the saving.
 
 ## Self-hosted server
 
