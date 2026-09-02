@@ -130,6 +130,8 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--input-device <name>` | Audio input device name | _(device picker)_ |
 | `--output-device <name>` | Audio output device name | _(device picker)_ |
 | `--audio-backend <name>` | Audio I/O: `rtaudio` (native CoreAudio/WASAPI) or `sox` (fallback) | `rtaudio` on macOS/Windows, `sox` on Linux |
+| `--input-channels <p>` | How the mic's channel pair is sent: `auto`, `stereo`, `mono`, `left`, `right` (saved) | `auto` |
+| `--input-gain <dB>` | Capture gain in dB, -30 to 30 (saved) | `0` |
 | `--no-video` | Disable video (audio-only mode; always off on Windows) | |
 | `--video-device <id>` | Video capture device (e.g., `"0"`) | |
 | `--no-overlay` | Disable video overlay | |
@@ -171,7 +173,7 @@ Terminal ◀────────── WebSocket ─────────
 ```
 
 0. **Two processes**: the TUI forks an audio/network engine (`openmeet --engine`). Rendering the terminal never delays audio; the interface just paints the latest state it received.
-1. **Audio capture**: the engine opens the microphone in-process (RtAudio → CoreAudio/WASAPI) at 48kHz/16-bit stereo; the sound card clocks 10 ms frames straight into a WebRTC audio track (256kbps Opus). A capture-processor chain sits between the mic and WebRTC, where noise suppression will plug in.
+1. **Audio capture**: the engine opens the microphone in-process (RtAudio → CoreAudio/WASAPI) at the device's own sample rate and channel count — 16 kHz Bluetooth headsets, 44.1 kHz USB mixers, 96 kHz interfaces, mono laptop mics all work — and converts to the pipeline's 48 kHz stereo with an in-process polyphase resampler (≈90 dB SNR), so the driver never resamples and your interface's clock setting is left alone. Interfaces with more than two inputs show one entry per channel pair. A channel policy (`auto` by default) notices a mono mic on one input of a stereo pair and sends it to both ears; `--input-gain` trims quiet or hot mics. The sound card clocks 10 ms frames straight into a WebRTC audio track (256kbps Opus). A capture-processor chain sits between the mic and WebRTC, where noise suppression will plug in.
 2. **Audio playback**: each remote peer's decoded audio lands in a small playout buffer; the output callback mixes all peers (with per-peer volume) into one stereo stream. `--audio-backend sox` keeps the old `rec`/`play` subprocess pipeline on macOS/Linux.
 3. **Video capture**: `ffmpeg` captures webcam (1080p) or screen (1080p@30fps) and feeds raw I420 frames into WebRTC video tracks
 4. **Video display**: `ffplay` opens separate windows for remote webcam and screen share streams, with aspect-ratio-preserving letterboxing
