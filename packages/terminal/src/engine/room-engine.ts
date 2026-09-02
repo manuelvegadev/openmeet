@@ -66,6 +66,9 @@ export class RoomEngine {
 
   constructor(emit: (event: EngineEvent) => void) {
     this.emit = emit;
+    // File logging requested up front: capture engine events that happen before any join
+    // (device listing, mic test, window watcher) instead of only from the room onwards.
+    if (this.fileOnlyLog) this.openLogFile();
   }
 
   // ─── State / snapshots ───────────────────────────────────────────────
