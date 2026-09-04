@@ -1,2 +1,7 @@
 packages:
   - "packages/*"
+
+onlyBuiltDependencies:
+  - "@roamhq/wrtc"
+  - "audify"
+  - "esbuild"

@@ -13,13 +13,6 @@
   "engines": {
     "node": ">=22"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@roamhq/wrtc",
-      "audify",
-      "esbuild"
-    ]
-  },
   "devDependencies": {
     "@biomejs/biome": "^2.5.11"
   }
