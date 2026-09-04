@@ -53,8 +53,9 @@ One package, one version number, for every platform. What that version can do de
 
 | Platform | Status | Features |
 |----------|--------|----------|
-| macOS | Supported | Audio, chat, webcam, screen sharing |
-| Windows 10/11 (x64) | Supported | Audio, chat. Video not available yet |
+| macOS 15 (Sequoia) or later | Supported | Audio, chat, webcam, screen sharing |
+| Windows 11 (x64) | Supported | Audio, chat. Video not available yet |
+| Older macOS / Windows 10 | Untested | The app runs, but nothing is verified there; the home screen says so |
 | Linux | Best effort | Audio, chat, webcam, screen sharing (X11 + PulseAudio); not actively tested |
 
 The app shows the platform and its feature set next to the version on the home screen. Version 1.0 will mean feature parity between macOS and Windows.
