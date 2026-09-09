@@ -12,13 +12,14 @@ import { ChatInput } from './chat-input.js';
 import { ChatLog, mergeChat } from './chat-log.js';
 import { DebugLog } from './debug-log.js';
 import { Elapsed } from './elapsed.js';
+import { KeyHints } from './key-hints.js';
 import { MicBar } from './level-bar.js';
 import { Modal } from './modal.js';
 import { ParticipantList } from './participant-list.js';
 import { Screen } from './screen.js';
 import { Select } from './select.js';
 import { SplitPanes } from './split-panes.js';
-import { type PeerWindowAction, StatusBar } from './status-bar.js';
+import { MyActions, PeerActions, type PeerWindowAction, RoomBar } from './status-bar.js';
 import { Rule, Text } from './text.js';
 
 interface RoomViewProps {
@@ -81,10 +82,21 @@ export function RoomView({
   const [micLevel, setMicLevel] = useState(0);
   const [selectedPeerIdx, setSelectedPeerIdx] = useState(0);
   const [screenPickerOpen, setScreenPickerOpen] = useState(false);
+  // Leaving takes two presses of `q`: one key should not end a call by accident. The home
+  // screen asks the same way before quitting.
+  const [leaveArmed, setLeaveArmed] = useState(false);
   const [screenDeviceList, setScreenDeviceList] = useState<ScreenDevice[]>([]);
   const [lastScreenDevice, setLastScreenDevice] = useState<ScreenDevice | null>(null);
   const testerRef = useRef<MicTester | null>(null);
   const chat = useMemo(() => mergeChat(room.chatMessages, room.roomEvents), [room.chatMessages, room.roomEvents]);
+
+  // The armed `q` forgets itself, so it cannot still be waiting when you come back from the
+  // chat minutes later.
+  useEffect(() => {
+    if (!leaveArmed) return;
+    const timer = setTimeout(() => setLeaveArmed(false), 2000);
+    return () => clearTimeout(timer);
+  }, [leaveArmed]);
 
   // Load devices when picker opens
   useEffect(() => {
@@ -172,16 +184,22 @@ export function RoomView({
       return;
     }
 
-    if (key.escape) {
-      room.leave();
-      onBack();
-      return;
-    }
     if (key.tab) {
       setInputFocused((prev) => !prev);
       return;
     }
     if (!inputFocused) {
+      if (input === 'q') {
+        if (leaveArmed) {
+          room.leave();
+          onBack();
+        } else {
+          setLeaveArmed(true);
+        }
+        return;
+      }
+      // Any other key means you did not mean to leave after all.
+      if (leaveArmed) setLeaveArmed(false);
       if (input === 'm') {
         room.toggleMute();
       }
@@ -367,6 +385,7 @@ export function RoomView({
           <Text bold color={theme.accent}>
             OpenMeet <Text dimColor>v{version}</Text> <Text dimColor>({platformName})</Text>
           </Text>
+          <KeyHints hints={[{ key: 'q', label: leaveArmed ? 'again to leave' : 'leave', disabled: inputFocused }]} />
           <Text dimColor>|</Text>
           <Text>
             Room: <Text bold>{roomId}</Text>
@@ -432,6 +451,16 @@ export function RoomView({
         people={
           <>
             <ParticipantList
+              myActions={
+                <MyActions
+                  isMuted={room.isMuted}
+                  isVideoMuted={room.isVideoMuted}
+                  videoEnabled={room.videoEnabled}
+                  webcamEnabled={room.webcamEnabled}
+                  isScreenSharing={room.isScreenSharing}
+                  inputFocused={inputFocused}
+                />
+              }
               participants={room.participants}
               username={identity.name}
               color={identity.color}
@@ -456,22 +485,23 @@ export function RoomView({
                 <DebugLog events={room.roomEvents} />
               </>
             )}
+            {/* Pinned to the bottom of the pane: on a short terminal the list gives way first. */}
+            <Box flexGrow={1} />
+            <Box paddingX={1}>
+              <PeerActions
+                hasPeers={room.participants.length > 0}
+                videoEnabled={room.videoEnabled}
+                peerCam={peerCamAction}
+                peerScreen={peerScreenAction}
+                inputFocused={inputFocused}
+              />
+            </Box>
           </>
         }
       />
 
-      {/* Status */}
-      <StatusBar
-        isMuted={room.isMuted}
-        isVideoMuted={room.isVideoMuted}
-        videoEnabled={room.videoEnabled}
-        webcamEnabled={room.webcamEnabled}
-        isScreenSharing={room.isScreenSharing}
-        debugMode={room.debugMode}
-        peerCam={peerCamAction}
-        peerScreen={peerScreenAction}
-        inputFocused={inputFocused}
-      />
+      {/* The room's own settings; what acts on people is drawn beside them. */}
+      <RoomBar debugMode={room.debugMode} inputFocused={inputFocused} />
 
       {/* Error */}
       {room.error && (

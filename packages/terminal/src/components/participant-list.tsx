@@ -1,5 +1,6 @@
 import type { Participant } from '@openmeet/shared';
 import { Box } from 'ink';
+import type { ReactNode } from 'react';
 import stringWidth from 'string-width';
 import type { ConnectionStats } from '../hooks/use-room.js';
 import { VU_BAR_COUNT } from '../lib/audio/constants.js';
@@ -57,6 +58,8 @@ interface ParticipantListProps {
   peerVolumes: Record<string, number>;
   selectedPeerIdx: number;
   connectionStats: ConnectionStats | null;
+  /** The keys that act on you, drawn under your own row (see `status-bar.tsx`). */
+  myActions?: ReactNode;
 }
 
 /**
@@ -87,6 +90,7 @@ export function ParticipantList({
   peerVolumes,
   selectedPeerIdx,
   connectionStats,
+  myActions,
 }: ParticipantListProps) {
   const localSpeaking = speakingStates.__local__ && !isMuted;
 
@@ -107,6 +111,7 @@ export function ParticipantList({
           <VuMeter level={audioLevels.__local__ ?? 0} />
         </Text>
       </Box>
+      {myActions}
       {/* Deliberately a `Divider` and not a `Rule`: this separates you from the rest inside
           the column, so it stays clear of the frame and the panes' divider. */}
       <Divider />
