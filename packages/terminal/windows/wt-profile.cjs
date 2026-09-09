@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Registers an "OpenMeet" profile in Windows Terminal so the app opens in its own window:
- * app icon and name in the title row, painted in the app's background colour, no scrollbar,
+ * app icon and name in the title row, tab row and padding painted in the app's own black, no scrollbar,
  * closes when the app exits. Idempotent; keeps a backup of settings.json next to it.
  *
  *   node wt-profile.cjs [--command "<what to run>"] [--icon <path>]
@@ -44,7 +44,10 @@ fs.writeFileSync(`${file}.openmeet-backup`, raw);
 // settings.json may carry a UTF-8 BOM and // comments (Windows Terminal's own template does).
 const cfg = JSON.parse(raw.replace(/^\uFEFF/, '').replace(/^\s*\/\/.*$/gm, ''));
 
-const BG = '#282c34'; // One Half Dark background, what the TUI renders on
+// `theme.bg` in src/lib/theme.ts: the app paints this over every cell, so the chrome around it
+// — tab row, and the padding between the frame and the window edge — has to be the same black
+// or the frame sits inside a grey border.
+const BG = '#0B0B0B';
 
 const profile = {
   name: 'OpenMeet',
@@ -58,6 +61,8 @@ const profile = {
   padding: '4',
   font: { face: 'Cascadia Mono', size: 11 },
   colorScheme: 'One Half Dark',
+  // The scheme's own background is #282c34; override it so the padding matches the app.
+  background: BG,
   useAcrylic: false,
   hidden: false,
 };
