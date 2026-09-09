@@ -1,26 +1,29 @@
 import { Box, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from '../engine/client.js';
 import { useRoom } from '../hooks/use-room.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
 import { listScreenDevices, prefetchScreenDevices, type ScreenDevice } from '../lib/devices.js';
+import type { Identity } from '../lib/identity.js';
 import { getPlatformSupport } from '../lib/platform.js';
 import { saveSettings } from '../lib/settings.js';
-import { framedBorder, theme } from '../lib/theme.js';
+import { theme } from '../lib/theme.js';
 import { ChatInput } from './chat-input.js';
-import { ChatLog } from './chat-log.js';
-import { KeyHints } from './key-hints.js';
+import { ChatLog, mergeChat } from './chat-log.js';
+import { DebugLog } from './debug-log.js';
+import { Elapsed } from './elapsed.js';
 import { MicBar } from './level-bar.js';
 import { ParticipantList } from './participant-list.js';
-import { RoomLog } from './room-log.js';
+import { Screen } from './screen.js';
+import { Select } from './select.js';
+import { SplitPanes } from './split-panes.js';
 import { type PeerWindowAction, StatusBar } from './status-bar.js';
 import { Rule, Text } from './text.js';
 
 interface RoomViewProps {
   serverUrl: string;
   roomId: string;
-  username: string;
+  identity: Identity;
   version: string;
   deviceSelection: AudioDeviceSelection;
   videoEnabled?: boolean;
@@ -38,7 +41,7 @@ const platformName = getPlatformSupport().name;
 export function RoomView({
   serverUrl,
   roomId,
-  username,
+  identity,
   version,
   deviceSelection,
   videoEnabled,
@@ -51,7 +54,8 @@ export function RoomView({
   const room = useRoom({
     serverUrl,
     roomId,
-    username,
+    username: identity.name,
+    color: identity.color,
     deviceSelection,
     debug,
     videoEnabled,
@@ -73,7 +77,7 @@ export function RoomView({
   const [screenDeviceList, setScreenDeviceList] = useState<ScreenDevice[]>([]);
   const [lastScreenDevice, setLastScreenDevice] = useState<ScreenDevice | null>(null);
   const testerRef = useRef<MicTester | null>(null);
-  const smoothedRef = useRef(0);
+  const chat = useMemo(() => mergeChat(room.chatMessages, room.roomEvents), [room.chatMessages, room.roomEvents]);
 
   // Load devices when picker opens
   useEffect(() => {
@@ -94,7 +98,6 @@ export function RoomView({
     if (deviceStep !== 'test') {
       testerRef.current?.stop();
       testerRef.current = null;
-      smoothedRef.current = 0;
       setMicLevel(0);
       return;
     }
@@ -104,11 +107,11 @@ export function RoomView({
 
     let lastUpdate = 0;
     tester.setLevelCallback((rms) => {
-      smoothedRef.current = smoothedRef.current * 0.7 + rms * 0.3;
+      // Already smoothed by the engine's ballistics; just cap the renders.
       const now = Date.now();
       if (now - lastUpdate > 80) {
         lastUpdate = now;
-        setMicLevel(smoothedRef.current);
+        setMicLevel(rms);
       }
     });
 
@@ -251,13 +254,9 @@ export function RoomView({
       value: d.id,
     }));
     return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color={theme.accent}>
-          Screen Share
-        </Text>
-        <Rule />
+      <Screen title="Screen Share" hints={[{ key: 'esc', label: 'cancel' }]}>
         <Text bold>Select screen to share:</Text>
-        <SelectInput
+        <Select
           items={screenItems}
           onSelect={(item) => {
             const device = screenDeviceList.find((d) => d.id === item.value);
@@ -268,9 +267,7 @@ export function RoomView({
             }
           }}
         />
-        <Text />
-        <KeyHints hints={[{ key: 'esc', label: 'cancel' }]} />
-      </Box>
+      </Screen>
     );
   }
 
@@ -278,31 +275,25 @@ export function RoomView({
   if (deviceStep && deviceStep !== 'loading') {
     if (deviceStep === 'test') {
       return (
-        <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-          <Text bold color={theme.accent}>
-            Audio Test
-          </Text>
-          <Rule />
+        <Screen
+          title="Audio Test"
+          hints={[
+            { key: 't', label: 'test tone' },
+            { key: 'enter', label: 'confirm' },
+            { key: 'esc', label: 're-select' },
+          ]}
+        >
           <Text>
             Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
           </Text>
           <Text>
             Output: <Text bold>{selectedOutput?.name ?? 'System Default'}</Text>
           </Text>
-          <Text />
           <Text bold>Mic level:</Text>
           <Text>
             <MicBar level={micLevel} />
           </Text>
-          <Text />
-          <KeyHints
-            hints={[
-              { key: 't', label: 'test tone' },
-              { key: 'enter', label: 'confirm' },
-              { key: 'esc', label: 're-select' },
-            ]}
-          />
-        </Box>
+        </Screen>
       );
     }
 
@@ -317,13 +308,16 @@ export function RoomView({
 
     if (deviceStep === 'input') {
       return (
-        <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-          <Text bold color={theme.accent}>
-            Change Audio Device
-          </Text>
-          <Rule />
+        <Screen
+          title="Change Audio Device"
+          hints={[
+            { key: '↑↓', label: 'navigate' },
+            { key: 'enter', label: 'select' },
+            { key: 'esc', label: 'cancel' },
+          ]}
+        >
           <Text bold>Input (Microphone):</Text>
-          <SelectInput
+          <Select
             items={inputItems}
             onSelect={(item) => {
               const device = devices.inputs.find((d) => d.id === item.value);
@@ -336,30 +330,24 @@ export function RoomView({
               }
             }}
           />
-          <Text />
-          <KeyHints
-            hints={[
-              { key: '↑↓', label: 'navigate' },
-              { key: 'enter', label: 'select' },
-              { key: 'esc', label: 'cancel' },
-            ]}
-          />
-        </Box>
+        </Screen>
       );
     }
 
     return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color={theme.accent}>
-          Change Audio Device
-        </Text>
-        <Rule />
+      <Screen
+        title="Change Audio Device"
+        hints={[
+          { key: '↑↓', label: 'navigate' },
+          { key: 'enter', label: 'select' },
+          { key: 'esc', label: 'cancel' },
+        ]}
+      >
         <Text>
           Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
         </Text>
-        <Text />
         <Text bold>Output (Speakers):</Text>
-        <SelectInput
+        <Select
           items={outputItems}
           onSelect={(item) => {
             const device = devices.outputs.find((d) => d.id === item.value);
@@ -367,15 +355,7 @@ export function RoomView({
             setDeviceStep('test');
           }}
         />
-        <Text />
-        <KeyHints
-          hints={[
-            { key: '↑↓', label: 'navigate' },
-            { key: 'enter', label: 'select' },
-            { key: 'esc', label: 'cancel' },
-          ]}
-        />
-      </Box>
+      </Screen>
     );
   }
 
@@ -407,6 +387,12 @@ export function RoomView({
           </Text>
           <Text dimColor>|</Text>
           <Text>{room.participants.length + 1}p</Text>
+          {room.joinedAt && (
+            <>
+              <Text dimColor>|</Text>
+              <Elapsed since={room.joinedAt} />
+            </>
+          )}
         </Box>
         <Box gap={1}>
           {room.connectionStats ? (
@@ -442,7 +428,6 @@ export function RoomView({
           <Text color={room.connected ? theme.ok : theme.danger}>●</Text>
         </Box>
       </Box>
-      <Rule />
 
       {deviceStep === 'loading' && (
         <Box paddingX={1}>
@@ -450,51 +435,44 @@ export function RoomView({
         </Box>
       )}
 
-      {/* Participants */}
-      <ParticipantList
-        participants={room.participants}
-        myId={room.myId}
-        username={username}
-        isMuted={room.isMuted}
-        isVideoMuted={room.isVideoMuted}
-        videoEnabled={room.videoEnabled}
-        isScreenSharing={room.isScreenSharing}
-        remoteMuteStates={room.remoteMuteStates}
-        remoteVideoMuteStates={room.remoteVideoMuteStates}
-        remoteScreenShareStates={room.remoteScreenShareStates}
-        peerVideoOpen={room.peerVideoOpen}
-        peerScreenOpen={room.peerScreenOpen}
-        speakingStates={room.speakingStates}
-        audioLevels={room.audioLevels}
-        peerVolumes={room.peerVolumes}
-        selectedPeerIdx={selectedPeerIdx}
-        connectionStats={room.connectionStats}
+      <SplitPanes
+        chat={
+          <>
+            <ChatLog entries={chat} arrowsScroll={inputFocused} />
+            <Rule />
+            <ChatInput focused={inputFocused} onSend={room.sendMessage} />
+          </>
+        }
+        people={
+          <>
+            <ParticipantList
+              participants={room.participants}
+              username={identity.name}
+              color={identity.color}
+              isMuted={room.isMuted}
+              isVideoMuted={room.isVideoMuted}
+              videoEnabled={room.videoEnabled}
+              isScreenSharing={room.isScreenSharing}
+              remoteMuteStates={room.remoteMuteStates}
+              remoteVideoMuteStates={room.remoteVideoMuteStates}
+              remoteScreenShareStates={room.remoteScreenShareStates}
+              peerVideoOpen={room.peerVideoOpen}
+              peerScreenOpen={room.peerScreenOpen}
+              speakingStates={room.speakingStates}
+              audioLevels={room.audioLevels}
+              peerVolumes={room.peerVolumes}
+              selectedPeerIdx={selectedPeerIdx}
+              connectionStats={room.connectionStats}
+            />
+            {room.debugMode && (
+              <>
+                <Rule />
+                <DebugLog events={room.roomEvents} />
+              </>
+            )}
+          </>
+        }
       />
-      <Rule />
-
-      {/* Chat + Room Log — split horizontally */}
-      <Box flexGrow={1} flexBasis={0} overflow="hidden">
-        <Box flexDirection="column" flexGrow={1} flexBasis="50%">
-          <ChatLog messages={room.chatMessages} />
-        </Box>
-        <Box
-          flexDirection="column"
-          flexGrow={1}
-          flexBasis="50%"
-          borderStyle="single"
-          borderRight={false}
-          borderTop={false}
-          borderBottom={false}
-          {...framedBorder}
-        >
-          <RoomLog events={room.roomEvents} joinedAt={room.joinedAt} />
-        </Box>
-      </Box>
-      <Rule />
-
-      {/* Input */}
-      <ChatInput focused={inputFocused} onSend={room.sendMessage} />
-      <Rule />
 
       {/* Status */}
       <StatusBar
@@ -506,6 +484,7 @@ export function RoomView({
         debugMode={room.debugMode}
         peerCam={peerCamAction}
         peerScreen={peerScreenAction}
+        inputFocused={inputFocused}
       />
 
       {/* Error */}
