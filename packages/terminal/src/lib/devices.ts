@@ -1,4 +1,4 @@
-import { execSync, spawnSync } from 'node:child_process';
+import { execFile, execSync, spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
 
 export interface VideoDevice {
@@ -7,10 +7,14 @@ export interface VideoDevice {
 }
 
 export interface ScreenDevice {
-  id: string; // macOS: avfoundation index; Linux: X11 display string (e.g. ":0.0+0,0")
+  id: string; // macOS: avfoundation index; Linux: X11 display string (e.g. ":0.0+0,0"); Windows: display name
   name: string;
   width?: number;
   height?: number;
+  /** Windows: top-left corner in the virtual desktop, relative to the primary monitor's origin. */
+  x?: number;
+  y?: number;
+  primary?: boolean;
 }
 
 // ─── Video devices ───────────────────────────────────────────────────
@@ -30,7 +34,31 @@ export function listVideoDevices(): VideoDevice[] {
 
 // ─── Screen devices ──────────────────────────────────────────────────
 
+/**
+ * Enumeration is synchronous (it runs in the TUI process on the `s` key), and on Windows it
+ * costs ~1 s of PowerShell startup, so the result is cached briefly and `prefetchScreenDevices`
+ * warms it in the background when a room opens.
+ */
+const SCREEN_CACHE_MS = 60_000;
+let screenCache: { at: number; screens: ScreenDevice[] } | null = null;
+
 export function listScreenDevices(): ScreenDevice[] {
+  if (screenCache && Date.now() - screenCache.at < SCREEN_CACHE_MS) return screenCache.screens;
+  const screens = enumerateScreens();
+  screenCache = { at: Date.now(), screens };
+  return screens;
+}
+
+/** Fill the cache without blocking (Windows only; the other platforms enumerate fast enough). */
+export function prefetchScreenDevices(): void {
+  if (platform() !== 'win32') return;
+  execFile('powershell', WINDOWS_SCREENS_ARGS, { windowsHide: true, timeout: 10000 }, (err, stdout) => {
+    if (err) return;
+    screenCache = { at: Date.now(), screens: windowsScreensFromOutput(stdout) };
+  });
+}
+
+function enumerateScreens(): ScreenDevice[] {
   const os = platform();
 
   if (os === 'darwin') {
@@ -47,6 +75,9 @@ export function listScreenDevices(): ScreenDevice[] {
   }
   if (os === 'linux') {
     return listLinuxScreenDevices();
+  }
+  if (os === 'win32') {
+    return listWindowsScreenDevices();
   }
 
   return [];
@@ -116,6 +147,59 @@ function getMacOSScreenResolutions(): { width: number; height: number }[] {
   return resolutions;
 }
 
+// ─── Windows screens ─────────────────────────────────────────────────
+
+/**
+ * Monitors with physical-pixel bounds. The process must be DPI-aware before asking, or
+ * Windows reports scaled sizes for high-DPI displays (ffmpeg's gdigrab is DPI-aware and
+ * captures physical pixels). Only the interactive session sees real monitors: from an SSH
+ * session there is a fake 1024x768 "WinDisc" display and gdigrab fails.
+ */
+const WINDOWS_SCREENS_SCRIPT = `
+Add-Type -Namespace W -Name D -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();'
+[void][W.D]::SetProcessDPIAware()
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Screen]::AllScreens | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.DeviceName, $_.Bounds.X, $_.Bounds.Y, $_.Bounds.Width, $_.Bounds.Height, $_.Primary }
+`;
+
+const WINDOWS_SCREENS_ARGS = ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_SCREENS_SCRIPT];
+
+function listWindowsScreenDevices(): ScreenDevice[] {
+  try {
+    const result = spawnSync('powershell', WINDOWS_SCREENS_ARGS, {
+      encoding: 'utf-8',
+      timeout: 10000,
+      windowsHide: true,
+    });
+    return windowsScreensFromOutput(result.stdout ?? '');
+  } catch {
+    return windowsScreensFromOutput('');
+  }
+}
+
+/** Parse `name|x|y|w|h|primary` lines; primary first so a single Enter shares the main monitor. */
+function windowsScreensFromOutput(output: string): ScreenDevice[] {
+  const screens: ScreenDevice[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    const [device, x, y, w, h, primary] = line.trim().split('|');
+    if (!device || !w || !h) continue;
+    const screen: ScreenDevice = {
+      id: device,
+      name: `Display ${screens.length + 1} (${w}x${h}${primary === 'True' ? ', primary' : ''})`,
+      width: Number.parseInt(w, 10),
+      height: Number.parseInt(h, 10),
+      x: Number.parseInt(x, 10),
+      y: Number.parseInt(y, 10),
+      primary: primary === 'True',
+    };
+    if (screen.primary) screens.unshift(screen);
+    else screens.push(screen);
+  }
+  // No bounds known: gdigrab captures the whole virtual desktop.
+  if (screens.length === 0) screens.push({ id: 'desktop', name: 'Desktop' });
+  return screens;
+}
+
 // ─── Linux video/screen devices ──────────────────────────────────────
 
 function listLinuxVideoDevices(): VideoDevice[] {
@@ -140,14 +224,15 @@ function listLinuxScreenDevices(): ScreenDevice[] {
     const output = execSync('xrandr --query', { encoding: 'utf-8', timeout: 5000 });
     for (const line of output.split('\n')) {
       // Match lines like: "HDMI-1 connected 1920x1080+0+0"
-      const match = line.match(/^(\S+)\s+connected\s+(?:primary\s+)?(\d+)x(\d+)\+(\d+)\+(\d+)/);
+      const match = line.match(/^(\S+)\s+connected\s+(primary\s+)?(\d+)x(\d+)\+(\d+)\+(\d+)/);
       if (match) {
-        const [, name, w, h, offX, offY] = match;
+        const [, name, primary, w, h, offX, offY] = match;
         screens.push({
           id: `:0.0+${offX},${offY}`,
           name: `${name} (${w}x${h})`,
           width: Number.parseInt(w, 10),
           height: Number.parseInt(h, 10),
+          primary: !!primary,
         });
       }
     }

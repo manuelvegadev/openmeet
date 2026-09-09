@@ -16,6 +16,7 @@ interface AppProps {
   inputDevice?: string;
   outputDevice?: string;
   videoEnabled?: boolean;
+  webcamEnabled?: boolean;
   videoDevice?: string;
   debug?: boolean;
 }
@@ -70,6 +71,7 @@ export function App({
   inputDevice,
   outputDevice,
   videoEnabled,
+  webcamEnabled,
   videoDevice,
   debug = false,
 }: AppProps) {
@@ -193,6 +195,7 @@ export function App({
           version={version}
           deviceSelection={deviceSelection}
           videoEnabled={videoEnabled}
+          webcamEnabled={webcamEnabled}
           videoDevice={videoDevice}
           debug={debug}
           onBack={() => setScreen('home')}

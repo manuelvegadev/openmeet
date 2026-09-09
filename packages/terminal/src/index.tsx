@@ -14,6 +14,17 @@ import {
   parseGainFlag,
 } from './lib/audio/channels.js';
 import { parseBackendFlag, resolveBackendName, setActiveBackendName } from './lib/audio/index.js';
+import {
+  rawVideoPlayerArgs,
+  SCREEN_FPS,
+  SCREEN_MAX_HEIGHT,
+  SCREEN_MAX_WIDTH,
+  screenCaptureArgs,
+  WEBCAM_FPS,
+  WEBCAM_HEIGHT,
+  WEBCAM_WIDTH,
+  webcamCaptureArgs,
+} from './lib/capture-args.js';
 import { listScreenDevices } from './lib/devices.js';
 import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
 import { getOrCreateEmoji } from './lib/emoji.js';
@@ -29,28 +40,45 @@ import {
 } from './lib/window-state.js';
 import { APP_VERSION } from './version.js';
 
-function checkSox(): boolean {
+function hasBinary(bin: string): boolean {
   try {
-    execSync('which rec', { stdio: 'ignore' });
-    execSync('which play', { stdio: 'ignore' });
+    execSync(`${platform() === 'win32' ? 'where' : 'which'} ${bin}`, { stdio: 'ignore' });
     return true;
   } catch {
     return false;
   }
 }
 
+function checkSox(): boolean {
+  return hasBinary('rec') && hasBinary('play');
+}
+
 function checkFfmpeg(): { ffplay: boolean; ffmpeg: boolean } {
-  let ffplay = false;
-  let ffmpeg = false;
-  try {
-    execSync('which ffplay', { stdio: 'ignore' });
-    ffplay = true;
-  } catch {}
-  try {
-    execSync('which ffmpeg', { stdio: 'ignore' });
-    ffmpeg = true;
-  } catch {}
-  return { ffplay, ffmpeg };
+  return { ffplay: hasBinary('ffplay'), ffmpeg: hasBinary('ffmpeg') };
+}
+
+/** ffmpeg → ffplay preview for the --test-* modes; exits with either process. */
+function runPreview(captureArgs: string[], playerArgs: string[]): void {
+  const capture: ChildProcess = spawn('ffmpeg', captureArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
+  const player: ChildProcess = spawn('ffplay', playerArgs, { stdio: ['pipe', 'ignore', 'ignore'] });
+  capture.stdout?.pipe(player.stdin!);
+  // Closing the ffplay window breaks the pipe before 'close' fires; not an error worth a stack trace.
+  player.stdin?.on('error', () => {});
+  const stop = () => {
+    capture.kill();
+    player.kill();
+  };
+  player.on('close', () => {
+    capture.kill();
+    process.exit(0);
+  });
+  capture.on('close', () => {
+    player.kill();
+    process.exit(0);
+  });
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  setInterval(() => {}, 60000);
 }
 
 function checkMicPermission(): 'granted' | 'denied' | 'unknown' {
@@ -123,7 +151,7 @@ Usage: openmeet [options]
   --room <id>            Room ID to join
   --input-device <name>  Input device name (skip device picker)
   --output-device <name> Output device name (skip device picker)
-  --no-video             Disable video (audio-only mode)
+  --no-video             Disable video (audio-only mode; webcam is macOS/Linux only)
   --audio-backend <name> Audio I/O backend: rtaudio (native; default on macOS/Windows) or sox (default on Linux)
   --input-channels <p>   auto | stereo | mono | left | right — how the mic's channel pair is sent (saved)
   --input-gain <dB>      Capture gain in dB, e.g. 6 or -3 (saved)
@@ -139,86 +167,17 @@ Usage: openmeet [options]
 
 if (values['test-camera']) {
   const device = values['video-device'] ?? loadSettings().videoDeviceId ?? '0';
-  const isMac = platform() === 'darwin';
+  const captureArgs = webcamCaptureArgs(device);
+  if (!captureArgs) {
+    process.stderr.write(`Webcam capture is not available on ${getPlatformSupport().name}.\n`);
+    process.exit(1);
+  }
   process.stdout.write(`Testing camera (device: ${device})... Press q or Esc in the ffplay window to close.\n`);
-
-  const captureArgs = isMac
-    ? [
-        '-f',
-        'avfoundation',
-        '-framerate',
-        '30',
-        '-video_size',
-        '640x480',
-        '-i',
-        `${device}:none`,
-        '-f',
-        'rawvideo',
-        '-pix_fmt',
-        'yuv420p',
-        '-loglevel',
-        'warning',
-        'pipe:1',
-      ]
-    : [
-        '-f',
-        'v4l2',
-        '-framerate',
-        '30',
-        '-video_size',
-        '640x480',
-        '-i',
-        device,
-        '-f',
-        'rawvideo',
-        '-pix_fmt',
-        'yuv420p',
-        '-loglevel',
-        'warning',
-        'pipe:1',
-      ];
-
-  const capture: ChildProcess = spawn('ffmpeg', captureArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
-  const player: ChildProcess = spawn(
-    'ffplay',
-    [
-      '-f',
-      'rawvideo',
-      '-pixel_format',
-      'yuv420p',
-      '-video_size',
-      '640x480',
-      '-framerate',
-      '30',
-      '-window_title',
-      `Camera Test (device ${device})`,
-      '-i',
-      'pipe:0',
-    ],
-    { stdio: ['pipe', 'ignore', 'ignore'] },
+  runPreview(
+    captureArgs,
+    rawVideoPlayerArgs(WEBCAM_WIDTH, WEBCAM_HEIGHT, WEBCAM_FPS, `Camera Test (device ${device})`),
   );
-
-  capture.stdout?.pipe(player.stdin!);
-  player.on('close', () => {
-    capture.kill();
-    process.exit(0);
-  });
-  capture.on('close', () => {
-    player.kill();
-    process.exit(0);
-  });
-  process.on('SIGINT', () => {
-    capture.kill();
-    player.kill();
-  });
-  process.on('SIGTERM', () => {
-    capture.kill();
-    player.kill();
-  });
-  // eslint-disable-next-line -- keep process alive while test runs
-  setInterval(() => {}, 60000);
 } else if (values['test-screen']) {
-  const isMac = platform() === 'darwin';
   const screens = listScreenDevices();
   if (screens.length === 0) {
     process.stderr.write('No screen devices found.\n');
@@ -230,91 +189,10 @@ if (values['test-camera']) {
   }
   const screen = screens[0];
   process.stdout.write(`\nTesting screen capture: ${screen.name}... Press q or Esc in the ffplay window to close.\n`);
-
-  const scaleFilter =
-    'scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1920:1080:(ow-iw)/2:(oh-ih)/2';
-  const captureArgs = isMac
-    ? [
-        '-f',
-        'avfoundation',
-        '-capture_cursor',
-        '1',
-        '-framerate',
-        '30',
-        '-i',
-        `${screen.id}:none`,
-        '-vf',
-        scaleFilter,
-        '-r',
-        '30',
-        '-f',
-        'rawvideo',
-        '-pix_fmt',
-        'yuv420p',
-        '-loglevel',
-        'warning',
-        'pipe:1',
-      ]
-    : [
-        '-f',
-        'x11grab',
-        '-framerate',
-        '30',
-        '-video_size',
-        `${screen.width ?? 1920}x${screen.height ?? 1080}`,
-        '-i',
-        screen.id,
-        '-vf',
-        scaleFilter,
-        '-r',
-        '30',
-        '-f',
-        'rawvideo',
-        '-pix_fmt',
-        'yuv420p',
-        '-loglevel',
-        'warning',
-        'pipe:1',
-      ];
-
-  const capture: ChildProcess = spawn('ffmpeg', captureArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
-  const player: ChildProcess = spawn(
-    'ffplay',
-    [
-      '-f',
-      'rawvideo',
-      '-pixel_format',
-      'yuv420p',
-      '-video_size',
-      '1920x1080',
-      '-framerate',
-      '30',
-      '-window_title',
-      `Screen Test (${screen.name})`,
-      '-i',
-      'pipe:0',
-    ],
-    { stdio: ['pipe', 'ignore', 'ignore'] },
+  runPreview(
+    screenCaptureArgs(screen),
+    rawVideoPlayerArgs(SCREEN_MAX_WIDTH, SCREEN_MAX_HEIGHT, SCREEN_FPS, `Screen Test (${screen.name})`),
   );
-
-  capture.stdout?.pipe(player.stdin!);
-  player.on('close', () => {
-    capture.kill();
-    process.exit(0);
-  });
-  capture.on('close', () => {
-    player.kill();
-    process.exit(0);
-  });
-  process.on('SIGINT', () => {
-    capture.kill();
-    player.kill();
-  });
-  process.on('SIGTERM', () => {
-    capture.kill();
-    player.kill();
-  });
-  setInterval(() => {}, 60000);
 } else {
   // ─── Normal app flow ──────────────────────────────────────────────────
 
@@ -342,7 +220,8 @@ Install sox:
   }
 
   // Video support: soft-fail if ffmpeg/ffplay missing. Gated per platform (see lib/platform.ts).
-  let videoEnabled = !values['no-video'] && getPlatformSupport().video;
+  const support = getPlatformSupport();
+  let videoEnabled = !values['no-video'] && support.video;
   if (videoEnabled) {
     const ffStatus = checkFfmpeg();
     if (!ffStatus.ffplay || !ffStatus.ffmpeg) {
@@ -350,6 +229,7 @@ Install sox:
 
 Install ffmpeg for video support:
   macOS:   brew install ffmpeg
+  Windows: winget install Gyan.FFmpeg
   Ubuntu:  sudo apt install ffmpeg
   Fedora:  sudo dnf install ffmpeg
 
@@ -440,6 +320,7 @@ Your terminal app needs microphone permission on macOS:
       inputDevice={values['input-device']}
       outputDevice={values['output-device']}
       videoEnabled={videoEnabled}
+      webcamEnabled={videoEnabled && support.webcam}
       videoDevice={values['video-device']}
       debug={values.debug ?? false}
     />,

@@ -5,7 +5,7 @@ import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from '.
 import { useRoom } from '../hooks/use-room.js';
 import { VU_MAX_RMS as MAX_RMS } from '../lib/audio/constants.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
-import { listScreenDevices, type ScreenDevice } from '../lib/devices.js';
+import { listScreenDevices, prefetchScreenDevices, type ScreenDevice } from '../lib/devices.js';
 import { getPlatformSupport } from '../lib/platform.js';
 import { saveSettings } from '../lib/settings.js';
 import { ChatInput } from './chat-input.js';
@@ -36,6 +36,7 @@ interface RoomViewProps {
   version: string;
   deviceSelection: AudioDeviceSelection;
   videoEnabled?: boolean;
+  webcamEnabled?: boolean;
   videoDevice?: string;
   debug?: boolean;
   onBack: () => void;
@@ -52,11 +53,21 @@ export function RoomView({
   version,
   deviceSelection,
   videoEnabled,
+  webcamEnabled,
   videoDevice,
   debug = false,
   onBack,
 }: RoomViewProps) {
-  const room = useRoom({ serverUrl, roomId, username, deviceSelection, debug, videoEnabled, videoDevice });
+  const room = useRoom({
+    serverUrl,
+    roomId,
+    username,
+    deviceSelection,
+    debug,
+    videoEnabled,
+    webcamEnabled,
+    videoDevice,
+  });
   const [inputFocused, setInputFocused] = useState(true);
   const [deviceStep, setDeviceStep] = useState<DevicePickerStep>(null);
   const [devices, setDevices] = useState<{ inputs: AudioDevice[]; outputs: AudioDevice[] }>({
@@ -74,6 +85,10 @@ export function RoomView({
   const smoothedRef = useRef(0);
 
   // Load devices when picker opens
+  useEffect(() => {
+    prefetchScreenDevices();
+  }, []);
+
   useEffect(() => {
     if (deviceStep === 'loading') {
       listAudioDevices().then((d) => {
@@ -169,7 +184,7 @@ export function RoomView({
       if (input === 'm') {
         room.toggleMute();
       }
-      if (input === 'v' && room.videoEnabled) {
+      if (input === 'v' && room.webcamEnabled) {
         room.toggleVideo();
       }
       if (input === 'd') {
@@ -475,6 +490,7 @@ export function RoomView({
         isMuted={room.isMuted}
         isVideoMuted={room.isVideoMuted}
         videoEnabled={room.videoEnabled}
+        webcamEnabled={room.webcamEnabled}
         isScreenSharing={room.isScreenSharing}
         debugMode={room.debugMode}
       />

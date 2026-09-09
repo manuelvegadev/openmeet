@@ -25,6 +25,7 @@ interface UseRoomOptions {
   deviceSelection: AudioDeviceSelection;
   debug?: boolean;
   videoEnabled?: boolean;
+  webcamEnabled?: boolean;
   videoDevice?: string;
 }
 
@@ -46,10 +47,24 @@ interface UseRoomReturn extends RoomState {
 }
 
 export function useRoom(options: UseRoomOptions): UseRoomReturn {
-  const { serverUrl, roomId, username, deviceSelection, debug = false, videoEnabled = false, videoDevice } = options;
+  const {
+    serverUrl,
+    roomId,
+    username,
+    deviceSelection,
+    debug = false,
+    videoEnabled = false,
+    webcamEnabled = false,
+    videoDevice,
+  } = options;
   const engine = getEngine();
 
-  const [state, setState] = useState<RoomState>(() => ({ ...initialRoomState(), videoEnabled, debugMode: debug }));
+  const [state, setState] = useState<RoomState>(() => ({
+    ...initialRoomState(),
+    videoEnabled,
+    webcamEnabled,
+    debugMode: debug,
+  }));
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [roomEvents, setRoomEvents] = useState<RoomEvent[]>([]);
   const [engineError, setEngineError] = useState<string | null>(null);
@@ -113,6 +128,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
         debug,
         videoEnabled,
+        webcamEnabled,
         videoDevice,
       },
     });
@@ -125,7 +141,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         engine.send({ type: 'leave' });
       }
     };
-  }, [engine, serverUrl, roomId, username, deviceSelection, debug, videoEnabled, videoDevice]);
+  }, [engine, serverUrl, roomId, username, deviceSelection, debug, videoEnabled, webcamEnabled, videoDevice]);
 
   // Diagnostics for *this* process (loop stalls, render cost), logged through the engine
   // so both processes end up in one file.

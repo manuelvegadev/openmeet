@@ -47,6 +47,8 @@ export interface RoomState {
   isMuted: boolean;
   isVideoMuted: boolean;
   videoEnabled: boolean;
+  /** Webcam capture available (video pipeline present and implemented on this OS). */
+  webcamEnabled: boolean;
   overlayEnabled: boolean;
   isScreenSharing: boolean;
   error: string | null;
@@ -72,6 +74,7 @@ export function initialRoomState(): RoomState {
     isMuted: false,
     isVideoMuted: true,
     videoEnabled: false,
+    webcamEnabled: false,
     overlayEnabled: false,
     isScreenSharing: false,
     error: null,
@@ -93,6 +96,7 @@ export interface JoinOptions {
   input: InputOptions;
   debug: boolean;
   videoEnabled: boolean;
+  webcamEnabled: boolean;
   videoDevice?: string;
 }
 

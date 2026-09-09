@@ -137,7 +137,12 @@ export class RoomEngine {
   join(options: JoinOptions): void {
     if (this.options) this.leave();
     this.options = options;
-    this.state = { ...initialRoomState(), videoEnabled: options.videoEnabled, debugMode: options.debug };
+    this.state = {
+      ...initialRoomState(),
+      videoEnabled: options.videoEnabled,
+      webcamEnabled: options.webcamEnabled,
+      debugMode: options.debug,
+    };
     const diagnostics = diagnosticsEnabled(options.debug);
     if (diagnostics) this.openLogFile();
     const debugFn = diagnostics ? this.debugFn : undefined;
@@ -166,6 +171,12 @@ export class RoomEngine {
       videoManager.overlayEnabled = loadSettings().videoOverlay;
       videoManager.onWindowClosed = (peerId) => {
         this.patch({ peerVideoOpen: { ...this.state.peerVideoOpen, [peerId]: false } });
+      };
+      videoManager.onScreenCaptureEnded = () => {
+        // Our own stopScreenShare() clears the flag before killing ffmpeg; anything else is a failure.
+        if (!this.state.isScreenSharing) return;
+        this.stopScreenShare();
+        this.addEvent('Screen sharing stopped: capture failed (check screen recording permission / ffmpeg)', 'screen');
       };
       this.videoManager = videoManager;
       this.state.overlayEnabled = videoManager.overlayEnabled;
@@ -270,7 +281,7 @@ export class RoomEngine {
         for (const p of msg.participants) this.addEvent(`${p.username} is in the room`, 'info');
 
         void audioManager.start();
-        if (videoManager && this.videoSource) {
+        if (videoManager && this.videoSource && options.webcamEnabled) {
           const device = options.videoDevice ?? loadSettings().videoDeviceId ?? undefined;
           videoManager.startCapture(this.videoSource, device);
         }

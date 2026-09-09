@@ -4,12 +4,15 @@ import { useEffect, useState } from 'react';
 import { type AudioDevice, listAudioDevices } from '../engine/client.js';
 import { INPUT_CHANNEL_POLICIES } from '../lib/audio/channels.js';
 import { listVideoDevices, type VideoDevice } from '../lib/devices.js';
+import { getPlatformSupport } from '../lib/platform.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
 import { RENDER_PAUSE_POLICIES } from '../lib/window-state.js';
 
 interface SettingsViewProps {
   onBack: () => void;
 }
+
+const webcamSupported = getPlatformSupport().webcam;
 
 type Step = 'menu' | 'pick-input' | 'pick-output' | 'pick-camera';
 
@@ -50,7 +53,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     ? (videoDevices.find((d) => d.id === settings.videoDeviceId)?.name ?? `Device ${settings.videoDeviceId}`)
     : 'Default (0)';
 
-  const rows: SettingRow[] = [
+  const allRows: SettingRow[] = [
     { key: 'input', label: 'Audio Input', value: inputName, action: 'pick-input' },
     { key: 'output', label: 'Audio Output', value: outputName, action: 'pick-output' },
     { key: 'camera', label: 'Camera', value: cameraName, action: 'pick-camera' },
@@ -63,6 +66,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       action: 'cycle-pause',
     },
   ];
+  const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
   const cycle = <T extends string>(list: readonly T[], current: T): T =>
     list[(list.indexOf(current) + 1) % list.length];
 
