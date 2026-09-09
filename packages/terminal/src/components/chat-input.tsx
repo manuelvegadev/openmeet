@@ -6,10 +6,12 @@ import { TextInput } from './text-input.js';
 
 interface ChatInputProps {
   focused: boolean;
+  /** Off while a modal is up. The draft stays on screen, without the cursor, and takes no keys. */
+  active?: boolean;
   onSend: (content: string) => void;
 }
 
-export function ChatInput({ focused, onSend }: ChatInputProps) {
+export function ChatInput({ focused, active = true, onSend }: ChatInputProps) {
   const [value, setValue] = useState('');
 
   return (
@@ -19,6 +21,7 @@ export function ChatInput({ focused, onSend }: ChatInputProps) {
       </Text>
       {focused ? (
         <TextInput
+          focus={active}
           value={value}
           onChange={setValue}
           onSubmit={(val) => {

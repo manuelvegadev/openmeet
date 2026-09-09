@@ -73,13 +73,14 @@ function enumerateScreens(): ScreenDevice[] {
 
   if (os === 'darwin') {
     const screens = parseMacOSAvfoundation().screens;
-    // Enrich with display resolutions from system_profiler
-    const resolutions = getMacOSScreenResolutions();
-    for (let i = 0; i < screens.length; i++) {
-      if (i < resolutions.length) {
-        screens[i].width = resolutions[i].width;
-        screens[i].height = resolutions[i].height;
-      }
+    const displays = getMacOSDisplays();
+    for (const [i, screen] of screens.entries()) {
+      const display = displays[i];
+      if (!display) continue;
+      if (display.name) screen.name = display.name;
+      screen.width = display.width;
+      screen.height = display.height;
+      screen.primary = display.primary;
     }
     return screens;
   }
@@ -135,26 +136,34 @@ function parseMacOSAvfoundation(): { cameras: VideoDevice[]; screens: ScreenDevi
   return { cameras, screens };
 }
 
-function getMacOSScreenResolutions(): { width: number; height: number }[] {
-  const resolutions: { width: number; height: number }[] = [];
+/**
+ * What macOS knows about each attached display: the monitor's own name ("Odyssey G85SB",
+ * "Built-in Retina Display"), its logical resolution and whether it is the main one.
+ * `ffmpeg -list_devices` only ever says "Capture screen 0", which is no help with two
+ * monitors, so the picker's labels come from here and the index still comes from ffmpeg.
+ * The two lists are matched by position, as the resolutions already were.
+ */
+function getMacOSDisplays(): { name?: string; width?: number; height?: number; primary?: boolean }[] {
+  const displays: { name?: string; width?: number; height?: number; primary?: boolean }[] = [];
   try {
     const json = execSync('system_profiler SPDisplaysDataType -json', { encoding: 'utf-8', timeout: 5000 });
     const data = JSON.parse(json);
     for (const gpu of data.SPDisplaysDataType ?? []) {
       for (const display of gpu.spdisplays_ndrvs ?? []) {
-        const res = display._spdisplays_resolution;
-        if (res) {
-          const match = res.match(/(\d+)\s*x\s*(\d+)/);
-          if (match) {
-            resolutions.push({ width: Number.parseInt(match[1], 10), height: Number.parseInt(match[2], 10) });
-          }
-        }
+        // "3096 x 1296 @ 120.00Hz" — the logical size, which is what avfoundation captures.
+        const match = /(\d+)\s*x\s*(\d+)/.exec(display._spdisplays_resolution ?? '');
+        displays.push({
+          name: typeof display._name === 'string' ? display._name : undefined,
+          width: match ? Number.parseInt(match[1], 10) : undefined,
+          height: match ? Number.parseInt(match[2], 10) : undefined,
+          primary: display.spdisplays_main === 'spdisplays_yes',
+        });
       }
     }
   } catch {
     // system_profiler not available
   }
-  return resolutions;
+  return displays;
 }
 
 // ─── Windows screens ─────────────────────────────────────────────────
@@ -199,7 +208,9 @@ function windowsScreensFromOutput(output: string): ScreenDevice[] {
     const screen: ScreenDevice = {
       id: device,
       outputIndex: enumerated++,
-      name: `Display ${screens.length + 1} (${w}x${h}${primary === 'True' ? ', primary' : ''})`,
+      // `\\.\DISPLAY1` is not a name anyone recognises; the picker adds the size and the
+      // "main" mark itself, so this is just which monitor Windows thinks it is.
+      name: `Display ${device.replace(/^\\\\[.?]\\/, '')}`,
       width: Number.parseInt(w, 10),
       height: Number.parseInt(h, 10),
       x: Number.parseInt(x, 10),
@@ -243,7 +254,7 @@ function listLinuxScreenDevices(): ScreenDevice[] {
         const [, name, primary, w, h, offX, offY] = match;
         screens.push({
           id: `:0.0+${offX},${offY}`,
-          name: `${name} (${w}x${h})`,
+          name,
           width: Number.parseInt(w, 10),
           height: Number.parseInt(h, 10),
           primary: !!primary,

@@ -97,6 +97,8 @@ interface ChatLogProps {
    * with the focus elsewhere those keys select a participant. Page Up/Down scroll always.
    */
   arrowsScroll: boolean;
+  /** Off while a modal is up: the room's tree stays mounted behind it and must not hear keys. */
+  active?: boolean;
 }
 
 /**
@@ -116,7 +118,7 @@ interface ChatLogProps {
  * wrapped Text correctly, whereas a row Box of several Texts keeps a one-row height when one
  * of them wraps and paints the second line over the next entry (gotcha 34).
  */
-export function ChatLog({ entries, arrowsScroll }: ChatLogProps) {
+export function ChatLog({ entries, arrowsScroll, active = true }: ChatLogProps) {
   const [anchor, setAnchor] = useState<number | null>(null);
   const { rows } = useWindowSize();
 
@@ -136,7 +138,7 @@ export function ChatLog({ entries, arrowsScroll }: ChatLogProps) {
       else if (arrowsScroll && key.upArrow) scroll(-1);
       else if (arrowsScroll && key.downArrow) scroll(1);
     },
-    { isActive: entries.length > 0 },
+    { isActive: active && entries.length > 0 },
   );
 
   const shown = entries.slice(Math.max(0, end + 1 - rows), end + 1);

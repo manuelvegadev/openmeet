@@ -13,6 +13,7 @@ import { ChatLog, mergeChat } from './chat-log.js';
 import { DebugLog } from './debug-log.js';
 import { Elapsed } from './elapsed.js';
 import { MicBar } from './level-bar.js';
+import { Modal } from './modal.js';
 import { ParticipantList } from './participant-list.js';
 import { Screen } from './screen.js';
 import { Select } from './select.js';
@@ -37,6 +38,12 @@ interface RoomViewProps {
 type DevicePickerStep = null | 'loading' | 'input' | 'output' | 'test';
 
 const platformName = getPlatformSupport().name;
+
+/** A screen in the picker: the monitor's own name, its size, and which one is the main display. */
+function screenLabel(d: ScreenDevice): string {
+  const size = d.width && d.height ? ` ${d.width}x${d.height}` : '';
+  return `${d.name}${size}${d.primary ? ' · main' : ''}`;
+}
 
 export function RoomView({
   serverUrl,
@@ -247,30 +254,6 @@ export function RoomView({
     }
   });
 
-  // Screen picker overlay
-  if (screenPickerOpen && screenDeviceList.length > 0) {
-    const screenItems = screenDeviceList.map((d) => ({
-      label: `${d.name}${d.width && d.height ? ` (${d.width}x${d.height})` : ''}`,
-      value: d.id,
-    }));
-    return (
-      <Screen title="Screen Share" hints={[{ key: 'esc', label: 'cancel' }]}>
-        <Text bold>Select screen to share:</Text>
-        <Select
-          items={screenItems}
-          onSelect={(item) => {
-            const device = screenDeviceList.find((d) => d.id === item.value);
-            if (device) {
-              setLastScreenDevice(device);
-              setScreenPickerOpen(false);
-              room.startScreenSharing(device);
-            }
-          }}
-        />
-      </Screen>
-    );
-  }
-
   // Device picker overlay
   if (deviceStep && deviceStep !== 'loading') {
     if (deviceStep === 'test') {
@@ -359,6 +342,9 @@ export function RoomView({
     );
   }
 
+  // A modal is up: the room stays drawn behind it, but nothing in it may take a key.
+  const overlay = screenPickerOpen && screenDeviceList.length > 0;
+
   // What `w` and `e` would do to the selected peer right now. These duplicate the conditions
   // in the key handlers above — deliberately, and they have to be kept in step: a button that
   // is drawn must work, and a key that works should be advertised.
@@ -438,9 +424,9 @@ export function RoomView({
       <SplitPanes
         chat={
           <>
-            <ChatLog entries={chat} arrowsScroll={inputFocused} />
+            <ChatLog entries={chat} arrowsScroll={inputFocused} active={!overlay} />
             <Rule />
-            <ChatInput focused={inputFocused} onSend={room.sendMessage} />
+            <ChatInput focused={inputFocused} active={!overlay} onSend={room.sendMessage} />
           </>
         }
         people={
@@ -492,6 +478,23 @@ export function RoomView({
         <Box paddingX={1}>
           <Text color={theme.danger}>Error: {room.error}</Text>
         </Box>
+      )}
+
+      {/* Over the room, not instead of it: the conversation stays visible behind the choice. */}
+      {overlay && (
+        <Modal title="Share a screen" hints={[{ key: 'esc', label: 'cancel' }]}>
+          <Select
+            items={screenDeviceList.map((d) => ({ label: screenLabel(d), value: d.id }))}
+            onSelect={(item) => {
+              const device = screenDeviceList.find((d) => d.id === item.value);
+              if (device) {
+                setLastScreenDevice(device);
+                setScreenPickerOpen(false);
+                room.startScreenSharing(device);
+              }
+            }}
+          />
+        </Modal>
       )}
     </Box>
   );
