@@ -1,10 +1,11 @@
 import { Box, useApp, useWindowSize } from 'ink';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { DevicePicker } from './components/device-picker.js';
 import { HomeScreen } from './components/home-screen.js';
 import { RoomView } from './components/room-view.js';
 import { SettingsView } from './components/settings-view.js';
 import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from './engine/client.js';
+import { resolveBroadcastDefault } from './lib/audio/nvidia-broadcast.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { framedBorder, theme } from './lib/theme.js';
 
@@ -78,6 +79,19 @@ export function App({
     });
   }, []);
 
+  /**
+   * The one way into the room. The saved ids stay exactly what was chosen ("System Default"
+   * included); only the live selection is resolved, so the engine can see when the system
+   * default is really the Broadcast mic.
+   */
+  const enterRoom = useCallback(
+    (input: AudioDevice | undefined, output: AudioDevice | undefined) => {
+      setDeviceSelection({ input: resolveBroadcastDefault(input, devices.inputs), output });
+      setScreen('room');
+    },
+    [devices.inputs],
+  );
+
   // Resolve device selection from saved settings when transitioning to devices screen
   useEffect(() => {
     if (screen !== 'devices' || !devicesLoaded) return;
@@ -88,8 +102,7 @@ export function App({
     if (inputDevice && outputDevice) {
       const input = devices.inputs.find((d) => d.name === inputDevice);
       const output = devices.outputs.find((d) => d.name === outputDevice);
-      setDeviceSelection({ input, output });
-      setScreen('room');
+      enterRoom(input, output);
       return;
     }
 
@@ -102,11 +115,10 @@ export function App({
         const output = settings.audioOutputId
           ? devices.outputs.find((d) => d.id === settings.audioOutputId)
           : undefined;
-        setDeviceSelection({ input, output });
-        setScreen('room');
+        enterRoom(input, output);
       }
     }
-  }, [screen, inputDevice, outputDevice, devices, devicesLoaded]);
+  }, [screen, inputDevice, outputDevice, devices, devicesLoaded, enterRoom]);
 
   const handleJoinRoom = (id: string) => {
     setRoomId(id);
@@ -138,8 +150,7 @@ export function App({
               audioOutputId: output?.id ?? null,
               devicesConfigured: true,
             });
-            setDeviceSelection({ input, output });
-            setScreen('room');
+            enterRoom(input, output);
           }}
         />
       )}

@@ -2,8 +2,10 @@ import { Box, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import { useEffect, useRef, useState } from 'react';
 import type { AudioDevice } from '../engine/client.js';
+import { findBroadcastInput } from '../lib/audio/nvidia-broadcast.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
 import { theme } from '../lib/theme.js';
+import { BroadcastHint, inputPickerItems } from './broadcast.js';
 import { KeyChip, KeyHints } from './key-hints.js';
 import { MicBar } from './level-bar.js';
 import { Rule, Text } from './text.js';
@@ -26,7 +28,6 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
   const [micLevel, setMicLevel] = useState(0);
   const testerRef = useRef<MicTester | null>(null);
   const smoothedRef = useRef(0);
-
   // Mic tester lifecycle — active only during 'test' step
   useEffect(() => {
     if (step !== 'test') {
@@ -111,17 +112,17 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
     );
   }
 
-  const inputItems = [
-    { label: 'System Default', value: '__default__' },
-    ...inputs.map((d) => ({ label: d.name, value: d.id })),
-  ];
+  const broadcast = findBroadcastInput(inputs);
+  const inputItems = inputPickerItems(inputs);
 
   const outputItems = [
     { label: 'System Default', value: '__default__' },
     ...outputs.map((d) => ({ label: d.name, value: d.id })),
   ];
 
-  const savedInputIndex = savedInputId ? inputItems.findIndex((item) => item.value === savedInputId) : 0;
+  // A saved choice wins; on a first run the GPU path is the recommendation, so start there.
+  const firstRunIndex = broadcast ? inputItems.findIndex((item) => item.value === broadcast.id) : 0;
+  const savedInputIndex = savedInputId ? inputItems.findIndex((item) => item.value === savedInputId) : firstRunIndex;
   const savedOutputIndex = savedOutputId ? outputItems.findIndex((item) => item.value === savedOutputId) : 0;
 
   if (step === 'input') {
@@ -146,6 +147,8 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
             }
           }}
         />
+        <Text />
+        <BroadcastHint inputs={inputs} loaded={!loading} />
         <Text />
         <KeyHints
           hints={[

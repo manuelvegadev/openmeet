@@ -3,12 +3,14 @@ import SelectInput from 'ink-select-input';
 import { useEffect, useState } from 'react';
 import { type AudioDevice, listAudioDevices } from '../engine/client.js';
 import { INPUT_CHANNEL_POLICIES } from '../lib/audio/channels.js';
+import { isBroadcastDevice, resolveBroadcastDefault } from '../lib/audio/nvidia-broadcast.js';
 import { listVideoDevices, type VideoDevice } from '../lib/devices.js';
 import { getPlatformSupport } from '../lib/platform.js';
-import { AUDIO_KBPS_STEPS } from '../lib/sdp.js';
+import { AUDIO_KBPS_STEPS, SCREEN_KBPS_STEPS } from '../lib/sdp.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
 import { theme } from '../lib/theme.js';
 import { RENDER_PAUSE_POLICIES } from '../lib/window-state.js';
+import { BroadcastHint, inputPickerItems } from './broadcast.js';
 import { KeyHints } from './key-hints.js';
 import { Rule, Text } from './text.js';
 
@@ -58,6 +60,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const inputName = settings.audioInputId
     ? (devices.inputs.find((d) => d.id === settings.audioInputId)?.name ?? 'Unknown')
     : 'System Default';
+  // What the engine will actually open, so the rows below describe the call you would get.
+  const selectedInput = resolveBroadcastDefault(
+    settings.audioInputId ? devices.inputs.find((d) => d.id === settings.audioInputId) : undefined,
+    devices.inputs,
+  );
+  const broadcastActive = isBroadcastDevice(selectedInput);
   const outputName = settings.audioOutputId
     ? (devices.outputs.find((d) => d.id === settings.audioOutputId)?.name ?? 'Unknown')
     : 'System Default';
@@ -263,12 +271,17 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               <Box key={row.key} gap={1}>
                 <Text color={selected ? theme.accent : theme.text}>{selected ? '▸' : ' '}</Text>
                 <Text bold={selected}>{row.label.padEnd(labelWidth)}</Text>
-                <Text color={selected ? theme.text : theme.muted}>{row.value}</Text>
+                {/* A disabled row stays muted even when selected: enter does nothing on it. */}
+                <Text color={selected && !row.disabled ? theme.text : theme.muted}>{row.value}</Text>
               </Box>
             );
           })}
         </Box>
       )}
+
+      <Box marginTop={1}>
+        <BroadcastHint inputs={devices.inputs} loaded={devicesLoaded} />
+      </Box>
 
       <Box flexGrow={1} />
       <KeyHints

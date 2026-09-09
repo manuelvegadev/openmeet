@@ -5,9 +5,11 @@ import type { WSMessage } from '@openmeet/shared';
 import { VU_BAR_COUNT, VU_MAX_RMS } from '../lib/audio/constants.js';
 import { type AudioDeviceSelection, AudioManager } from '../lib/audio/index.js';
 import { createNoiseSuppressor } from '../lib/audio/noise-suppression.js';
+import { isBroadcastDevice } from '../lib/audio/nvidia-broadcast.js';
 import type { ScreenDevice } from '../lib/devices.js';
 import { diagnosticsEnabled, fileLoggingEnabled, startLoopDelayMonitor } from '../lib/diagnostics.js';
 import { CONFIG_DIR, loadSettings, saveSettings } from '../lib/settings.js';
+import { warmTools } from '../lib/tool-path.js';
 import { createVideoSource, VideoManager } from '../lib/video.js';
 import { createAudioSource, PeerConnectionManager } from '../lib/webrtc.js';
 import { WebSocketClient } from '../lib/websocket.js';
@@ -160,7 +162,13 @@ export class RoomEngine {
       inputGainDb: options.input.gainDb,
     });
 
-    if (options.noiseSuppression) {
+    if (options.noiseSuppression && isBroadcastDevice(options.deviceSelection.input)) {
+      // Broadcast denoises on the GPU before the signal reaches any API we control, so
+      // RNNoise here would spend 0.22 ms of every 10 ms frame cleaning clean audio — on the
+      // one loop that cannot afford it. The setting is left alone; only this call is skipped.
+      debugFn?.('Noise suppression: left to NVIDIA Broadcast (GPU)');
+      this.addEvent('Noise suppression: NVIDIA Broadcast is handling it on the GPU', 'info');
+    } else if (options.noiseSuppression) {
       // Not awaited: loading the wasm costs ~10 ms and joining should not wait for it. The
       // processor chain is consulted per frame, so it takes effect as soon as it is attached
       // and the handful of frames before that simply go through unprocessed.

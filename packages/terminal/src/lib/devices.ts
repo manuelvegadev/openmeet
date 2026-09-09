@@ -1,5 +1,7 @@
-import { execFile, execSync, spawnSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
+import { POWERSHELL, powershellArgs, runPowerShell } from './powershell.js';
+import { ffmpegBin } from './tool-path.js';
 
 export interface VideoDevice {
   id: string; // avfoundation index (e.g., "0") or v4l2 path
@@ -61,9 +63,8 @@ export function listScreenDevices(): ScreenDevice[] {
 /** Fill the cache without blocking (Windows only; the other platforms enumerate fast enough). */
 export function prefetchScreenDevices(): void {
   if (platform() !== 'win32') return;
-  execFile('powershell', WINDOWS_SCREENS_ARGS, { windowsHide: true, timeout: 10000 }, (err, stdout) => {
-    if (err) return;
-    screenCache = { at: Date.now(), screens: windowsScreensFromOutput(stdout) };
+  void runPowerShell(WINDOWS_SCREENS_SCRIPT).then((stdout) => {
+    if (stdout != null) screenCache = { at: Date.now(), screens: windowsScreensFromOutput(stdout) };
   });
 }
 
@@ -171,11 +172,11 @@ Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Screen]::AllScreens | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.DeviceName, $_.Bounds.X, $_.Bounds.Y, $_.Bounds.Width, $_.Bounds.Height, $_.Primary }
 `;
 
-const WINDOWS_SCREENS_ARGS = ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_SCREENS_SCRIPT];
+const WINDOWS_SCREENS_ARGS = powershellArgs(WINDOWS_SCREENS_SCRIPT);
 
 function listWindowsScreenDevices(): ScreenDevice[] {
   try {
-    const result = spawnSync('powershell', WINDOWS_SCREENS_ARGS, {
+    const result = spawnSync(POWERSHELL, WINDOWS_SCREENS_ARGS, {
       encoding: 'utf-8',
       timeout: 10000,
       windowsHide: true,
