@@ -86,6 +86,22 @@ class FrameAssembler {
   }
 }
 
+/** How long a screen grabber may stay silent before it counts as failed. */
+const SCREEN_SILENCE_MS = 8000;
+
+/**
+ * SIGTERM, then SIGKILL two seconds later if it is still there. An avfoundation ffmpeg
+ * wedged inside ScreenCaptureKit ignores SIGTERM, and every one left behind keeps a capture
+ * stream open — three of them were found alive at once on 2026-09-09.
+ */
+function killHard(proc: ChildProcess): void {
+  proc.kill();
+  const timer = setTimeout(() => {
+    if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+  }, 2000);
+  proc.once('close', () => clearTimeout(timer));
+}
+
 export function createVideoSource(options?: { isScreencast?: boolean }): { source: any; track: any } {
   const source = new RTCVideoSource(options?.isScreencast ? { isScreencast: true } : undefined);
   const track = source.createTrack();
@@ -119,8 +135,8 @@ export class VideoManager {
   overlayEnabled = true;
   onDebug?: (msg: string) => void;
   onWindowClosed?: (peerId: string, streamType: 'webcam' | 'screen') => void;
-  /** The capture process ended, whether by stopScreenCapture() or on its own (permission denied, no desktop, crash). */
-  onScreenCaptureEnded?: () => void;
+  /** The screen capture stopped without us asking; `reason` is what the room log should say. */
+  onScreenCaptureEnded?: (reason: string) => void;
 
   constructor(options?: { onDebug?: (msg: string) => void }) {
     this.onDebug = options?.onDebug;
@@ -399,12 +415,27 @@ export class VideoManager {
       if (lastFrame && Date.now() - lastFrameAt >= SCREEN_REFRESH_MS) sendFrame(lastFrame);
     }, SCREEN_REFRESH_MS);
 
+    // A grabber that produces nothing does not exit either: avfoundation on macOS sits at
+    // 20% CPU forever when ScreenCaptureKit is wedged or the terminal lacks the Screen
+    // Recording permission (2026-09-09: three shares in a row worked, then every capture
+    // after a 28-minute one went silent until the daemon was restarted), and ddagrab in an
+    // RDP session does the same. So silence is a failure too, after a grace period long
+    // enough for the first frame on a slow machine.
+    let silentFailure = false;
+    const silenceTimer = setTimeout(() => {
+      if (this.screenCaptureProcess !== proc) return;
+      silentFailure = true;
+      this.onDebug?.(`Screen capture produced no data in ${SCREEN_SILENCE_MS / 1000} s; giving up on this grabber`);
+      killHard(proc);
+    }, SCREEN_SILENCE_MS);
+
     this.screenCaptureProcess.stdout?.on('data', (chunk: Buffer) => {
       totalBytesReceived += chunk.length;
 
       if (!loggedFirstChunk) {
         loggedFirstChunk = true;
-        this.onDebug?.(`Screen ffmpeg first data: ${chunk.length} bytes (frame is ${SCREEN_FRAME_BYTES})`);
+        clearTimeout(silenceTimer);
+        this.onDebug?.(`Screen ffmpeg first data: ${chunk.length} bytes (frame is ${frameBytes})`);
       }
 
       const dropped = assembler.push(chunk, sendFrame);
@@ -430,31 +461,40 @@ export class VideoManager {
       }
     });
 
-    const proc = this.screenCaptureProcess;
     proc.on('error', () => {
       this.onDebug?.('Screen capture failed to start');
     });
     proc.on('close', (code) => {
+      clearTimeout(silenceTimer);
       // False when a newer capture already occupies the slot, or when stopScreenCapture
-      // cleared it — in both cases this exit was asked for and must not trigger a retry.
+      // cleared it — in both cases this exit was asked for: no retry, and above all no
+      // "capture ended" for the share that is running now (a late-dying orphan used to
+      // stop the live share that had replaced it).
       const wasCurrent = this.screenCaptureProcess === proc;
-      if (wasCurrent) this.screenCaptureProcess = null;
+      if (!wasCurrent) {
+        this.onDebug?.(`Screen capture ${proc.pid} exited (${code}) after being replaced or stopped`);
+        return;
+      }
+      this.screenCaptureProcess = null;
       this.clearScreenRefresh();
 
       const next = index + 1;
-      if (wasCurrent && screenFrameCount === 0 && next < candidates.length) {
+      if (screenFrameCount === 0 && next < candidates.length) {
         this.onDebug?.(`Screen capture produced no frames (ffmpeg exit ${code}); trying the next grabber`);
-        this.spawnScreenCapture(screenVideoSource, device, candidates, next);
+        this.spawnScreenCapture(screenVideoSource, device, shape, candidates, next);
         return;
       }
 
-      this.onDebug?.(`Screen capture ended (ffmpeg exit ${code})`);
-      this.onScreenCaptureEnded?.();
+      const reason = silentFailure
+        ? `no frames in ${SCREEN_SILENCE_MS / 1000} s — screen recording permission for this terminal, or a stuck capture${platform() === 'darwin' ? ' (quit and reopen your terminal app, or check Screen Recording in Privacy & Security)' : ''}`
+        : screenFrameCount === 0
+          ? `capture exited without frames (ffmpeg exit ${code}) — check screen recording permission / ffmpeg`
+          : `capture ended (ffmpeg exit ${code})`;
+      this.onDebug?.(`Screen capture ended: ${reason}`);
+      this.onScreenCaptureEnded?.(reason);
     });
 
-    this.onDebug?.(
-      `Screen capture started (${SCREEN_MAX_WIDTH}x${SCREEN_MAX_HEIGHT}@${SCREEN_FPS}fps from ${device.name})`,
-    );
+    this.onDebug?.(`Screen capture started (${width}x${height}@${SCREEN_FPS}fps from ${device.name})`);
   }
 
   private clearScreenRefresh(): void {
@@ -468,7 +508,7 @@ export class VideoManager {
     const proc = this.screenCaptureProcess;
     if (!proc) return;
     this.screenCaptureProcess = null;
-    proc.kill();
+    killHard(proc);
   }
 
   // ─── Cleanup ───────────────────────────────────────────────────────
