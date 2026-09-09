@@ -42,6 +42,11 @@ jobs:
 
       # Loads the native addons (wrtc, audify) on this platform. No audio devices on a
       # runner, so device enumeration is expected to be empty — it must not throw.
+      # audify links against PulseAudio on Linux; the runner image ships no libpulse.
+      - name: Install Linux audio libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpulse0
+
       - name: Smoke-test native modules
         shell: bash
         run: |

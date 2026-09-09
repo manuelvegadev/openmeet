@@ -1,0 +1,6 @@
+# Check out text files with LF on every platform. Without this, Windows runners get CRLF
+# and every file fails the formatter.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
