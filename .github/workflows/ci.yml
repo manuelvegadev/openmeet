@@ -40,13 +40,12 @@ jobs:
           pnpm --filter openmeet-terminal exec tsx scripts/resampler-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/channels-test.ts
 
-      # Loads the native addons (wrtc, audify) on this platform. No audio devices on a
-      # runner, so device enumeration is expected to be empty — it must not throw.
       # audify links against PulseAudio on Linux; the runner image ships no libpulse.
       - name: Install Linux audio libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libpulse0
 
+      # The native addons (wrtc, audify) must load and run on this platform.
       - name: Smoke-test native modules
         shell: bash
         run: |
@@ -56,7 +55,22 @@ jobs:
             const pc = new w.RTCPeerConnection();
             pc.close();
             const a = require('audify');
+            if (typeof a.RtAudio !== 'function') throw new Error('audify did not load');
+            console.log('wrtc ok; audify loaded');
+            process.exit(0);
+          "
+
+      # Opening RtAudio is skipped on Windows runners: its WASAPI backend crashes when the
+      # machine has no audio endpoints at all ("RtApiWasapi::probeDevices: No devices found."
+      # then SIGSEGV), which is what a runner looks like. Real Windows hardware is covered by
+      # scripts/audio-matrix.ts.
+      - name: Enumerate audio devices
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          node -e "
+            const a = require('audify');
             const rt = new a.RtAudio();
-            console.log('wrtc ok; audify api:', rt.getApi(), 'devices:', rt.getDevices().length);
+            console.log('audify api:', rt.getApi(), 'devices:', rt.getDevices().length);
             process.exit(0);
           "
