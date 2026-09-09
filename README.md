@@ -13,7 +13,7 @@ The project has two parts:
 - **Webcam and screen sharing** — 1080p video sent via ffmpeg, received in native ffplay windows
 - **Chat** — text messages alongside the call
 - **Per-peer volume, VU meters and latency estimates** — see who is talking and how far away they are
-- **Emoji identities** — random emoji usernames, no sign-up
+- **Pick a name and a colour, once** — no sign-up; you show up as `[name]` in your colour for everyone
 - **Connection recovery** — automatic retry with exponential backoff
 
 ## Architecture

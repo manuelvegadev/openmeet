@@ -2,16 +2,17 @@ import { Box, useApp, useWindowSize } from 'ink';
 import { useCallback, useEffect, useState } from 'react';
 import { DevicePicker } from './components/device-picker.js';
 import { HomeScreen } from './components/home-screen.js';
+import { ProfileSetup } from './components/profile-setup.js';
 import { RoomView } from './components/room-view.js';
 import { SettingsView } from './components/settings-view.js';
 import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from './engine/client.js';
 import { resolveBroadcastDefault } from './lib/audio/nvidia-broadcast.js';
-import { loadSettings, saveSettings } from './lib/settings.js';
+import type { Identity } from './lib/identity.js';
+import { loadIdentity, loadSettings, saveSettings } from './lib/settings.js';
 import { framedBorder, theme } from './lib/theme.js';
 
 interface AppProps {
   serverUrl: string;
-  emoji: string;
   version: string;
   initialRoom?: string;
   inputDevice?: string;
@@ -24,7 +25,8 @@ interface AppProps {
   debug?: boolean;
 }
 
-type Screen = 'home' | 'settings' | 'devices' | 'room';
+/** `profile` comes first, once: nothing else makes sense without a name to join as. */
+type Screen = 'profile' | 'home' | 'settings' | 'devices' | 'room';
 
 /**
  * The window frame, sized to the terminal.
@@ -33,6 +35,11 @@ type Screen = 'home' | 'settings' | 'devices' | 'room';
  * with no `width` stretches to it, while a Box is only as tall as its content and the frame
  * has to reach the bottom for the painted background to cover. Never pass a `width` derived
  * from our own resize handling — see gotcha 30e for what that cost.
+ *
+ * Clipping is vertical only. Ink clips an `overflow="hidden"` box at its border, and the
+ * section rules need to reach *over* the border to draw their `├` and `┤` on it (see `Rule`);
+ * nothing else is ever wider than the frame, while content taller than the terminal must not
+ * scroll the alternate screen.
  */
 function FullScreen({ children }: { children: React.ReactNode }) {
   const { rows } = useWindowSize();
@@ -44,7 +51,7 @@ function FullScreen({ children }: { children: React.ReactNode }) {
       backgroundColor={theme.bg}
       {...framedBorder}
       flexDirection="column"
-      overflow="hidden"
+      overflowY="hidden"
     >
       {children}
     </Box>
@@ -53,7 +60,6 @@ function FullScreen({ children }: { children: React.ReactNode }) {
 
 export function App({
   serverUrl,
-  emoji,
   version,
   initialRoom,
   inputDevice,
@@ -65,7 +71,9 @@ export function App({
   debug = false,
 }: AppProps) {
   const { exit } = useApp();
-  const [screen, setScreen] = useState<Screen>(initialRoom ? 'devices' : 'home');
+  const [identity, setIdentity] = useState<Identity | null>(() => loadIdentity());
+  const afterProfile: Screen = initialRoom ? 'devices' : 'home';
+  const [screen, setScreen] = useState<Screen>(identity ? afterProfile : 'profile');
   const [roomId, setRoomId] = useState(initialRoom ?? '');
   const [devices, setDevices] = useState<{ inputs: AudioDevice[]; outputs: AudioDevice[] }>({
     inputs: [],
@@ -130,16 +138,32 @@ export function App({
 
   return (
     <FullScreen>
-      {screen === 'home' && (
+      {screen === 'profile' && (
+        <ProfileSetup
+          onDone={(next) => {
+            saveSettings({ name: next.name, color: next.color });
+            setIdentity(next);
+            setScreen(afterProfile);
+          }}
+        />
+      )}
+      {screen === 'home' && identity && (
         <HomeScreen
-          emoji={emoji}
+          identity={identity}
           version={version}
           onJoinRoom={handleJoinRoom}
           onSettings={() => setScreen('settings')}
           onQuit={() => exit()}
         />
       )}
-      {screen === 'settings' && <SettingsView onBack={() => setScreen('home')} />}
+      {screen === 'settings' && (
+        <SettingsView
+          onBack={() => {
+            setIdentity(loadIdentity());
+            setScreen('home');
+          }}
+        />
+      )}
       {screen === 'devices' && (
         <DevicePicker
           inputs={devices.inputs}
@@ -157,11 +181,11 @@ export function App({
           }}
         />
       )}
-      {screen === 'room' && (
+      {screen === 'room' && identity && (
         <RoomView
           serverUrl={serverUrl}
           roomId={roomId}
-          username={emoji}
+          identity={identity}
           version={version}
           deviceSelection={deviceSelection}
           videoEnabled={videoEnabled}

@@ -3,6 +3,7 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import type { AudioBackendPreference } from './audio/backend.js';
 import type { InputChannelPolicy } from './audio/channels.js';
+import { type Identity, isNameColor } from './identity.js';
 import { DEFAULT_AUDIO_KBPS, DEFAULT_SCREEN_KBPS } from './sdp.js';
 import type { RenderPausePolicy } from './window-state.js';
 
@@ -18,6 +19,10 @@ const LEGACY_INPUT_FILE = join(CONFIG_DIR, 'audio-input');
 const LEGACY_OUTPUT_FILE = join(CONFIG_DIR, 'audio-output');
 
 export interface AppSettings {
+  /** Your name in a room, up to 8 cells (see lib/identity.ts). Null until the first start sets it. */
+  name: string | null;
+  /** The colour your name is drawn in, `#rrggbb` from `NAME_PALETTE`. */
+  color: string | null;
   audioInputId: string | null;
   audioOutputId: string | null;
   videoDeviceId: string | null;
@@ -44,6 +49,8 @@ export interface AppSettings {
 }
 
 const DEFAULTS: AppSettings = {
+  name: null,
+  color: null,
   audioInputId: null,
   audioOutputId: null,
   videoDeviceId: null,
@@ -94,6 +101,13 @@ export function loadSettings(): AppSettings {
   if (cache) return cache;
   cache = readFromDisk();
   return cache;
+}
+
+/** The saved identity, or null while the first start has not set one (see lib/identity.ts). */
+export function loadIdentity(): Identity | null {
+  const { name, color } = loadSettings();
+  if (!name || !isNameColor(color)) return null;
+  return { name, color };
 }
 
 export function saveSettings(update: Partial<AppSettings>): void {

@@ -22,6 +22,7 @@ interface UseRoomOptions {
   serverUrl: string;
   roomId: string;
   username: string;
+  color: string;
   deviceSelection: AudioDeviceSelection;
   debug?: boolean;
   videoEnabled?: boolean;
@@ -52,6 +53,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     serverUrl,
     roomId,
     username,
+    color,
     deviceSelection,
     debug = false,
     videoEnabled = false,
@@ -126,6 +128,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         serverUrl,
         roomId,
         username,
+        color,
         deviceSelection,
         input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
         bitrate: {
@@ -156,6 +159,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     serverUrl,
     roomId,
     username,
+    color,
     deviceSelection,
     debug,
     videoEnabled,

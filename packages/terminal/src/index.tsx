@@ -26,7 +26,6 @@ import {
 } from './lib/capture-args.js';
 import { listScreenDevices } from './lib/devices.js';
 import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
-import { getOrCreateEmoji } from './lib/emoji.js';
 import { getPlatformSupport } from './lib/platform.js';
 import { AUDIO_KBPS_MAX, AUDIO_KBPS_MIN, parseKbpsFlag, SCREEN_KBPS_MAX, SCREEN_KBPS_MIN } from './lib/sdp.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
@@ -322,8 +321,6 @@ Your terminal app needs microphone permission on macOS:
     saveSettings({ pauseRendering: policy });
   }
 
-  const emoji = getOrCreateEmoji();
-
   // Suppress console output to keep TUI clean
   console.log = () => {};
   console.error = () => {};
@@ -352,7 +349,6 @@ Your terminal app needs microphone permission on macOS:
   const instance = render(
     <App
       serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
-      emoji={emoji}
       version={APP_VERSION}
       initialRoom={values.room}
       inputDevice={values['input-device']}

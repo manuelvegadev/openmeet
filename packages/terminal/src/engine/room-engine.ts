@@ -1,13 +1,14 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { constants, setPriority } from 'node:os';
 import { join } from 'node:path';
-import type { WSMessage } from '@openmeet/shared';
-import { VU_BAR_COUNT, VU_MAX_RMS } from '../lib/audio/constants.js';
+import type { Participant, WSMessage } from '@openmeet/shared';
+import { VU_LEVEL_STEPS, VU_MAX_RMS } from '../lib/audio/constants.js';
 import { type AudioDeviceSelection, AudioManager } from '../lib/audio/index.js';
 import { createNoiseSuppressor } from '../lib/audio/noise-suppression.js';
 import { isBroadcastDevice } from '../lib/audio/nvidia-broadcast.js';
 import type { ScreenDevice } from '../lib/devices.js';
 import { diagnosticsEnabled, fileLoggingEnabled, startLoopDelayMonitor } from '../lib/diagnostics.js';
+import { finishName } from '../lib/identity.js';
 import { CONFIG_DIR, loadSettings, saveSettings } from '../lib/settings.js';
 import { warmTools } from '../lib/tool-path.js';
 import { createVideoSource, VideoManager } from '../lib/video.js';
@@ -22,8 +23,8 @@ import {
   type RoomState,
 } from './protocol.js';
 
-/** Levels are quantized to the VU meter's resolution so snapshots only change per bar. */
-const LEVEL_STEP = VU_MAX_RMS / VU_BAR_COUNT;
+/** Levels are quantized to the VU meter's resolution so snapshots only change per visible step. */
+const LEVEL_STEP = VU_MAX_RMS / VU_LEVEL_STEPS;
 /** Snapshots are coalesced: at most one every SNAPSHOT_INTERVAL_MS. */
 const SNAPSHOT_INTERVAL_MS = 100;
 
@@ -99,8 +100,15 @@ export class RoomEngine {
     this.emit({ type: 'state', state: this.state });
   }
 
-  private addEvent(message: string, type: RoomEvent['type']): void {
-    const event: RoomEvent = { id: ++this.eventSeq, timestamp: Date.now(), message, type };
+  private addEvent(message: string, type: RoomEvent['type'], who?: Pick<Participant, 'username' | 'color'>): void {
+    const event: RoomEvent = {
+      id: ++this.eventSeq,
+      timestamp: Date.now(),
+      message,
+      type,
+      who: who?.username,
+      color: who?.color,
+    };
     this.emit({ type: 'room-event', event });
   }
 
@@ -133,8 +141,22 @@ export class RoomEngine {
     }
   }
 
-  private resolveName(peerId: string): string {
-    return this.state.participants.find((p) => p.id === peerId)?.username ?? peerId.slice(0, 6);
+  private resolvePeer(peerId: string): Pick<Participant, 'username' | 'color'> {
+    return this.state.participants.find((p) => p.id === peerId) ?? { username: peerId.slice(0, 6) };
+  }
+
+  /** Us, as a participant, for events about ourselves. */
+  private get self(): Pick<Participant, 'username' | 'color'> | undefined {
+    return this.options ? { username: this.options.username, color: this.options.color } : undefined;
+  }
+
+  /**
+   * A peer's name as we will show it: cut to `NAME_MAX_CELLS` here, once, where it enters
+   * from the wire, so every screen can draw it without measuring (an older client, or any
+   * other client, may send more).
+   */
+  private static cleanParticipant<P extends { username: string }>(p: P): P {
+    return { ...p, username: finishName(p.username) || '?' };
   }
 
   // ─── Join / leave ────────────────────────────────────────────────────
@@ -218,7 +240,7 @@ export class RoomEngine {
         // Our own stopScreenShare() clears the flag before killing ffmpeg; anything else is a failure.
         if (!this.state.isScreenSharing) return;
         this.stopScreenShare();
-        this.addEvent(`Screen sharing stopped: ${reason}`, 'screen');
+        this.addEvent(`screen sharing stopped: ${reason}`, 'screen', this.self);
       };
       this.videoManager = videoManager;
       this.state.overlayEnabled = videoManager.overlayEnabled;
@@ -253,7 +275,7 @@ export class RoomEngine {
     ws.onConnectionChange((isConnected) => {
       this.patch({ connected: isConnected });
       if (isConnected && !this.state.joined) {
-        ws.send({ type: 'join-room', roomId: options.roomId, username: options.username });
+        ws.send({ type: 'join-room', roomId: options.roomId, username: options.username, color: options.color });
       }
       if (!isConnected) {
         this.patch({ joined: false });
@@ -322,9 +344,10 @@ export class RoomEngine {
     switch (msg.type) {
       case 'room-joined': {
         peerManager.setMyId(msg.yourId);
-        this.patch({ joined: true, myId: msg.yourId, participants: msg.participants, joinedAt: Date.now() });
-        this.addEvent('You joined the room', 'info');
-        for (const p of msg.participants) this.addEvent(`${p.username} is in the room`, 'info');
+        const participants = msg.participants.map(RoomEngine.cleanParticipant);
+        this.patch({ joined: true, myId: msg.yourId, participants, joinedAt: Date.now() });
+        this.addEvent('joined the room', 'join', this.self);
+        for (const p of participants) this.addEvent('is in the room', 'join', p);
 
         void audioManager.start();
         if (videoManager && this.videoSource && options.webcamEnabled) {
@@ -334,7 +357,6 @@ export class RoomEngine {
 
         // Wait for the first captured frame so the offer carries a live audio track;
         // 2 s cap so a slow device doesn't block connections.
-        const participants = msg.participants;
         Promise.race([audioManager.ready, new Promise<void>((r) => setTimeout(r, 2000))]).then(() => {
           if (this.peerManager !== peerManager) return;
           for (const p of participants) peerManager.createConnection(p.id);
@@ -345,8 +367,9 @@ export class RoomEngine {
       }
 
       case 'participant-joined': {
-        this.patch({ participants: [...this.state.participants, msg.participant] });
-        this.addEvent(`${msg.participant.username} joined`, 'join');
+        const participant = RoomEngine.cleanParticipant(msg.participant);
+        this.patch({ participants: [...this.state.participants, participant] });
+        this.addEvent('joined', 'join', participant);
         this.broadcastStates();
         break;
       }
@@ -354,7 +377,7 @@ export class RoomEngine {
       case 'participant-left': {
         const id = msg.participantId;
         const leaving = this.state.participants.find((p) => p.id === id);
-        if (leaving) this.addEvent(`${leaving.username} left`, 'leave');
+        if (leaving) this.addEvent('left', 'leave', leaving);
         peerManager.removeConnection(id);
         videoManager?.removeAllForPeer(id);
         this.screenTracks.delete(id);
@@ -390,7 +413,7 @@ export class RoomEngine {
       case 'mute-state': {
         const wasMuted = this.state.remoteMuteStates[msg.fromId];
         if (wasMuted !== undefined && wasMuted !== msg.isAudioMuted) {
-          this.addEvent(`${this.resolveName(msg.fromId)} ${msg.isAudioMuted ? 'muted' : 'unmuted'}`, 'mute');
+          this.addEvent(msg.isAudioMuted ? 'muted' : 'unmuted', 'mute', this.resolvePeer(msg.fromId));
         }
         this.patch({
           remoteMuteStates: { ...this.state.remoteMuteStates, [msg.fromId]: msg.isAudioMuted },
@@ -403,8 +426,9 @@ export class RoomEngine {
         const wasSharing = this.state.remoteScreenShareStates[msg.fromId];
         if (wasSharing !== undefined && wasSharing !== msg.isScreenSharing) {
           this.addEvent(
-            `${this.resolveName(msg.fromId)} ${msg.isScreenSharing ? 'started' : 'stopped'} screen sharing`,
+            `${msg.isScreenSharing ? 'started' : 'stopped'} screen sharing`,
             'screen',
+            this.resolvePeer(msg.fromId),
           );
         }
         const patch: Partial<RoomState> = {
@@ -419,7 +443,7 @@ export class RoomEngine {
       }
 
       case 'chat-broadcast':
-        this.emit({ type: 'chat', message: msg.message });
+        this.emit({ type: 'chat', message: RoomEngine.cleanParticipant(msg.message) });
         break;
 
       case 'error':
@@ -503,7 +527,7 @@ export class RoomEngine {
       return;
     }
     const track = this.webcamTracks.get(peerId);
-    if (track) vm.addRemotePeer(peerId, track, 'webcam', this.resolveName(peerId));
+    if (track) vm.addRemotePeer(peerId, track, 'webcam', this.resolvePeer(peerId).username);
     this.patch({ peerVideoOpen: { ...this.state.peerVideoOpen, [peerId]: true } });
   }
 
@@ -516,7 +540,7 @@ export class RoomEngine {
       return;
     }
     const track = this.screenTracks.get(peerId);
-    if (track) vm.addRemotePeer(peerId, track, 'screen', this.resolveName(peerId));
+    if (track) vm.addRemotePeer(peerId, track, 'screen', this.resolvePeer(peerId).username);
     this.patch({ peerScreenOpen: { ...this.state.peerScreenOpen, [peerId]: true } });
   }
 
@@ -569,7 +593,7 @@ export class RoomEngine {
       const raw = am.getAllAudioLevels();
       const next: Record<string, number> = {};
       for (const [id, rms] of Object.entries(raw)) {
-        next[id] = Math.min(Math.round(rms / LEVEL_STEP), VU_BAR_COUNT) * LEVEL_STEP;
+        next[id] = Math.min(Math.round(rms / LEVEL_STEP), VU_LEVEL_STEPS) * LEVEL_STEP;
       }
       const prev = this.state.audioLevels;
       const prevKeys = Object.keys(prev);

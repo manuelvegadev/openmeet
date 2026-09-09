@@ -36,9 +36,9 @@
     "audify": "^1.10.1",
     "ink": "^7.1.1",
     "ink-select-input": "^6.2.0",
-    "ink-text-input": "^6.0.0",
     "nanoid": "^6.0.1",
     "react": "^19.2.8",
+    "string-width": "^8.2.2",
     "ws": "^8.21.3"
   },
   "devDependencies": {
@@ -46,7 +46,9 @@
     "@types/node": "^22.20.1",
     "@types/react": "^19.2.18",
     "@types/ws": "^8",
+    "ansi-styles": "^6.2.3",
     "esbuild": "^0.28.2",
+    "strip-ansi": "^7.2.0",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3"
   }

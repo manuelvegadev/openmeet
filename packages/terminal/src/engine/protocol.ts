@@ -23,8 +23,17 @@ export interface RoomEvent {
   /** Monotonic id — timestamps collide when several events land in the same millisecond. */
   id: number;
   timestamp: number;
+  /** What happened, without the participant: "joined", "started screen sharing". */
   message: string;
   type: 'join' | 'leave' | 'screen' | 'mute' | 'info' | 'debug';
+  /**
+   * The participant the line is about, and the colour they chose, absent for room-wide
+   * notices. Kept apart from `message` so the chat can draw every line the same way — time,
+   * icon, who, what — and resolved here, where the participant is in hand (someone leaving is
+   * still known when their "left" is written; the TUI would have to remember).
+   */
+  who?: string;
+  color?: string;
 }
 
 /** Everything the room screen renders. Sent as a whole; small enough to not bother diffing. */
@@ -100,6 +109,8 @@ export interface JoinOptions {
   serverUrl: string;
   roomId: string;
   username: string;
+  /** The colour the name is drawn in, sent with the join so peers draw it the same. */
+  color: string;
   deviceSelection: AudioDeviceSelection;
   input: InputOptions;
   bitrate: BitrateOptions;

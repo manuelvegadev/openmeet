@@ -1,13 +1,15 @@
 import { Box, useInput } from 'ink';
-import TextInput from 'ink-text-input';
 import { useEffect, useRef, useState } from 'react';
+import type { Identity } from '../lib/identity.js';
 import { getPlatformSupport } from '../lib/platform.js';
 import { theme } from '../lib/theme.js';
 import { KeyHints } from './key-hints.js';
+import { Name } from './name.js';
 import { Text } from './text.js';
+import { TextInput } from './text-input.js';
 
 interface HomeScreenProps {
-  emoji: string;
+  identity: Identity;
   version: string;
   onJoinRoom: (roomId: string) => void;
   onSettings: () => void;
@@ -16,7 +18,7 @@ interface HomeScreenProps {
 
 const support = getPlatformSupport();
 
-export function HomeScreen({ emoji, version, onJoinRoom, onSettings, onQuit }: HomeScreenProps) {
+export function HomeScreen({ identity, version, onJoinRoom, onSettings, onQuit }: HomeScreenProps) {
   const [mode, setMode] = useState<'menu' | 'join'>('menu');
   const [joinCode, setJoinCode] = useState('');
   const [escPressed, setEscPressed] = useState(false);
@@ -92,7 +94,7 @@ export function HomeScreen({ emoji, version, onJoinRoom, onSettings, onQuit }: H
       <Text dimColor>Lightweight video conferencing</Text>
       <Box height={1} />
       <Text>
-        You are <Text bold>{emoji}</Text>
+        You are <Name name={identity.name} color={identity.color} bold />
       </Text>
       <Box height={1} />
       <KeyHints hints={[{ key: 'j', label: 'join room' }]} />
