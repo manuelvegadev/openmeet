@@ -12,12 +12,32 @@ export const WEBCAM_HEIGHT = 480;
 export const WEBCAM_FPS = 30;
 export const WEBCAM_FRAME_BYTES = i420FrameBytes(WEBCAM_WIDTH, WEBCAM_HEIGHT);
 
-// Screen capture: 1080p@30 keeps the raw I420 pipe under ~93 MB/s. Higher rates overwhelm
-// the engine's event loop, which also carries the 10 ms audio cadence.
-export const SCREEN_MAX_WIDTH = 1920;
-export const SCREEN_MAX_HEIGHT = 1080;
+// Screen capture: the short side is capped at 1080 and the long side at 3840, at 30 fps, and
+// the shape is the screen's own — a 3440x1440 ultrawide goes out as 2580x1080, not as
+// 1920x804 with 138 px of black above and below. 1080p keeps the raw I420 pipe near 93 MB/s;
+// an ultrawide is a third more, still well inside what the engine's loop carried at 1080p
+// (docs/performance.md). Higher rates overwhelm that loop, which also carries the 10 ms
+// audio cadence. `SCREEN_FALLBACK_*` is the fixed, padded shape used only when the screen's
+// size is unknown, because the pipe reader must know the frame size before the first byte.
+export const SCREEN_MAX_SHORT_SIDE = 1080;
+export const SCREEN_MAX_LONG_SIDE = 3840;
+export const SCREEN_FALLBACK_WIDTH = 1920;
+export const SCREEN_FALLBACK_HEIGHT = 1080;
 export const SCREEN_FPS = 30;
-export const SCREEN_FRAME_BYTES = i420FrameBytes(SCREEN_MAX_WIDTH, SCREEN_MAX_HEIGHT);
+
+/**
+ * The size a screen goes out at: its own aspect ratio, fitted under the caps, never
+ * enlarged, both sides even (I420 needs it). Unknown size → the padded 1080p fallback.
+ */
+export function screenOutputSize(device: Pick<ScreenDevice, 'width' | 'height'>): { width: number; height: number } {
+  const { width, height } = device;
+  if (!width || !height) return { width: SCREEN_FALLBACK_WIDTH, height: SCREEN_FALLBACK_HEIGHT };
+  const short = Math.min(width, height);
+  const long = Math.max(width, height);
+  const scale = Math.min(1, SCREEN_MAX_SHORT_SIDE / short, SCREEN_MAX_LONG_SIDE / long);
+  const even = (n: number) => Math.max(2, Math.round((n * scale) / 2) * 2);
+  return { width: even(width), height: even(height) };
+}
 
 /** Raw I420 on stdout, warnings only on stderr. */
 const RAW_OUTPUT = ['-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-loglevel', 'warning', 'pipe:1'];
@@ -38,27 +58,34 @@ export function webcamCaptureArgs(device?: string): string[] | null {
   }
 }
 
-/** scale+pad to exactly SCREEN_MAX_WIDTH x SCREEN_MAX_HEIGHT, whatever the screen's shape. */
-const LETTERBOX_1080P = [
-  `scale=${SCREEN_MAX_WIDTH}:${SCREEN_MAX_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
-  `pad=${SCREEN_MAX_WIDTH}:${SCREEN_MAX_HEIGHT}:(ow-iw)/2:(oh-ih)/2`,
-].join(',');
+/**
+ * scale+pad to exactly `width` x `height`. The pad stays even though the size already has the
+ * screen's aspect: if the grabber delivers a different shape than the enumeration promised
+ * (a display that changed mode, a Retina factor, an RDP session), the frames still come out
+ * at exactly the size the pipe reader is slicing at — letterboxed rather than corrupted.
+ */
+function fitTo(width: number, height: number): string {
+  return [
+    `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
+    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+  ].join(',');
+}
 
 /** Bytes in one I420 frame: a full-resolution Y plane plus two quarter-resolution planes. */
 export function i420FrameBytes(width: number, height: number): number {
   return (width * height * 3) / 2;
 }
 
-/** The output tail every CPU-side grabber shares: letterbox, fix the rate, emit raw I420. */
-function cpuOutput(fps: string): string[] {
-  return ['-vf', LETTERBOX_1080P, '-r', fps, ...RAW_OUTPUT];
+/** The output tail every CPU-side grabber shares: fit, fix the rate, emit raw I420. */
+function cpuOutput(fps: string, fit: string): string[] {
+  return ['-vf', fit, '-r', fps, ...RAW_OUTPUT];
 }
 
 /**
- * ffmpeg argument sets that capture `device` and emit exactly SCREEN_MAX_WIDTH x
- * SCREEN_MAX_HEIGHT @ SCREEN_FPS, best first. A fixed output size keeps frame boundaries
- * predictable. Retina/high-DPI screens capture at physical pixels, so device.width/height
- * only matter where the grabber needs a region (x11grab, gdigrab).
+ * ffmpeg argument sets that capture `device` and emit exactly `screenOutputSize(device)` @
+ * SCREEN_FPS, best first. A fixed output size per share keeps frame boundaries predictable.
+ * Retina/high-DPI screens capture at physical pixels; the fit handles that, and
+ * device.width/height also matter where the grabber needs a region (x11grab, gdigrab).
  *
  * More than one candidate means the preferred grabber can fail in a way we cannot detect up
  * front, so the caller walks the list when one produces no frames. That is the case on
@@ -70,11 +97,23 @@ function cpuOutput(fps: string): string[] {
  */
 export function screenCaptureCandidates(device: ScreenDevice): string[][] {
   const fps = String(SCREEN_FPS);
-  const size = `${device.width ?? SCREEN_MAX_WIDTH}x${device.height ?? SCREEN_MAX_HEIGHT}`;
+  const size = `${device.width ?? SCREEN_FALLBACK_WIDTH}x${device.height ?? SCREEN_FALLBACK_HEIGHT}`;
+  const out = screenOutputSize(device);
+  const fit = fitTo(out.width, out.height);
   switch (platform()) {
     case 'darwin':
       return [
-        ['-f', 'avfoundation', '-capture_cursor', '1', '-framerate', fps, '-i', `${device.id}:none`, ...cpuOutput(fps)],
+        [
+          '-f',
+          'avfoundation',
+          '-capture_cursor',
+          '1',
+          '-framerate',
+          fps,
+          '-i',
+          `${device.id}:none`,
+          ...cpuOutput(fps, fit),
+        ],
       ];
     case 'win32': {
       const dda = [
@@ -92,20 +131,12 @@ export function screenCaptureCandidates(device: ScreenDevice): string[][] {
           ? ['-offset_x', String(device.x ?? 0), '-offset_y', String(device.y ?? 0), '-video_size', size]
           : [];
       return [
-        [
-          '-f',
-          'lavfi',
-          '-i',
-          `ddagrab=${dda}`,
-          '-vf',
-          `hwdownload,format=bgra,${LETTERBOX_1080P},format=yuv420p`,
-          ...RAW_OUTPUT,
-        ],
-        ['-f', 'gdigrab', '-framerate', fps, '-draw_mouse', '1', ...region, '-i', 'desktop', ...cpuOutput(fps)],
+        ['-f', 'lavfi', '-i', `ddagrab=${dda}`, '-vf', `hwdownload,format=bgra,${fit},format=yuv420p`, ...RAW_OUTPUT],
+        ['-f', 'gdigrab', '-framerate', fps, '-draw_mouse', '1', ...region, '-i', 'desktop', ...cpuOutput(fps, fit)],
       ];
     }
     default:
-      return [['-f', 'x11grab', '-framerate', fps, '-video_size', size, '-i', device.id, ...cpuOutput(fps)]];
+      return [['-f', 'x11grab', '-framerate', fps, '-video_size', size, '-i', device.id, ...cpuOutput(fps, fit)]];
   }
 }
 

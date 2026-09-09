@@ -17,9 +17,8 @@ import { parseBackendFlag, resolveBackendName, setActiveBackendName } from './li
 import {
   rawVideoPlayerArgs,
   SCREEN_FPS,
-  SCREEN_MAX_HEIGHT,
-  SCREEN_MAX_WIDTH,
   screenCaptureCandidates,
+  screenOutputSize,
   WEBCAM_FPS,
   WEBCAM_HEIGHT,
   WEBCAM_WIDTH,
@@ -199,10 +198,13 @@ if (values['test-camera']) {
     process.stdout.write(`  [${s.id}] ${s.name}${s.width && s.height ? ` (${s.width}x${s.height})` : ''}\n`);
   }
   const screen = screens[0];
-  process.stdout.write(`\nTesting screen capture: ${screen.name}... Press q or Esc in the ffplay window to close.\n`);
+  const out = screenOutputSize(screen);
+  process.stdout.write(
+    `\nTesting screen capture: ${screen.name} → ${out.width}x${out.height}... Press q or Esc in the ffplay window to close.\n`,
+  );
   runPreview(
     screenCaptureCandidates(screen),
-    rawVideoPlayerArgs(SCREEN_MAX_WIDTH, SCREEN_MAX_HEIGHT, SCREEN_FPS, `Screen Test (${screen.name})`),
+    rawVideoPlayerArgs(out.width, out.height, SCREEN_FPS, `Screen Test (${screen.name})`),
   );
 } else {
   // ─── Normal app flow ──────────────────────────────────────────────────

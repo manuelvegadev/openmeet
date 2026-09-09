@@ -1,13 +1,12 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { platform } from 'node:os';
 import wrtc from '@roamhq/wrtc';
 import {
   i420FrameBytes,
   rawVideoPlayerArgs,
   SCREEN_FPS,
-  SCREEN_FRAME_BYTES,
-  SCREEN_MAX_HEIGHT,
-  SCREEN_MAX_WIDTH,
   screenCaptureCandidates,
+  screenOutputSize,
   WEBCAM_FPS,
   WEBCAM_FRAME_BYTES,
   WEBCAM_HEIGHT,
@@ -392,7 +391,7 @@ export class VideoManager {
     const sendFrame = (frame: Uint8ClampedArray) => {
       lastFrame = frame;
       lastFrameAt = Date.now();
-      screenVideoSource.onFrame({ width: SCREEN_MAX_WIDTH, height: SCREEN_MAX_HEIGHT, data: frame });
+      screenVideoSource.onFrame({ width, height, data: frame });
       screenFrameCount++;
     };
     this.clearScreenRefresh();
