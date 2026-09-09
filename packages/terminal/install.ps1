@@ -29,6 +29,17 @@ Info "Installing openmeet-terminal..."
 & npm install -g openmeet-terminal
 if ($LASTEXITCODE -ne 0) { Fail "npm install failed" }
 
+# --- ffmpeg (screen sharing); optional ---
+if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    Info "ffmpeg not found, installing it with winget (needed for screen sharing)..."
+    winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements
+    if ($LASTEXITCODE -ne 0) { Warn "ffmpeg install failed; screen sharing will be disabled until it is installed." }
+  } else {
+    Warn "ffmpeg not found; install it (winget install Gyan.FFmpeg) to enable screen sharing."
+  }
+}
+
 # --- Windows Terminal profile + desktop shortcut (own window, app icon) ---
 $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
 if ($wt) {
@@ -52,6 +63,6 @@ Write-Host ""
 Write-Host "  Usage:" -ForegroundColor White
 Write-Host "    openmeet --room <room-id>"
 Write-Host ""
-Write-Host "  Audio uses WASAPI directly (no sox needed). Video is not available on Windows yet."
+Write-Host "  Audio uses WASAPI directly (no sox needed). Screen sharing needs ffmpeg; webcam is not available on Windows yet."
 Write-Host "  Use Windows Terminal for the best experience."
 Write-Host ""
