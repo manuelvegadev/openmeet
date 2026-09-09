@@ -1,7 +1,7 @@
 {
   "name": "openmeet-terminal",
   "version": "0.4.1",
-  "description": "Join OpenMeet video rooms from the terminal \u2014 audio chat and text messaging via WebRTC",
+  "description": "Join OpenMeet video rooms from the terminal — audio chat and text messaging via WebRTC",
   "type": "module",
   "bin": {
     "openmeet": "./dist/index.js"
@@ -31,6 +31,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@jitsi/rnnoise-wasm": "^0.2.1",
     "@roamhq/wrtc": "^0.10.0",
     "audify": "^1.10.1",
     "ink": "^7.1.1",
