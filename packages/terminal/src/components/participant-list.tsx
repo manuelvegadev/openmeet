@@ -7,7 +7,7 @@ import { NAME_MAX_CELLS } from '../lib/identity.js';
 import { theme } from '../lib/theme.js';
 import { VuMeter } from './level-bar.js';
 import { Name } from './name.js';
-import { POINTER, Pointer, Text } from './text.js';
+import { Divider, POINTER, Pointer, Text } from './text.js';
 
 /**
  * The column's width, from the widest line it can ever hold, so nothing wraps and the chat
@@ -16,27 +16,26 @@ import { POINTER, Pointer, Text } from './text.js';
  * Measured with the same `string-width` Ink lays text out with, so a wide character counts
  * its two cells.
  */
-/** The tag words, written once so the width below and the rows draw the same strings. */
-const TAG = { muted: 'muted', cam: 'cam', scr: 'scr', sharing: 'sharing' } as const;
-/** A tag as drawn: the word with a cell of its background either side. */
-const chip = (label: string) => ` ${label} `;
+/**
+ * The state tags: one letter each, run together, no background — `mcs` beside the name. The
+ * letter says which state, its colour repeats that (mute orange, cam purple, screen blue),
+ * and its case says whether you have that peer's window open on your side: lower while they
+ * send, upper while you watch. Three cells at most, and brackets stay a name's alone.
+ *
+ * Not padded into fixed columns: names differ in length, so the tags never line up anyway,
+ * and a blank column for a state nobody has is three cells of nothing on every row.
+ */
+const TAG = { muted: 'm', cam: 'c', scr: 's' } as const;
+
+function Tag({ letter, color, watching = false }: { letter: string; color: string; watching?: boolean }) {
+  return <Text color={color}>{watching ? letter.toUpperCase() : letter}</Text>;
+}
+
 const LONGEST_NAME = `[${'M'.repeat(NAME_MAX_CELLS)}]`;
 const METER = '█'.repeat(VU_BAR_COUNT);
-const WIDEST_PEER_LINE = `○ ${POINTER} ${LONGEST_NAME} ${chip(TAG.muted)} ${chip(TAG.cam)} ${chip(TAG.scr)} ↓999k ~999ms 60% ${METER}`;
-const WIDEST_LOCAL_LINE = `○ ${LONGEST_NAME} ${chip(TAG.muted)} ${chip(TAG.cam)} ${chip(TAG.sharing)} ↑999k ${METER}`;
-
-/**
- * A state tag: the word on its colour, dark text, like the bar's buttons. Brackets are for
- * names and nothing else, so a tag is told from a name at a glance. A peer's `cam` and `scr`
- * go green once you have that window open on your side.
- */
-function Tag({ label, color }: { label: string; color: string }) {
-  return (
-    <Text backgroundColor={color} color={theme.onAccent}>
-      {chip(label)}
-    </Text>
-  );
-}
+const ALL_TAGS = `${TAG.muted}${TAG.cam}${TAG.scr}`;
+const WIDEST_PEER_LINE = `○ ${POINTER} ${LONGEST_NAME} ${ALL_TAGS} ↓999k ~999ms 60% ${METER}`;
+const WIDEST_LOCAL_LINE = `○ ${LONGEST_NAME} ${ALL_TAGS} ↑999k ${METER}`;
 const PADDING = 1;
 export const PARTICIPANTS_WIDTH = Math.max(stringWidth(WIDEST_PEER_LINE), stringWidth(WIDEST_LOCAL_LINE)) + 2 * PADDING;
 
@@ -66,9 +65,9 @@ interface ParticipantListProps {
  * column. You come first, set apart by a blank line, with no "(you)" — being first and
  * having no marker is the tell.
  *
- * A peer's `cam` and `scr` tags carry two states in their colour: the tag's own colour while
- * they are sending, green once you have that window open on your side. The bar below says
- * what `w`/`e` would do to the selected peer, so the colour never has to be read alone.
+ * The tags carry two things at once: which state (the letter and its colour) and whether you
+ * are watching that peer (its case). The bar below says what `w`/`e` would do to the selected
+ * peer, so neither has to be read alone.
  */
 export function ParticipantList({
   participants,
@@ -93,36 +92,24 @@ export function ParticipantList({
 
   return (
     <Box flexDirection="column" paddingX={PADDING}>
-      <Text bold>Participants</Text>
       <Box justifyContent="space-between">
         <Text>
           <Text color={localSpeaking ? theme.ok : theme.text}>{localSpeaking ? '● ' : '○ '}</Text>
           <Name name={username} color={color} />
-          {isMuted && (
-            <>
-              {' '}
-              <Tag label={TAG.muted} color={theme.warn} />
-            </>
-          )}
-          {videoEnabled && !isVideoMuted && (
-            <>
-              {' '}
-              <Tag label={TAG.cam} color={theme.accentAlt} />
-            </>
-          )}
-          {isScreenSharing && (
-            <>
-              {' '}
-              <Tag label={TAG.sharing} color={theme.danger} />
-            </>
-          )}
+          {/* Your own tags are always lower: there is no watching yourself. */}
+          {(isMuted || (videoEnabled && !isVideoMuted) || isScreenSharing) && <Text> </Text>}
+          {isMuted && <Tag letter={TAG.muted} color={theme.warn} />}
+          {videoEnabled && !isVideoMuted && <Tag letter={TAG.cam} color={theme.accentAlt} />}
+          {isScreenSharing && <Tag letter={TAG.scr} color={theme.info} />}
         </Text>
         <Text>
           {connectionStats && <Text dimColor>↑{connectionStats.sendBitrateKbps}k </Text>}
           <VuMeter level={audioLevels.__local__ ?? 0} />
         </Text>
       </Box>
-      {participants.length > 0 && <Text> </Text>}
+      {/* Deliberately a `Divider` and not a `Rule`: this separates you from the rest inside
+          the column, so it stays clear of the frame and the panes' divider. */}
+      <Divider />
       {participants.map((p, idx) => {
         const speaking = speakingStates[p.id] && !remoteMuteStates[p.id];
         const isSelected = idx === selectedPeerIdx;
@@ -137,23 +124,15 @@ export function ParticipantList({
             <Text>
               <Text color={speaking ? theme.ok : theme.text}>{speaking ? '● ' : '○ '}</Text>
               <Pointer on={isSelected} /> <Name name={p.username} color={p.color} />
-              {remoteMuteStates[p.id] && (
-                <>
-                  {' '}
-                  <Tag label={TAG.muted} color={theme.warn} />
-                </>
+              {(remoteMuteStates[p.id] || remoteVideoMuteStates[p.id] === false || remoteScreenShareStates[p.id]) && (
+                <Text> </Text>
               )}
+              {remoteMuteStates[p.id] && <Tag letter={TAG.muted} color={theme.warn} />}
               {remoteVideoMuteStates[p.id] === false && (
-                <>
-                  {' '}
-                  <Tag label={TAG.cam} color={peerVideoOpen[p.id] ? theme.ok : theme.accentAlt} />
-                </>
+                <Tag letter={TAG.cam} color={theme.accentAlt} watching={peerVideoOpen[p.id]} />
               )}
               {remoteScreenShareStates[p.id] && (
-                <>
-                  {' '}
-                  <Tag label={TAG.scr} color={peerScreenOpen[p.id] ? theme.ok : theme.info} />
-                </>
+                <Tag letter={TAG.scr} color={theme.info} watching={peerScreenOpen[p.id]} />
               )}
             </Text>
             <Text>

@@ -65,18 +65,6 @@ check(
   contrast(theme.onAccent, theme.accent) >= AA,
   true,
 );
-for (const [name, bg] of Object.entries({ ok: theme.ok, warn: theme.warn, danger: theme.danger, info: theme.info })) {
-  check(
-    `onAccent reads on ${name}, a participant tag's background (${contrast(theme.onAccent, bg).toFixed(1)}:1)`,
-    contrast(theme.onAccent, bg) >= AA,
-    true,
-  );
-}
-check(
-  `onAccent reads on accentAlt, the cam tag (${contrast(theme.onAccent, theme.accentAlt).toFixed(1)}:1)`,
-  contrast(theme.onAccent, theme.accentAlt) >= AA,
-  true,
-);
 check('muted is darker than text, so "dim" still means dim', luminance(theme.muted) < luminance(theme.text), true);
 check(
   `muted reads on surface, the disabled button (${contrast(theme.muted, theme.surface).toFixed(1)}:1)`,

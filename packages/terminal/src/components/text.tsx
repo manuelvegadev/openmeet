@@ -79,6 +79,26 @@ export function Rule({ children }: { children?: ReactNode }) {
   );
 }
 
+/**
+ * A separator *within* a panel: a rule as wide as its container and no wider, so it stays
+ * clear of the frame and of any divider beside it. `Rule` is the other one — it bleeds over
+ * both to join them, which is right for a section break across the room and wrong for a line
+ * that only groups rows inside one column.
+ */
+export function Divider() {
+  return (
+    <Box
+      width="100%"
+      borderStyle="single"
+      borderTop
+      borderBottom={false}
+      borderLeft={false}
+      borderRight={false}
+      {...framedBorder}
+    />
+  );
+}
+
 /** The one selection marker, wherever a list has a current row. */
 export const POINTER = '▸';
 
