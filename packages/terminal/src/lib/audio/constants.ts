@@ -14,7 +14,26 @@ export const FRAME_SAMPLES = FRAME_SIZE * CHANNELS;
 export const FRAME_BYTES = FRAME_SAMPLES * 2;
 
 /** VU meter scale shared by the UI and the engine's level quantization. */
-export const VU_BAR_COUNT = 20;
+export const VU_BAR_COUNT = 10;
+/** Steps per cell: the meter draws eighth-blocks, so a level moves in eighths of a cell. */
+export const VU_SUBSTEPS = 8;
+/** Distinct levels the meter can show; the engine quantizes to these before sending. */
+export const VU_LEVEL_STEPS = VU_BAR_COUNT * VU_SUBSTEPS;
+
+/**
+ * Meter ballistics: fast attack, slow release. The shown level jumps to any louder frame at
+ * once and otherwise falls at this rate — a pop rises to its peak and then takes a moment to
+ * come down, instead of flashing for one frame. 20 dB/s is in the range broadcast peak
+ * meters use (the BBC PPM falls 20 dB in 1.7 s).
+ */
+export const VU_RELEASE_DB_PER_S = 20;
+/** The per-frame multiplier that release rate works out to, for one 10 ms frame. */
+export const VU_RELEASE_PER_FRAME = 10 ** (-(VU_RELEASE_DB_PER_S / 100) / 20);
+
+/** One step of the meter's ballistics: the new level is the frame's RMS if louder, else the old one released a frame. */
+export function followLevel(shown: number, rms: number): number {
+  return Math.max(rms, shown * VU_RELEASE_PER_FRAME);
+}
 export const VU_MAX_RMS = 8000;
 /** RMS above this counts as "speaking" (~2.5% of full scale). */
 export const SPEAKING_RMS_THRESHOLD = 800;

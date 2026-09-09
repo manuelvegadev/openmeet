@@ -6,7 +6,7 @@
  */
 
 import { InputConditioner } from '../lib/audio/channels.js';
-import { computeRMS } from '../lib/audio/constants.js';
+import { computeRMS, followLevel } from '../lib/audio/constants.js';
 import {
   type AudioBackend,
   type AudioDeviceList,
@@ -82,7 +82,7 @@ export function runEngine(): Promise<never> {
     stopMicTest();
     // Same conditioning as a call, so the meter shows what would be sent.
     const conditioner = new InputConditioner(input.channels, input.gainDb);
-    let peak = 0;
+    let level = 0;
     let lastSent = 0;
     try {
       const backend = await createAudioBackend();
@@ -90,12 +90,12 @@ export function runEngine(): Promise<never> {
       await backend.start(selection, {
         onCapture: (samples) => {
           conditioner.process(samples);
-          // Peak over the reporting window, sent a few times per second instead of 100/s.
-          peak = Math.max(peak, computeRMS(samples));
+          // The same ballistics as the room's meters, stepped every frame; sent a few times a
+          // second instead of 100/s.
+          level = followLevel(level, computeRMS(samples));
           const now = Date.now();
           if (now - lastSent >= MIC_LEVEL_INTERVAL_MS) {
-            send({ type: 'mic-level', rms: peak });
-            peak = 0;
+            send({ type: 'mic-level', rms: level });
             lastSent = now;
           }
         },
