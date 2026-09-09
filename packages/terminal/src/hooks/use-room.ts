@@ -25,6 +25,7 @@ interface UseRoomOptions {
   deviceSelection: AudioDeviceSelection;
   debug?: boolean;
   videoEnabled?: boolean;
+  videoDisabledReason?: string;
   webcamEnabled?: boolean;
   videoDevice?: string;
 }
@@ -54,6 +55,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     deviceSelection,
     debug = false,
     videoEnabled = false,
+    videoDisabledReason,
     webcamEnabled = false,
     videoDevice,
   } = options;
@@ -126,10 +128,16 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         username,
         deviceSelection,
         input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
-        bitrate: { sendKbps: s.audioSendKbps, receiveKbps: s.audioReceiveKbps },
+        bitrate: {
+          sendKbps: s.audioSendKbps,
+          receiveKbps: s.audioReceiveKbps,
+          screenSendKbps: s.screenSendKbps,
+          screenReceiveKbps: s.screenReceiveKbps,
+        },
         noiseSuppression: s.noiseSuppression,
         debug,
         videoEnabled,
+        videoDisabledReason,
         webcamEnabled,
         videoDevice,
       },
@@ -143,7 +151,18 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         engine.send({ type: 'leave' });
       }
     };
-  }, [engine, serverUrl, roomId, username, deviceSelection, debug, videoEnabled, webcamEnabled, videoDevice]);
+  }, [
+    engine,
+    serverUrl,
+    roomId,
+    username,
+    deviceSelection,
+    debug,
+    videoEnabled,
+    videoDisabledReason,
+    webcamEnabled,
+    videoDevice,
+  ]);
 
   // Diagnostics for *this* process (loop stalls, render cost), logged through the engine
   // so both processes end up in one file.

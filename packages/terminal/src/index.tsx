@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { type ChildProcess, execSync, spawn, spawnSync } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { parseArgs } from 'node:util';
 import { render } from 'ink';
@@ -29,8 +29,9 @@ import { listScreenDevices } from './lib/devices.js';
 import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
 import { getOrCreateEmoji } from './lib/emoji.js';
 import { getPlatformSupport } from './lib/platform.js';
-import { AUDIO_KBPS_MAX, AUDIO_KBPS_MIN, parseAudioKbpsFlag } from './lib/sdp.js';
+import { AUDIO_KBPS_MAX, AUDIO_KBPS_MIN, parseKbpsFlag, SCREEN_KBPS_MAX, SCREEN_KBPS_MIN } from './lib/sdp.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
+import { ffmpegBin, ffplayBin, findTool } from './lib/tool-path.js';
 import {
   createFocusFilteredStdin,
   parsePausePolicyFlag,
@@ -41,28 +42,20 @@ import {
 } from './lib/window-state.js';
 import { APP_VERSION } from './version.js';
 
-function hasBinary(bin: string): boolean {
-  try {
-    execSync(`${platform() === 'win32' ? 'where' : 'which'} ${bin}`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function checkSox(): boolean {
-  return hasBinary('rec') && hasBinary('play');
+  return findTool('rec') !== null && findTool('play') !== null;
 }
 
-function checkFfmpeg(): { ffplay: boolean; ffmpeg: boolean } {
-  return { ffplay: hasBinary('ffplay'), ffmpeg: hasBinary('ffmpeg') };
+/** Which of ffmpeg/ffplay are nowhere to be found (see lib/tool-path.ts for where we look). */
+function missingVideoTools(): string[] {
+  return ['ffmpeg', 'ffplay'].filter((tool) => findTool(tool) === null);
 }
 
 /** ffmpeg → ffplay preview for the --test-* modes; exits with either process. */
 /** `candidates` is walked the same way a real capture walks it: on to the next if one yields nothing. */
 function runPreview(candidates: string[][], playerArgs: string[], index = 0): void {
-  const capture: ChildProcess = spawn('ffmpeg', candidates[index], { stdio: ['ignore', 'pipe', 'inherit'] });
-  const player: ChildProcess = spawn('ffplay', playerArgs, { stdio: ['pipe', 'ignore', 'ignore'] });
+  const capture: ChildProcess = spawn(ffmpegBin(), candidates[index], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const player: ChildProcess = spawn(ffplayBin(), playerArgs, { stdio: ['pipe', 'ignore', 'ignore'] });
   let sawFrames = false;
   capture.stdout?.once('data', () => {
     sawFrames = true;
@@ -239,11 +232,20 @@ Install sox:
 
   // Video support: soft-fail if ffmpeg/ffplay missing. Gated per platform (see lib/platform.ts).
   const support = getPlatformSupport();
-  let videoEnabled = !values['no-video'] && support.video;
-  if (videoEnabled) {
-    const ffStatus = checkFfmpeg();
-    if (!ffStatus.ffplay || !ffStatus.ffmpeg) {
-      process.stderr.write(`Warning: ffmpeg/ffplay not found. Video support disabled.
+  // One fact — why video is off — and `videoEnabled` derived from it. The reason reaches the
+  // room log, because the stderr warning below is covered by the alternate screen the
+  // instant Ink starts; without it a dead `s` key was the only symptom.
+  const missing = values['no-video'] || !support.video ? [] : missingVideoTools();
+  const videoDisabledReason = values['no-video']
+    ? '--no-video'
+    : !support.video
+      ? `not available on ${support.name}`
+      : missing.length > 0
+        ? `${missing.join(' and ')} not found (PATH, WinGet Links, Program Files\\ffmpeg)`
+        : undefined;
+  const videoEnabled = videoDisabledReason === undefined;
+  if (missing.length > 0) {
+    process.stderr.write(`Warning: ffmpeg/ffplay not found. Video support disabled.
 
 Install ffmpeg for video support:
   macOS:   brew install ffmpeg
@@ -252,8 +254,6 @@ Install ffmpeg for video support:
   Fedora:  sudo dnf install ffmpeg
 
 `);
-      videoEnabled = false;
-    }
   }
 
   // The sox probe uses `rec`; with rtaudio a denied mic surfaces as a stream error instead.
@@ -350,6 +350,7 @@ Your terminal app needs microphone permission on macOS:
       inputDevice={values['input-device']}
       outputDevice={values['output-device']}
       videoEnabled={videoEnabled}
+      videoDisabledReason={videoDisabledReason}
       webcamEnabled={videoEnabled && support.webcam}
       videoDevice={values['video-device']}
       debug={values.debug ?? false}

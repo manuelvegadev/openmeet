@@ -188,20 +188,36 @@ export class RoomEngine {
 
     let videoManager: VideoManager | null = null;
     let videoTrack: any = null;
-    if (options.videoEnabled) {
+    if (!options.videoEnabled) {
+      // Say so where it will be read. Without video there is no screen share, no watching
+      // peers, and the `e` button never appears — which looks like a bug unless told why.
+      const reason = options.videoDisabledReason ?? 'unknown reason';
+      debugFn?.(`Video disabled: ${reason}`);
+      this.addEvent(`Video disabled: ${reason} — screen sharing and watching peers are off`, 'info');
+    } else {
       const videoResult = createVideoSource();
       videoTrack = videoResult.track;
       this.videoSource = videoResult.source;
+      // Resolve ffmpeg/ffplay now, without blocking: the first spawn would otherwise run a
+      // synchronous `where`/`which` on this loop, next to live audio (gotcha 25).
+      void warmTools().then((tools) => debugFn?.(`Video tools: ${tools.ffmpeg}, ${tools.ffplay}`));
       videoManager = new VideoManager({ onDebug: debugFn });
       videoManager.overlayEnabled = loadSettings().videoOverlay;
-      videoManager.onWindowClosed = (peerId) => {
-        this.patch({ peerVideoOpen: { ...this.state.peerVideoOpen, [peerId]: false } });
+      // The user closed an ffplay window themselves. Which flag to clear depends on which
+      // window it was: clearing the webcam one for a screen window left `e` reading "close
+      // screen" forever, and silently forgot an open webcam window at the same time.
+      videoManager.onWindowClosed = (peerId, streamType) => {
+        if (streamType === 'screen') {
+          this.patch({ peerScreenOpen: { ...this.state.peerScreenOpen, [peerId]: false } });
+        } else {
+          this.patch({ peerVideoOpen: { ...this.state.peerVideoOpen, [peerId]: false } });
+        }
       };
-      videoManager.onScreenCaptureEnded = () => {
+      videoManager.onScreenCaptureEnded = (reason) => {
         // Our own stopScreenShare() clears the flag before killing ffmpeg; anything else is a failure.
         if (!this.state.isScreenSharing) return;
         this.stopScreenShare();
-        this.addEvent('Screen sharing stopped: capture failed (check screen recording permission / ffmpeg)', 'screen');
+        this.addEvent(`Screen sharing stopped: ${reason}`, 'screen');
       };
       this.videoManager = videoManager;
       this.state.overlayEnabled = videoManager.overlayEnabled;

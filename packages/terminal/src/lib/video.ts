@@ -16,6 +16,7 @@ import {
 } from './capture-args.js';
 import type { ScreenDevice } from './devices.js';
 import { renderOverlay } from './overlay.js';
+import { ffmpegBin, ffplayBin } from './tool-path.js';
 
 // @roamhq/wrtc's type definitions omit the video nonstandard APIs
 const { RTCVideoSink, RTCVideoSource } = wrtc.nonstandard as any;
@@ -194,7 +195,7 @@ export class VideoManager {
    */
   private spawnFfplay(peer: PeerVideoPlayback, width: number, height: number): void {
     const title = `${peer.peerName} (${peer.streamType})`;
-    const proc = spawn('ffplay', rawVideoPlayerArgs(width, height, 30, title), {
+    const proc = spawn(ffplayBin(), rawVideoPlayerArgs(width, height, 30, title), {
       stdio: ['pipe', 'ignore', 'ignore'],
     });
     peer.ffplayProcess = proc;
@@ -271,7 +272,7 @@ export class VideoManager {
     this.capturing = true;
     this.videoSource = videoSource;
 
-    this.captureProcess = spawn('ffmpeg', args, {
+    this.captureProcess = spawn(ffmpegBin(), args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -349,29 +350,35 @@ export class VideoManager {
     return this.screenCaptureProcess !== null;
   }
 
-  startScreenCapture(screenVideoSource: any, device: ScreenDevice): void {
-    if (this.screenCaptureProcess) return;
-    this.spawnScreenCapture(screenVideoSource, device, screenCaptureCandidates(device), 0);
+  /** Returns the shape the share goes out at, for the bandwidth budget. */
+  startScreenCapture(screenVideoSource: any, device: ScreenDevice): { width: number; height: number } {
+    const shape = screenOutputSize(device);
+    if (!this.screenCaptureProcess) {
+      this.spawnScreenCapture(screenVideoSource, device, shape, screenCaptureCandidates(device), 0);
+    }
+    return shape;
   }
 
   /** Runs candidate `index`; if it yields no frames, moves on to the next one. */
   private spawnScreenCapture(
     screenVideoSource: any,
     device: ScreenDevice,
+    shape: { width: number; height: number },
     candidates: string[][],
     index: number,
   ): void {
     const args = candidates[index];
+    const { width, height } = shape;
+    const frameBytes = i420FrameBytes(width, height);
     this.onDebug?.(`Screen ffmpeg args: ffmpeg ${args.join(' ')}`);
-    this.onDebug?.(
-      `Screen expected frame size: ${SCREEN_FRAME_BYTES} bytes (${SCREEN_MAX_WIDTH}x${SCREEN_MAX_HEIGHT} I420)`,
-    );
+    this.onDebug?.(`Screen expected frame size: ${frameBytes} bytes (${width}x${height} I420)`);
 
-    this.screenCaptureProcess = spawn('ffmpeg', args, {
+    this.screenCaptureProcess = spawn(ffmpegBin(), args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    const proc = this.screenCaptureProcess;
 
-    const assembler = new FrameAssembler(SCREEN_FRAME_BYTES);
+    const assembler = new FrameAssembler(frameBytes);
     let screenFrameCount = 0;
     let loggedFirstChunk = false;
     let lastScreenLog = Date.now();

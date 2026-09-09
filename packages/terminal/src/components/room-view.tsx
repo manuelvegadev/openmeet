@@ -24,6 +24,7 @@ interface RoomViewProps {
   version: string;
   deviceSelection: AudioDeviceSelection;
   videoEnabled?: boolean;
+  videoDisabledReason?: string;
   webcamEnabled?: boolean;
   videoDevice?: string;
   debug?: boolean;
@@ -41,6 +42,7 @@ export function RoomView({
   version,
   deviceSelection,
   videoEnabled,
+  videoDisabledReason,
   webcamEnabled,
   videoDevice,
   debug = false,
@@ -53,6 +55,7 @@ export function RoomView({
     deviceSelection,
     debug,
     videoEnabled,
+    videoDisabledReason,
     webcamEnabled,
     videoDevice,
   });
@@ -181,7 +184,7 @@ export function RoomView({
       if (input === 'o') {
         room.toggleOverlay();
       }
-      if (input === 's') {
+      if (input === 's' && room.videoEnabled) {
         if (room.isScreenSharing) {
           room.stopScreenSharing();
           setLastScreenDevice(null);
@@ -497,6 +500,7 @@ export function RoomView({
       <StatusBar
         isMuted={room.isMuted}
         isVideoMuted={room.isVideoMuted}
+        videoEnabled={room.videoEnabled}
         webcamEnabled={room.webcamEnabled}
         isScreenSharing={room.isScreenSharing}
         debugMode={room.debugMode}

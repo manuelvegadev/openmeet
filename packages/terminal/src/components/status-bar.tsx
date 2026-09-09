@@ -7,6 +7,8 @@ export type PeerWindowAction = 'watch' | 'close' | null;
 interface StatusBarProps {
   isMuted: boolean;
   isVideoMuted?: boolean;
+  /** Without the ffmpeg pipeline there is no screen share, so `s` is not drawn (the room log says why). */
+  videoEnabled?: boolean;
   webcamEnabled?: boolean;
   isScreenSharing?: boolean;
   debugMode?: boolean;
@@ -19,6 +21,7 @@ interface StatusBarProps {
 export function StatusBar({
   isMuted,
   isVideoMuted,
+  videoEnabled = true,
   webcamEnabled,
   isScreenSharing,
   debugMode = false,
@@ -33,8 +36,8 @@ export function StatusBar({
     { key: 'm', label: isMuted ? 'unmute' : 'mute' },
     { key: '↑↓', label: 'select' },
     { key: '-/+', label: 'vol' },
-    { key: 's', label: isScreenSharing ? 'stop sharing' : 'share screen' },
   ];
+  if (videoEnabled) hints.push({ key: 's', label: isScreenSharing ? 'stop sharing' : 'share screen' });
   if (webcamEnabled) hints.push({ key: 'v', label: isVideoMuted ? 'share cam' : 'stop cam' });
 
   // Then what depends on the peer you have selected.

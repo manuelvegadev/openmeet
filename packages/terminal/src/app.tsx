@@ -17,6 +17,8 @@ interface AppProps {
   inputDevice?: string;
   outputDevice?: string;
   videoEnabled?: boolean;
+  /** Shown in the room log when `videoEnabled` is false, so the missing buttons explain themselves. */
+  videoDisabledReason?: string;
   webcamEnabled?: boolean;
   videoDevice?: string;
   debug?: boolean;
@@ -57,6 +59,7 @@ export function App({
   inputDevice,
   outputDevice,
   videoEnabled,
+  videoDisabledReason,
   webcamEnabled,
   videoDevice,
   debug = false,
@@ -162,6 +165,7 @@ export function App({
           version={version}
           deviceSelection={deviceSelection}
           videoEnabled={videoEnabled}
+          videoDisabledReason={videoDisabledReason}
           webcamEnabled={webcamEnabled}
           videoDevice={videoDevice}
           debug={debug}

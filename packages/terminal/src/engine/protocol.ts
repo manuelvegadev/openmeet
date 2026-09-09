@@ -100,10 +100,12 @@ export interface JoinOptions {
   username: string;
   deviceSelection: AudioDeviceSelection;
   input: InputOptions;
-  bitrate: AudioBitrateOptions;
+  bitrate: BitrateOptions;
   noiseSuppression: boolean;
   debug: boolean;
   videoEnabled: boolean;
+  /** Why video is off, when it is — logged to the room so the absent buttons are explained. */
+  videoDisabledReason?: string;
   webcamEnabled: boolean;
   videoDevice?: string;
 }

@@ -100,7 +100,7 @@ function parseMacOSAvfoundation(): { cameras: VideoDevice[]; screens: ScreenDevi
   const screens: ScreenDevice[] = [];
 
   try {
-    const result = spawnSync('ffmpeg', ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''], {
+    const result = spawnSync(ffmpegBin(), ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''], {
       encoding: 'utf-8',
       timeout: 5000,
     });
