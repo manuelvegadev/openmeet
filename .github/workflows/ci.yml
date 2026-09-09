@@ -35,7 +35,7 @@ jobs:
       - name: Type-check terminal
         run: pnpm --filter openmeet-terminal exec tsc --noEmit
 
-      - name: Audio, negotiation and capture checks (resampler, channels, SDP, Broadcast, screen sender, screen size)
+      - name: Audio, negotiation, capture and UI checks (resampler, channels, SDP, Broadcast, screen sender, screen size, palette, chat)
         run: |
           pnpm --filter openmeet-terminal exec tsx scripts/resampler-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/channels-test.ts
@@ -43,6 +43,8 @@ jobs:
           pnpm --filter openmeet-terminal exec tsx scripts/nvidia-broadcast-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/share-probe.ts
           pnpm --filter openmeet-terminal exec tsx scripts/screen-size-test.ts
+          pnpm --filter openmeet-terminal exec tsx scripts/theme-test.ts
+          pnpm --filter openmeet-terminal exec tsx scripts/chat-test.ts
 
       # audify links against PulseAudio on Linux; the runner image ships no libpulse.
       - name: Install Linux audio libraries
