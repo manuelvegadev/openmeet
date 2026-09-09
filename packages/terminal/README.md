@@ -33,7 +33,7 @@ No browser needed. Just your terminal, a mic, and speakers.
 
 ## Features
 
-- **Real-time audio chat** — full-duplex stereo audio via WebRTC with 256kbps Opus encoding
+- **Real-time audio chat** — full-duplex stereo audio via WebRTC, Opus at a configurable ceiling (128 kbps each way by default) with RED redundancy and optional noise suppression
 - **Video support** — send and receive webcam video (1080p) via ffmpeg/ffplay
 - **Screen sharing** — share your screen at 1080p@30fps, view remote screen shares
 - **Text messaging** — send and receive chat messages alongside audio
@@ -136,6 +136,9 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--audio-backend <name>` | Audio I/O: `rtaudio` (native CoreAudio/WASAPI) or `sox` (fallback) | `rtaudio` on macOS/Windows, `sox` on Linux |
 | `--input-channels <p>` | How the mic's channel pair is sent: `auto`, `stereo`, `mono`, `left`, `right` (saved) | `auto` |
 | `--input-gain <dB>` | Capture gain in dB, -30 to 30 (saved) | `0` |
+| `--audio-send-kbps <n>` | Opus ceiling for the audio you send (saved; also in Settings) | `128` |
+| `--audio-receive-kbps <n>` | Opus ceiling you ask peers to respect when sending to you (saved; also in Settings) | `128` |
+| `--noise-suppression` | RNNoise on the microphone; `--no-noise-suppression` turns it off (saved; also in Settings) | off |
 | `--pause-rendering <p>` | Pause TUI rendering (audio keeps running) when the window is `minimized`, when it is `unfocused`, or `never` (saved; also in Settings) | `minimized` |
 | `--no-video` | Disable video (audio-only mode; always off on Windows) | |
 | `--video-device <id>` | Video capture device (e.g., `"0"`) | |
@@ -178,7 +181,7 @@ Terminal ◀────────── WebSocket ─────────
 ```
 
 0. **Two processes**: the TUI forks an audio/network engine (`openmeet --engine`). Rendering the terminal never delays audio; the interface just paints the latest state it received.
-1. **Audio capture**: the engine opens the microphone in-process (RtAudio → CoreAudio/WASAPI) at the device's own sample rate and channel count — 16 kHz Bluetooth headsets, 44.1 kHz USB mixers, 96 kHz interfaces, mono laptop mics all work — and converts to the pipeline's 48 kHz stereo with an in-process polyphase resampler (≈90 dB SNR), so the driver never resamples and your interface's clock setting is left alone. Interfaces with more than two inputs show one entry per channel pair. A channel policy (`auto` by default) notices a mono mic on one input of a stereo pair and sends it to both ears; `--input-gain` trims quiet or hot mics. The sound card clocks 10 ms frames straight into a WebRTC audio track (256kbps Opus). A capture-processor chain sits between the mic and WebRTC, where noise suppression will plug in.
+1. **Audio capture**: the engine opens the microphone in-process (RtAudio → CoreAudio/WASAPI) at the device's own sample rate and channel count — 16 kHz Bluetooth headsets, 44.1 kHz USB mixers, 96 kHz interfaces, mono laptop mics all work — and converts to the pipeline's 48 kHz stereo with an in-process polyphase resampler (≈90 dB SNR), so the driver never resamples and your interface's clock setting is left alone. Interfaces with more than two inputs show one entry per channel pair. A channel policy (`auto` by default) notices a mono mic on one input of a stereo pair and sends it to both ears; `--input-gain` trims quiet or hot mics. The sound card clocks 10 ms frames straight into a WebRTC audio track (stereo Opus, 128 kbps by default in each direction, with RED redundancy so one lost packet does not become a gap). A capture-processor chain sits between the mic and WebRTC; optional RNNoise noise suppression plugs in there.
 2. **Audio playback**: each remote peer's decoded audio lands in a small playout buffer; the output callback mixes all peers (with per-peer volume) into one stereo stream. `--audio-backend sox` keeps the old `rec`/`play` subprocess pipeline on macOS/Linux.
 3. **Video capture**: `ffmpeg` captures webcam (1080p) or screen (1080p@30fps) and feeds raw I420 frames into WebRTC video tracks
 4. **Video display**: `ffplay` opens separate windows for remote webcam and screen share streams, with aspect-ratio-preserving letterboxing
