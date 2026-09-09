@@ -8,6 +8,11 @@ function Info($msg) { Write-Host "[+] $msg" -ForegroundColor Green }
 function Warn($msg) { Write-Host "[!] $msg" -ForegroundColor Yellow }
 function Fail($msg) { Write-Host "[x] $msg" -ForegroundColor Red; exit 1 }
 
+# Installers append to the machine/user PATH; pick that up without opening a new shell.
+function Sync-Path {
+  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+}
+
 # --- Node.js >= 22 ---
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
@@ -15,8 +20,7 @@ if (-not $node) {
   if (-not $winget) { Fail "Node.js >= 22 is required. Install it from https://nodejs.org and re-run this script." }
   Info "Node.js not found, installing the LTS release with winget..."
   winget install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements
-  # Pick up the PATH written by the installer without opening a new shell
-  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+  Sync-Path
   $node = Get-Command node -ErrorAction SilentlyContinue
   if (-not $node) { Fail "Node.js was installed but is not on PATH yet. Open a new terminal and re-run this script." }
 }
@@ -30,7 +34,7 @@ Info "Installing openmeet-terminal..."
 if ($LASTEXITCODE -ne 0) { Fail "npm install failed" }
 
 # The npm global bin directory may have just been created; pick it up in this session.
-$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+Sync-Path
 
 # --- Native modules ---
 # audify ships no prebuilt binary in its npm tarball: it downloads one from an install
@@ -57,6 +61,7 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     Info "ffmpeg not found, installing it with winget (needed for screen sharing)..."
     winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements
     if ($LASTEXITCODE -ne 0) { Warn "ffmpeg install failed; screen sharing will be disabled until it is installed." }
+    Sync-Path
   } else {
     Warn "ffmpeg not found; install it (winget install Gyan.FFmpeg) to enable screen sharing."
   }
@@ -70,8 +75,12 @@ if ($wt) {
     $dest = Join-Path $env:LOCALAPPDATA 'openmeet'
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     Copy-Item (Join-Path $pkg 'openmeet-icon.png'), (Join-Path $pkg 'openmeet.ico') -Destination $dest -Force
+    # A native command that fails does not throw, so check it: a missing profile would
+    # leave the desktop shortcut pointing at nothing.
     & node (Join-Path $pkg 'wt-profile.cjs')
+    if ($LASTEXITCODE -ne 0) { throw 'the Windows Terminal profile could not be written' }
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $pkg 'create-shortcut.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'the desktop shortcut could not be created' }
     Info "Windows Terminal profile and desktop shortcut created"
   } catch {
     Warn "Could not set up the Windows Terminal profile: $_"
@@ -80,12 +89,16 @@ if ($wt) {
   Warn "Windows Terminal not found; install it from the Microsoft Store for the best experience."
 }
 
+Sync-Path
+
 # --- Smoke test ---
 if (-not (Get-Command openmeet -ErrorAction SilentlyContinue)) {
   Warn "openmeet is installed but not on PATH yet; open a new terminal."
 } else {
-  & openmeet --help | Select-Object -First 1 | Out-Null
-  if ($LASTEXITCODE -ne 0) { Fail "openmeet was installed but does not run" }
+  # Capture the output whole: piping into Select-Object -First stops the pipeline early,
+  # which fails the native command and would report a working install as broken.
+  $help = & openmeet --help 2>&1
+  if ($LASTEXITCODE -ne 0) { Fail "openmeet was installed but does not run: $help" }
 }
 
 Info "Installed successfully!"
