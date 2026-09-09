@@ -1,12 +1,16 @@
-import { Box, Text, useInput } from 'ink';
+import { Box, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import { useEffect, useState } from 'react';
 import { type AudioDevice, listAudioDevices } from '../engine/client.js';
 import { INPUT_CHANNEL_POLICIES } from '../lib/audio/channels.js';
 import { listVideoDevices, type VideoDevice } from '../lib/devices.js';
 import { getPlatformSupport } from '../lib/platform.js';
+import { AUDIO_KBPS_STEPS } from '../lib/sdp.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
+import { theme } from '../lib/theme.js';
 import { RENDER_PAUSE_POLICIES } from '../lib/window-state.js';
+import { KeyHints } from './key-hints.js';
+import { Rule, Text } from './text.js';
 
 interface SettingsViewProps {
   onBack: () => void;
@@ -20,7 +24,16 @@ interface SettingRow {
   key: string;
   label: string;
   value: string;
-  action: 'pick-input' | 'pick-output' | 'pick-camera' | 'toggle-overlay' | 'cycle-channels' | 'cycle-pause';
+  action:
+    | 'pick-input'
+    | 'pick-output'
+    | 'pick-camera'
+    | 'toggle-overlay'
+    | 'cycle-channels'
+    | 'cycle-pause'
+    | 'toggle-noise'
+    | 'cycle-send-kbps'
+    | 'cycle-receive-kbps';
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
@@ -60,6 +73,24 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     { key: 'overlay', label: 'Video Overlay', value: settings.videoOverlay ? 'On' : 'Off', action: 'toggle-overlay' },
     { key: 'channels', label: 'Mic Channels', value: settings.audioInputChannels, action: 'cycle-channels' },
     {
+      key: 'noise',
+      label: 'Noise Suppression',
+      value: settings.noiseSuppression ? 'On (RNNoise)' : 'Off',
+      action: 'toggle-noise',
+    },
+    {
+      key: 'send-kbps',
+      label: 'Audio Send',
+      value: `${settings.audioSendKbps} kbps (applies on next join)`,
+      action: 'cycle-send-kbps',
+    },
+    {
+      key: 'receive-kbps',
+      label: 'Audio Receive',
+      value: `${settings.audioReceiveKbps} kbps (applies on next join)`,
+      action: 'cycle-receive-kbps',
+    },
+    {
       key: 'pause',
       label: 'Pause Rendering',
       value: `when ${settings.pauseRendering} (applies on next start)`,
@@ -69,6 +100,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
   const cycle = <T extends string>(list: readonly T[], current: T): T =>
     list[(list.indexOf(current) + 1) % list.length];
+  /** Same idea for the bitrate steps, where the saved value may not be one of them. */
+  const cycleNumber = (list: readonly number[], current: number): number =>
+    list[(list.findIndex((v) => v >= current) + 1) % list.length];
 
   const update = (patch: Partial<AppSettings>) => {
     const next = { ...settings, ...patch };
@@ -100,6 +134,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         update({ videoOverlay: !settings.videoOverlay });
       } else if (row.action === 'cycle-channels') {
         update({ audioInputChannels: cycle(INPUT_CHANNEL_POLICIES, settings.audioInputChannels) });
+      } else if (row.action === 'toggle-noise') {
+        update({ noiseSuppression: !settings.noiseSuppression });
+      } else if (row.action === 'cycle-send-kbps') {
+        update({ audioSendKbps: cycleNumber(AUDIO_KBPS_STEPS, settings.audioSendKbps) });
+      } else if (row.action === 'cycle-receive-kbps') {
+        update({ audioReceiveKbps: cycleNumber(AUDIO_KBPS_STEPS, settings.audioReceiveKbps) });
       } else if (row.action === 'cycle-pause') {
         update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) });
       } else if (row.action === 'pick-input') {
@@ -120,12 +160,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     ];
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Settings {'>'} Audio Input
         </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
+        <Rule />
         <SelectInput
           items={items}
           onSelect={(item) => {
@@ -134,7 +172,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           }}
         />
         <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
+        <KeyHints
+          hints={[
+            { key: '↑↓', label: 'navigate' },
+            { key: 'enter', label: 'select' },
+            { key: 'esc', label: 'cancel' },
+          ]}
+        />
       </Box>
     );
   }
@@ -146,12 +190,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     ];
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Settings {'>'} Audio Output
         </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
+        <Rule />
         <SelectInput
           items={items}
           onSelect={(item) => {
@@ -160,7 +202,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           }}
         />
         <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
+        <KeyHints
+          hints={[
+            { key: '↑↓', label: 'navigate' },
+            { key: 'enter', label: 'select' },
+            { key: 'esc', label: 'cancel' },
+          ]}
+        />
       </Box>
     );
   }
@@ -172,12 +220,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     ];
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Settings {'>'} Camera
         </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
+        <Rule />
         <SelectInput
           items={items}
           onSelect={(item) => {
@@ -186,7 +232,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           }}
         />
         <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
+        <KeyHints
+          hints={[
+            { key: '↑↓', label: 'navigate' },
+            { key: 'enter', label: 'select' },
+            { key: 'esc', label: 'cancel' },
+          ]}
+        />
       </Box>
     );
   }
@@ -196,24 +248,22 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-      <Text bold color="blue">
+      <Text bold color={theme.accent}>
         Settings
       </Text>
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
+      <Rule />
 
       {!devicesLoaded ? (
-        <Text color="yellow">Loading devices...</Text>
+        <Text color={theme.warn}>Loading devices...</Text>
       ) : (
         <Box flexDirection="column">
           {rows.map((row, idx) => {
             const selected = idx === selectedIdx;
             return (
               <Box key={row.key} gap={1}>
-                <Text color={selected ? 'blue' : undefined}>{selected ? '▸' : ' '}</Text>
+                <Text color={selected ? theme.accent : theme.text}>{selected ? '▸' : ' '}</Text>
                 <Text bold={selected}>{row.label.padEnd(labelWidth)}</Text>
-                <Text color={selected ? 'white' : 'gray'}>{row.value}</Text>
+                <Text color={selected ? theme.text : theme.muted}>{row.value}</Text>
               </Box>
             );
           })}
@@ -221,7 +271,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       )}
 
       <Box flexGrow={1} />
-      <Text dimColor>[↑↓] navigate [Enter] change [Esc] back</Text>
+      <KeyHints
+        hints={[
+          { key: '↑↓', label: 'navigate' },
+          { key: 'enter', label: 'change' },
+          { key: 'esc', label: 'back' },
+        ]}
+      />
     </Box>
   );
 }

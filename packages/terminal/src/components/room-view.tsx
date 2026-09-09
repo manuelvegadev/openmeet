@@ -1,33 +1,21 @@
-import { Box, Text, useInput } from 'ink';
+import { Box, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import { useEffect, useRef, useState } from 'react';
 import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from '../engine/client.js';
 import { useRoom } from '../hooks/use-room.js';
-import { VU_MAX_RMS as MAX_RMS } from '../lib/audio/constants.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
 import { listScreenDevices, prefetchScreenDevices, type ScreenDevice } from '../lib/devices.js';
 import { getPlatformSupport } from '../lib/platform.js';
 import { saveSettings } from '../lib/settings.js';
+import { framedBorder, theme } from '../lib/theme.js';
 import { ChatInput } from './chat-input.js';
 import { ChatLog } from './chat-log.js';
+import { KeyHints } from './key-hints.js';
+import { MicBar } from './level-bar.js';
 import { ParticipantList } from './participant-list.js';
 import { RoomLog } from './room-log.js';
-import { StatusBar } from './status-bar.js';
-
-const BAR_WIDTH = 30;
-
-function renderBar(level: number): string {
-  const normalized = Math.min(level / MAX_RMS, 1);
-  const filled = Math.round(normalized * BAR_WIDTH);
-  return '\u2588'.repeat(filled) + '\u2591'.repeat(BAR_WIDTH - filled);
-}
-
-function barColor(level: number): string {
-  const normalized = Math.min(level / MAX_RMS, 1);
-  if (normalized > 0.75) return 'red';
-  if (normalized > 0.4) return 'yellow';
-  return 'green';
-}
+import { type PeerWindowAction, StatusBar } from './status-bar.js';
+import { Rule, Text } from './text.js';
 
 interface RoomViewProps {
   serverUrl: string;
@@ -261,12 +249,10 @@ export function RoomView({
     }));
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Screen Share
         </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
+        <Rule />
         <Text bold>Select screen to share:</Text>
         <SelectInput
           items={screenItems}
@@ -280,7 +266,7 @@ export function RoomView({
           }}
         />
         <Text />
-        <Text dimColor>[Esc] cancel</Text>
+        <KeyHints hints={[{ key: 'esc', label: 'cancel' }]} />
       </Box>
     );
   }
@@ -290,12 +276,10 @@ export function RoomView({
     if (deviceStep === 'test') {
       return (
         <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-          <Text bold color="blue">
+          <Text bold color={theme.accent}>
             Audio Test
           </Text>
-          <Box height={1} overflow="hidden">
-            <Text dimColor>{'─'.repeat(200)}</Text>
-          </Box>
+          <Rule />
           <Text>
             Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
           </Text>
@@ -305,10 +289,16 @@ export function RoomView({
           <Text />
           <Text bold>Mic level:</Text>
           <Text>
-            <Text color={barColor(micLevel)}>{renderBar(micLevel)}</Text>
+            <MicBar level={micLevel} />
           </Text>
           <Text />
-          <Text dimColor>[t] play test tone [Enter] confirm [Esc] re-select</Text>
+          <KeyHints
+            hints={[
+              { key: 't', label: 'test tone' },
+              { key: 'enter', label: 'confirm' },
+              { key: 'esc', label: 're-select' },
+            ]}
+          />
         </Box>
       );
     }
@@ -325,12 +315,10 @@ export function RoomView({
     if (deviceStep === 'input') {
       return (
         <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-          <Text bold color="blue">
+          <Text bold color={theme.accent}>
             Change Audio Device
           </Text>
-          <Box height={1} overflow="hidden">
-            <Text dimColor>{'─'.repeat(200)}</Text>
-          </Box>
+          <Rule />
           <Text bold>Input (Microphone):</Text>
           <SelectInput
             items={inputItems}
@@ -346,19 +334,23 @@ export function RoomView({
             }}
           />
           <Text />
-          <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
+          <KeyHints
+            hints={[
+              { key: '↑↓', label: 'navigate' },
+              { key: 'enter', label: 'select' },
+              { key: 'esc', label: 'cancel' },
+            ]}
+          />
         </Box>
       );
     }
 
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Change Audio Device
         </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
+        <Rule />
         <Text>
           Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
         </Text>
@@ -373,17 +365,37 @@ export function RoomView({
           }}
         />
         <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
+        <KeyHints
+          hints={[
+            { key: '↑↓', label: 'navigate' },
+            { key: 'enter', label: 'select' },
+            { key: 'esc', label: 'cancel' },
+          ]}
+        />
       </Box>
     );
   }
+
+  // What `w` and `e` would do to the selected peer right now. These duplicate the conditions
+  // in the key handlers above — deliberately, and they have to be kept in step: a button that
+  // is drawn must work, and a key that works should be advertised.
+  const windowAction = (open: boolean, canOpen: boolean): PeerWindowAction =>
+    open ? 'close' : canOpen ? 'watch' : null;
+  const selectedPeerId = room.videoEnabled ? room.participants[selectedPeerIdx]?.id : undefined;
+  const peerCamAction = selectedPeerId
+    ? windowAction(room.peerVideoOpen[selectedPeerId], room.remoteVideoMuteStates[selectedPeerId] === false)
+    : null;
+  const peerScreenAction =
+    selectedPeerId && room.remoteScreenShareStates[selectedPeerId]
+      ? windowAction(room.peerScreenOpen[selectedPeerId], true)
+      : null;
 
   return (
     <Box flexDirection="column" flexGrow={1}>
       {/* Header */}
       <Box paddingX={1} gap={1} justifyContent="space-between">
         <Box gap={1}>
-          <Text bold color="blue">
+          <Text bold color={theme.accent}>
             OpenMeet <Text dimColor>v{version}</Text> <Text dimColor>({platformName})</Text>
           </Text>
           <Text dimColor>|</Text>
@@ -396,12 +408,16 @@ export function RoomView({
         <Box gap={1}>
           {room.connectionStats ? (
             <>
-              <Text color="green">↑{room.connectionStats.sendBitrateKbps}k</Text>
-              <Text color="cyan">↓{room.connectionStats.recvBitrateKbps}k</Text>
+              <Text color={theme.ok}>↑{room.connectionStats.sendBitrateKbps}k</Text>
+              <Text color={theme.info}>↓{room.connectionStats.recvBitrateKbps}k</Text>
               <Text dimColor>|</Text>
               <Text
                 color={
-                  room.connectionStats.rttMs > 150 ? 'red' : room.connectionStats.rttMs > 80 ? 'yellow' : undefined
+                  room.connectionStats.rttMs > 150
+                    ? theme.danger
+                    : room.connectionStats.rttMs > 80
+                      ? theme.warn
+                      : theme.text
                 }
               >
                 RTT:{room.connectionStats.rttMs}ms
@@ -409,10 +425,10 @@ export function RoomView({
               <Text
                 color={
                   room.connectionStats.packetLossPercent > 5
-                    ? 'red'
+                    ? theme.danger
                     : room.connectionStats.packetLossPercent > 1
-                      ? 'yellow'
-                      : undefined
+                      ? theme.warn
+                      : theme.text
                 }
               >
                 Loss:{room.connectionStats.packetLossPercent}%
@@ -420,16 +436,14 @@ export function RoomView({
               <Text dimColor>|</Text>
             </>
           ) : null}
-          <Text color={room.connected ? 'green' : 'red'}>●</Text>
+          <Text color={room.connected ? theme.ok : theme.danger}>●</Text>
         </Box>
       </Box>
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
+      <Rule />
 
       {deviceStep === 'loading' && (
         <Box paddingX={1}>
-          <Text color="yellow">Loading audio devices...</Text>
+          <Text color={theme.warn}>Loading audio devices...</Text>
         </Box>
       )}
 
@@ -453,9 +467,7 @@ export function RoomView({
         selectedPeerIdx={selectedPeerIdx}
         connectionStats={room.connectionStats}
       />
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
+      <Rule />
 
       {/* Chat + Room Log — split horizontally */}
       <Box flexGrow={1} flexBasis={0} overflow="hidden">
@@ -470,35 +482,32 @@ export function RoomView({
           borderRight={false}
           borderTop={false}
           borderBottom={false}
-          borderDimColor
+          {...framedBorder}
         >
           <RoomLog events={room.roomEvents} joinedAt={room.joinedAt} />
         </Box>
       </Box>
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
+      <Rule />
 
       {/* Input */}
       <ChatInput focused={inputFocused} onSend={room.sendMessage} />
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
+      <Rule />
 
       {/* Status */}
       <StatusBar
         isMuted={room.isMuted}
         isVideoMuted={room.isVideoMuted}
-        videoEnabled={room.videoEnabled}
         webcamEnabled={room.webcamEnabled}
         isScreenSharing={room.isScreenSharing}
         debugMode={room.debugMode}
+        peerCam={peerCamAction}
+        peerScreen={peerScreenAction}
       />
 
       {/* Error */}
       {room.error && (
         <Box paddingX={1}>
-          <Text color="red">Error: {room.error}</Text>
+          <Text color={theme.danger}>Error: {room.error}</Text>
         </Box>
       )}
     </Box>

@@ -1,24 +1,12 @@
-import { Box, Text, useInput } from 'ink';
+import { Box, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import { useEffect, useRef, useState } from 'react';
 import type { AudioDevice } from '../engine/client.js';
-import { VU_MAX_RMS as MAX_RMS } from '../lib/audio/constants.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
-
-const BAR_WIDTH = 30;
-
-function renderBar(level: number): string {
-  const normalized = Math.min(level / MAX_RMS, 1);
-  const filled = Math.round(normalized * BAR_WIDTH);
-  return '\u2588'.repeat(filled) + '\u2591'.repeat(BAR_WIDTH - filled);
-}
-
-function barColor(level: number): string {
-  const normalized = Math.min(level / MAX_RMS, 1);
-  if (normalized > 0.75) return 'red';
-  if (normalized > 0.4) return 'yellow';
-  return 'green';
-}
+import { theme } from '../lib/theme.js';
+import { KeyChip, KeyHints } from './key-hints.js';
+import { MicBar } from './level-bar.js';
+import { Rule, Text } from './text.js';
 
 interface DevicePickerProps {
   inputs: AudioDevice[];
@@ -95,7 +83,7 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
   if (loading) {
     return (
       <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Audio Setup
         </Text>
         <Text>Loading audio devices...</Text>
@@ -106,14 +94,19 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
   if (inputs.length === 0 && outputs.length === 0) {
     return (
       <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Audio Setup
         </Text>
         <Text />
         <Text>No specific audio devices found.</Text>
         <Text>Using system default devices.</Text>
         <Text />
-        <Text dimColor>Press [Enter] to continue</Text>
+        <Text>
+          {/* The chip stays out of the dim wrapper so it keeps its full contrast. */}
+          <Text dimColor>Press </Text>
+          <KeyChip>enter</KeyChip>
+          <Text dimColor> to continue</Text>
+        </Text>
       </Box>
     );
   }
@@ -134,12 +127,10 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
   if (step === 'input') {
     return (
       <Box flexDirection="column" paddingX={1} paddingY={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Audio Setup
         </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
+        <Rule />
         <Text bold>Input (Microphone):</Text>
         <SelectInput
           items={inputItems}
@@ -156,7 +147,12 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
           }}
         />
         <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select</Text>
+        <KeyHints
+          hints={[
+            { key: '↑↓', label: 'navigate' },
+            { key: 'enter', label: 'select' },
+          ]}
+        />
       </Box>
     );
   }
@@ -164,12 +160,10 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
   if (step === 'output') {
     return (
       <Box flexDirection="column" paddingX={1} paddingY={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Audio Setup
         </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
+        <Rule />
         <Text>
           Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
         </Text>
@@ -185,7 +179,12 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
           }}
         />
         <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select</Text>
+        <KeyHints
+          hints={[
+            { key: '↑↓', label: 'navigate' },
+            { key: 'enter', label: 'select' },
+          ]}
+        />
       </Box>
     );
   }
@@ -193,12 +192,10 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
   // Test step
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
-      <Text bold color="blue">
+      <Text bold color={theme.accent}>
         Audio Test
       </Text>
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
+      <Rule />
       <Text>
         Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
       </Text>
@@ -208,10 +205,16 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
       <Text />
       <Text bold>Mic level:</Text>
       <Text>
-        <Text color={barColor(micLevel)}>{renderBar(micLevel)}</Text>
+        <MicBar level={micLevel} />
       </Text>
       <Text />
-      <Text dimColor>[t] play test tone [Enter] confirm [Esc] re-select</Text>
+      <KeyHints
+        hints={[
+          { key: 't', label: 'test tone' },
+          { key: 'enter', label: 'confirm' },
+          { key: 'esc', label: 're-select' },
+        ]}
+      />
     </Box>
   );
 }

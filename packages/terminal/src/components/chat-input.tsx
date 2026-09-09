@@ -1,6 +1,9 @@
-import { Box, Text } from 'ink';
+import { Box } from 'ink';
 import TextInput from 'ink-text-input';
 import { useState } from 'react';
+import { theme } from '../lib/theme.js';
+import { KeyChip } from './key-hints.js';
+import { Text } from './text.js';
 
 interface ChatInputProps {
   focused: boolean;
@@ -12,7 +15,7 @@ export function ChatInput({ focused, onSend }: ChatInputProps) {
 
   return (
     <Box paddingX={1}>
-      <Text bold color={focused ? 'green' : 'gray'}>
+      <Text bold color={focused ? theme.ok : theme.muted}>
         {'> '}
       </Text>
       {focused ? (
@@ -28,7 +31,12 @@ export function ChatInput({ focused, onSend }: ChatInputProps) {
           placeholder="Type message..."
         />
       ) : (
-        <Text dimColor>Press [Tab] to type a message</Text>
+        <Text>
+          {/* The chip stays out of the dim wrapper so it keeps its full contrast. */}
+          <Text dimColor>Press </Text>
+          <KeyChip>tab</KeyChip>
+          <Text dimColor> to type a message</Text>
+        </Text>
       )}
     </Box>
   );

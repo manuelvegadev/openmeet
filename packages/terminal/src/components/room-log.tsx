@@ -1,14 +1,16 @@
-import { Box, Text } from 'ink';
+import { Box } from 'ink';
 import { useEffect, useState } from 'react';
 import type { RoomEvent } from '../hooks/use-room.js';
+import { theme } from '../lib/theme.js';
+import { Text } from './text.js';
 
 const EVENT_COLORS: Record<RoomEvent['type'], string> = {
-  join: 'green',
-  leave: 'red',
-  screen: 'cyan',
-  mute: 'yellow',
-  info: 'blue',
-  debug: 'magenta',
+  join: theme.ok,
+  leave: theme.danger,
+  screen: theme.info,
+  mute: theme.warn,
+  info: theme.accent,
+  debug: theme.accentAlt,
 };
 
 const EVENT_ICONS: Record<RoomEvent['type'], string> = {
@@ -67,9 +69,7 @@ export function RoomLog({ events, joinedAt }: RoomLogProps) {
             <Box key={event.id}>
               <Text dimColor>[{formatTime(event.timestamp)}] </Text>
               {event.type === 'debug' ? (
-                <Text color="magenta" dimColor>
-                  [DBG] {event.message}
-                </Text>
+                <Text color={theme.accentAlt}>[DBG] {event.message}</Text>
               ) : (
                 <Text color={EVENT_COLORS[event.type]}>
                   {EVENT_ICONS[event.type]} {event.message}

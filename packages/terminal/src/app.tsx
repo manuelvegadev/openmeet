@@ -1,5 +1,4 @@
-import type { Room } from '@openmeet/shared';
-import { Box, useApp } from 'ink';
+import { Box, useApp, useWindowSize } from 'ink';
 import { useEffect, useState } from 'react';
 import { DevicePicker } from './components/device-picker.js';
 import { HomeScreen } from './components/home-screen.js';
@@ -7,6 +6,7 @@ import { RoomView } from './components/room-view.js';
 import { SettingsView } from './components/settings-view.js';
 import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from './engine/client.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
+import { framedBorder, theme } from './lib/theme.js';
 
 interface AppProps {
   serverUrl: string;
@@ -23,38 +23,23 @@ interface AppProps {
 
 type Screen = 'home' | 'settings' | 'devices' | 'room';
 
-function wsToHttpUrl(wsUrl: string): string {
-  const url = new URL(wsUrl);
-  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-  url.pathname = '';
-  return url.origin;
-}
-
+/**
+ * The window frame, sized to the terminal.
+ *
+ * Only the height is tracked: Ink already lays the root out to the terminal width, so a Box
+ * with no `width` stretches to it, while a Box is only as tall as its content and the frame
+ * has to reach the bottom for the painted background to cover. Never pass a `width` derived
+ * from our own resize handling — see gotcha 30e for what that cost.
+ */
 function FullScreen({ children }: { children: React.ReactNode }) {
-  const [size, setSize] = useState({
-    columns: process.stdout.columns || 80,
-    rows: process.stdout.rows || 24,
-  });
-
-  useEffect(() => {
-    const onResize = () => {
-      setSize({
-        columns: process.stdout.columns || 80,
-        rows: process.stdout.rows || 24,
-      });
-    };
-    process.stdout.on('resize', onResize);
-    return () => {
-      process.stdout.off('resize', onResize);
-    };
-  }, []);
+  const { rows } = useWindowSize();
 
   return (
     <Box
-      width={size.columns}
-      height={size.rows}
+      height={rows}
       borderStyle="round"
-      borderColor="blue"
+      backgroundColor={theme.bg}
+      {...framedBorder}
       flexDirection="column"
       overflow="hidden"
     >
@@ -84,8 +69,6 @@ export function App({
   });
   const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [deviceSelection, setDeviceSelection] = useState<AudioDeviceSelection>({});
-  const [creating, setCreating] = useState(false);
-  const [homeError, setHomeError] = useState<string | null>(null);
 
   // Load audio devices
   useEffect(() => {
@@ -125,30 +108,6 @@ export function App({
     }
   }, [screen, inputDevice, outputDevice, devices, devicesLoaded]);
 
-  const handleCreateRoom = async () => {
-    setCreating(true);
-    setHomeError(null);
-    try {
-      const httpUrl = wsToHttpUrl(serverUrl);
-      const res = await fetch(`${httpUrl}/api/rooms`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Room' }),
-      });
-      if (res.ok) {
-        const room: Room = await res.json();
-        setRoomId(room.id);
-        setScreen('devices');
-      } else {
-        setHomeError('Failed to create room');
-      }
-    } catch {
-      setHomeError('Cannot reach server');
-    } finally {
-      setCreating(false);
-    }
-  };
-
   const handleJoinRoom = (id: string) => {
     setRoomId(id);
     setScreen('devices');
@@ -160,9 +119,6 @@ export function App({
         <HomeScreen
           emoji={emoji}
           version={version}
-          loading={creating}
-          error={homeError}
-          onCreateRoom={handleCreateRoom}
           onJoinRoom={handleJoinRoom}
           onSettings={() => setScreen('settings')}
           onQuit={() => exit()}

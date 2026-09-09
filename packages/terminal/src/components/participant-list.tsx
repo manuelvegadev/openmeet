@@ -1,32 +1,9 @@
 import type { Participant } from '@openmeet/shared';
-import { Box, Text } from 'ink';
+import { Box } from 'ink';
 import type { ConnectionStats } from '../hooks/use-room.js';
-
-import { VU_BAR_COUNT as BAR_COUNT, VU_MAX_RMS as MAX_RMS } from '../lib/audio/constants.js';
-
-function vuColor(level: number, volume: number): string {
-  const normalized = Math.min(level / MAX_RMS, 1) * volume;
-  if (normalized > 0.75) return 'red';
-  if (normalized > 0.4) return 'yellow';
-  return 'green';
-}
-
-function VuMeter({ level, volume = 1 }: { level: number; volume?: number }) {
-  const activeBars = Math.round(volume * BAR_COUNT);
-  const normalized = Math.min(level / MAX_RMS, 1);
-  const filled = Math.round(normalized * activeBars);
-  const emptyActive = activeBars - filled;
-  const inactive = BAR_COUNT - activeBars;
-  const color = vuColor(level, volume);
-
-  return (
-    <Text>
-      <Text color={color}>{'\u2588'.repeat(filled)}</Text>
-      <Text color="green">{'\u2591'.repeat(emptyActive)}</Text>
-      <Text dimColor>{'\u2591'.repeat(inactive)}</Text>
-    </Text>
-  );
-}
+import { theme } from '../lib/theme.js';
+import { VuMeter } from './level-bar.js';
+import { Text } from './text.js';
 
 interface ParticipantListProps {
   participants: Participant[];
@@ -73,11 +50,11 @@ export function ParticipantList({
       <Text bold>Participants:</Text>
       <Box paddingLeft={1} justifyContent="space-between">
         <Text>
-          <Text color={localSpeaking ? 'green' : undefined}>{localSpeaking ? '● ' : '○ '}</Text>
+          <Text color={localSpeaking ? theme.ok : theme.text}>{localSpeaking ? '● ' : '○ '}</Text>
           <Text>{username} (you)</Text>
-          {isMuted && <Text color="yellow"> [muted]</Text>}
-          {videoEnabled && !isVideoMuted && <Text color="magenta"> [cam]</Text>}
-          {isScreenSharing && <Text color="red"> [sharing]</Text>}
+          {isMuted && <Text color={theme.warn}> [muted]</Text>}
+          {videoEnabled && !isVideoMuted && <Text color={theme.accentAlt}> [cam]</Text>}
+          {isScreenSharing && <Text color={theme.danger}> [sharing]</Text>}
         </Text>
         <Box>
           <Text dimColor>48kHz stereo{connectionStats ? ` ↑${connectionStats.sendBitrateKbps}k` : ''} </Text>
@@ -92,18 +69,18 @@ export function ParticipantList({
         const peerRecvKbps = connectionStats?.peerRecvBitrateKbps[p.id];
         const latency = connectionStats?.peerLatencyMs[p.id];
         const latencyColor =
-          latency != null ? (latency > 150 ? 'red' : latency > 80 ? 'yellow' : undefined) : undefined;
+          latency != null ? (latency > 150 ? theme.danger : latency > 80 ? theme.warn : undefined) : undefined;
         return (
           <Box key={p.id} paddingLeft={1} justifyContent="space-between">
             <Text>
-              <Text color={speaking ? 'green' : undefined}>{speaking ? '● ' : '○ '}</Text>
-              <Text color="cyan">{isSelected ? '> ' : '  '}</Text>
+              <Text color={speaking ? theme.ok : theme.text}>{speaking ? '● ' : '○ '}</Text>
+              <Text color={theme.accent}>{isSelected ? '> ' : '  '}</Text>
               <Text>{p.username}</Text>
-              {remoteMuteStates[p.id] && <Text color="yellow"> [muted]</Text>}
-              {remoteVideoMuteStates[p.id] === false && <Text color="magenta"> [cam]</Text>}
-              {peerVideoOpen[p.id] && <Text color="green"> [watching]</Text>}
-              {remoteScreenShareStates[p.id] && <Text color="cyan"> [scr]</Text>}
-              {peerScreenOpen[p.id] && <Text color="green"> [viewing scr]</Text>}
+              {remoteMuteStates[p.id] && <Text color={theme.warn}> [muted]</Text>}
+              {remoteVideoMuteStates[p.id] === false && <Text color={theme.accentAlt}> [cam]</Text>}
+              {peerVideoOpen[p.id] && <Text color={theme.ok}> [watching]</Text>}
+              {remoteScreenShareStates[p.id] && <Text color={theme.info}> [scr]</Text>}
+              {peerScreenOpen[p.id] && <Text color={theme.ok}> [viewing scr]</Text>}
             </Text>
             <Box>
               <Text>

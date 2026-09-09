@@ -1,14 +1,14 @@
-import { Box, Text, useInput } from 'ink';
+import { Box, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useEffect, useRef, useState } from 'react';
 import { getPlatformSupport } from '../lib/platform.js';
+import { theme } from '../lib/theme.js';
+import { KeyHints } from './key-hints.js';
+import { Text } from './text.js';
 
 interface HomeScreenProps {
   emoji: string;
   version: string;
-  loading: boolean;
-  error: string | null;
-  onCreateRoom: () => void;
   onJoinRoom: (roomId: string) => void;
   onSettings: () => void;
   onQuit: () => void;
@@ -16,16 +16,7 @@ interface HomeScreenProps {
 
 const support = getPlatformSupport();
 
-export function HomeScreen({
-  emoji,
-  version,
-  loading,
-  error,
-  onCreateRoom,
-  onJoinRoom,
-  onSettings,
-  onQuit,
-}: HomeScreenProps) {
+export function HomeScreen({ emoji, version, onJoinRoom, onSettings, onQuit }: HomeScreenProps) {
   const [mode, setMode] = useState<'menu' | 'join'>('menu');
   const [joinCode, setJoinCode] = useState('');
   const [escPressed, setEscPressed] = useState(false);
@@ -55,8 +46,7 @@ export function HomeScreen({
       }
       return;
     }
-    if (mode === 'menu' && !loading) {
-      if (input === 'c') onCreateRoom();
+    if (mode === 'menu') {
       if (input === 'j') setMode('join');
       if (input === 's') onSettings();
     }
@@ -65,30 +55,35 @@ export function HomeScreen({
   if (mode === 'join') {
     return (
       <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-        <Text bold color="blue">
+        <Text bold color={theme.accent}>
           Join Room
         </Text>
         <Box height={1} />
         <Box>
-          <Text bold>Room code: </Text>
+          <Text bold>Room: </Text>
           <TextInput
             value={joinCode}
             onChange={setJoinCode}
-            placeholder="Enter room code"
+            placeholder="name a room"
             onSubmit={(value) => {
               if (value.trim()) onJoinRoom(value.trim());
             }}
           />
         </Box>
         <Box height={1} />
-        <Text dimColor>[Enter] join [Esc] back</Text>
+        <KeyHints
+          hints={[
+            { key: 'enter', label: 'join' },
+            { key: 'esc', label: 'back' },
+          ]}
+        />
       </Box>
     );
   }
 
   return (
     <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-      <Text bold color="blue">
+      <Text bold color={theme.accent}>
         {'\u{1F3A5}'} OpenMeet Terminal <Text dimColor>v{version}</Text>{' '}
         <Text dimColor>
           · {support.name}: {support.features}
@@ -100,29 +95,14 @@ export function HomeScreen({
         You are <Text bold>{emoji}</Text>
       </Text>
       <Box height={1} />
-      {loading ? (
-        <Text color="yellow">Creating room...</Text>
-      ) : (
-        <>
-          <Text>
-            [<Text bold>c</Text>] Create Room
-          </Text>
-          <Text>
-            [<Text bold>j</Text>] Join Room
-          </Text>
-          <Text>
-            [<Text bold>s</Text>] Settings
-          </Text>
-        </>
-      )}
-      {error && (
-        <>
-          <Box height={1} />
-          <Text color="red">{error}</Text>
-        </>
-      )}
+      <KeyHints hints={[{ key: 'j', label: 'join room' }]} />
+      <KeyHints hints={[{ key: 's', label: 'settings' }]} />
       <Box height={1} />
-      {escPressed ? <Text color="yellow">Press Esc again to quit</Text> : <Text dimColor>[Esc] quit</Text>}
+      {escPressed ? (
+        <Text color={theme.warn}>Press Esc again to quit</Text>
+      ) : (
+        <KeyHints hints={[{ key: 'esc', label: 'quit' }]} />
+      )}
     </Box>
   );
 }

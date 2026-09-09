@@ -1,7 +1,9 @@
 import type { ChatMessage } from '@openmeet/shared';
-import { Box, Text } from 'ink';
+import { Box } from 'ink';
+import { theme } from '../lib/theme.js';
+import { Text } from './text.js';
 
-const COLORS = ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan'] as const;
+const COLORS = theme.users;
 
 function usernameColor(name: string): (typeof COLORS)[number] {
   let hash = 0;
