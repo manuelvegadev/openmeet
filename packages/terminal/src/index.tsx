@@ -19,7 +19,7 @@ import {
   SCREEN_FPS,
   SCREEN_MAX_HEIGHT,
   SCREEN_MAX_WIDTH,
-  screenCaptureArgs,
+  screenCaptureCandidates,
   WEBCAM_FPS,
   WEBCAM_HEIGHT,
   WEBCAM_WIDTH,
@@ -29,6 +29,7 @@ import { listScreenDevices } from './lib/devices.js';
 import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
 import { getOrCreateEmoji } from './lib/emoji.js';
 import { getPlatformSupport } from './lib/platform.js';
+import { AUDIO_KBPS_MAX, AUDIO_KBPS_MIN, parseAudioKbpsFlag } from './lib/sdp.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import {
   createFocusFilteredStdin,
@@ -58,9 +59,14 @@ function checkFfmpeg(): { ffplay: boolean; ffmpeg: boolean } {
 }
 
 /** ffmpeg → ffplay preview for the --test-* modes; exits with either process. */
-function runPreview(captureArgs: string[], playerArgs: string[]): void {
-  const capture: ChildProcess = spawn('ffmpeg', captureArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
+/** `candidates` is walked the same way a real capture walks it: on to the next if one yields nothing. */
+function runPreview(candidates: string[][], playerArgs: string[], index = 0): void {
+  const capture: ChildProcess = spawn('ffmpeg', candidates[index], { stdio: ['ignore', 'pipe', 'inherit'] });
   const player: ChildProcess = spawn('ffplay', playerArgs, { stdio: ['pipe', 'ignore', 'ignore'] });
+  let sawFrames = false;
+  capture.stdout?.once('data', () => {
+    sawFrames = true;
+  });
   capture.stdout?.pipe(player.stdin!);
   // Closing the ffplay window breaks the pipe before 'close' fires; not an error worth a stack trace.
   player.stdin?.on('error', () => {});
@@ -74,6 +80,11 @@ function runPreview(captureArgs: string[], playerArgs: string[]): void {
   });
   capture.on('close', () => {
     player.kill();
+    if (!sawFrames && index + 1 < candidates.length) {
+      process.stderr.write('That grabber produced no frames; trying the next one.\n');
+      runPreview(candidates, playerArgs, index + 1);
+      return;
+    }
     process.exit(0);
   });
   process.on('SIGINT', stop);
@@ -124,6 +135,10 @@ const { values } = parseArgs({
     'audio-backend': { type: 'string' },
     'input-channels': { type: 'string' },
     'input-gain': { type: 'string' },
+    'audio-send-kbps': { type: 'string' },
+    'audio-receive-kbps': { type: 'string' },
+    'noise-suppression': { type: 'boolean' },
+    'no-noise-suppression': { type: 'boolean' },
     'pause-rendering': { type: 'string' },
     'video-device': { type: 'string' },
     'no-overlay': { type: 'boolean', default: false },
@@ -155,6 +170,9 @@ Usage: openmeet [options]
   --audio-backend <name> Audio I/O backend: rtaudio (native; default on macOS/Windows) or sox (default on Linux)
   --input-channels <p>   auto | stereo | mono | left | right — how the mic's channel pair is sent (saved)
   --input-gain <dB>      Capture gain in dB, e.g. 6 or -3 (saved)
+  --audio-send-kbps <n>  Opus ceiling for what we send (default 128, saved)
+  --audio-receive-kbps <n>  Opus ceiling for what peers send us (default 128, saved)
+  --noise-suppression    Enable RNNoise on the mic (--no-noise-suppression to turn off, saved)
   --pause-rendering <p>  minimized (default) | unfocused | never — when to pause TUI rendering (saved)
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay (name, stream type, resolution)
@@ -174,7 +192,7 @@ if (values['test-camera']) {
   }
   process.stdout.write(`Testing camera (device: ${device})... Press q or Esc in the ffplay window to close.\n`);
   runPreview(
-    captureArgs,
+    [captureArgs],
     rawVideoPlayerArgs(WEBCAM_WIDTH, WEBCAM_HEIGHT, WEBCAM_FPS, `Camera Test (device ${device})`),
   );
 } else if (values['test-screen']) {
@@ -190,7 +208,7 @@ if (values['test-camera']) {
   const screen = screens[0];
   process.stdout.write(`\nTesting screen capture: ${screen.name}... Press q or Esc in the ffplay window to close.\n`);
   runPreview(
-    screenCaptureArgs(screen),
+    screenCaptureCandidates(screen),
     rawVideoPlayerArgs(SCREEN_MAX_WIDTH, SCREEN_MAX_HEIGHT, SCREEN_FPS, `Screen Test (${screen.name})`),
   );
 } else {
@@ -271,6 +289,20 @@ Your terminal app needs microphone permission on macOS:
     }
     saveSettings({ audioInputGainDb: gainDb });
   }
+  for (const [flag, key] of [
+    ['audio-send-kbps', 'audioSendKbps'],
+    ['audio-receive-kbps', 'audioReceiveKbps'],
+  ] as const) {
+    if (values[flag] === undefined) continue;
+    const kbps = parseAudioKbpsFlag(values[flag]);
+    if (kbps === null) {
+      process.stderr.write(`Error: --${flag} must be ${AUDIO_KBPS_MIN}..${AUDIO_KBPS_MAX} (got "${values[flag]}")\n`);
+      process.exit(1);
+    }
+    saveSettings({ [key]: kbps });
+  }
+  if (values['noise-suppression']) saveSettings({ noiseSuppression: true });
+  if (values['no-noise-suppression']) saveSettings({ noiseSuppression: false });
   if (values['pause-rendering'] !== undefined) {
     const policy = parsePausePolicyFlag(values['pause-rendering']);
     if (policy === null) {
@@ -301,8 +333,6 @@ Your terminal app needs microphone permission on macOS:
   } as typeof process.stdout.write;
 
   // alternateScreen: Ink enters/leaves the alt buffer itself (like vim/htop).
-  // incrementalRendering: only changed lines are written. On Windows a full-frame write
-  // to ConPTY blocks the event loop for 50-70 ms, which the 10 ms audio path cannot absorb.
   // Rendering pause policy (see lib/window-state.ts). The window title lets the OS-side
   // minimized watchers find our window; Windows Terminal's profile pins it anyway.
   const pausePolicy = loadSettings().pauseRendering;
@@ -329,7 +359,10 @@ Your terminal app needs microphone permission on macOS:
       // Only override stdin when we actually filter it: an explicit `undefined` makes Ink
       // believe there is no TTY and it stops rendering until unmount.
       ...(stdinForInk ? { stdin: stdinForInk } : {}),
-      incrementalRendering: true,
+      // Off on purpose: incremental writes position the cursor from the previous frame's
+      // geometry, which a resize invalidates, and the frame's right border was the casualty.
+      // Full frames cost 0.19 ms a write — see gotcha 30f for the measurements.
+      incrementalRendering: false,
       onRender: diagnosticsEnabled(values.debug ?? false) ? recordRender : undefined,
     },
   );

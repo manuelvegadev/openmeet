@@ -15,6 +15,15 @@ export interface ScreenDevice {
   x?: number;
   y?: number;
   primary?: boolean;
+  /**
+   * Windows: which DXGI output ddagrab should capture.
+   *
+   * Taken from the order `Screen.AllScreens` enumerates monitors, which matches DXGI's
+   * output order on a single-adapter machine but is not guaranteed to in general. Verified
+   * with one monitor only; a multi-monitor or multi-GPU box may need a real
+   * `DXGI_OUTPUT_DESC.DeviceName` lookup.
+   */
+  outputIndex?: number;
 }
 
 // ─── Video devices ───────────────────────────────────────────────────
@@ -180,11 +189,15 @@ function listWindowsScreenDevices(): ScreenDevice[] {
 /** Parse `name|x|y|w|h|primary` lines; primary first so a single Enter shares the main monitor. */
 function windowsScreensFromOutput(output: string): ScreenDevice[] {
   const screens: ScreenDevice[] = [];
+  // Enumeration order, kept before the primary-first reorder below: it is what ddagrab's
+  // output_idx counts, and it is not the order the user sees in the list.
+  let enumerated = 0;
   for (const line of output.split(/\r?\n/)) {
     const [device, x, y, w, h, primary] = line.trim().split('|');
     if (!device || !w || !h) continue;
     const screen: ScreenDevice = {
       id: device,
+      outputIndex: enumerated++,
       name: `Display ${screens.length + 1} (${w}x${h}${primary === 'True' ? ', primary' : ''})`,
       width: Number.parseInt(w, 10),
       height: Number.parseInt(h, 10),
