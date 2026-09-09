@@ -230,6 +230,8 @@ export class RoomEngine {
       videoTrack,
       audioSendKbps: options.bitrate.sendKbps,
       audioReceiveKbps: options.bitrate.receiveKbps,
+      screenSendKbps: options.bitrate.screenSendKbps,
+      screenReceiveKbps: options.bitrate.screenReceiveKbps,
       sendSignal: (msg) => ws.send(msg),
       onRemoteAudioTrack: (peerId, remoteTrack) => audioManager.addRemotePeer(peerId, remoteTrack),
       onRemoteVideoTrack: (peerId, remoteTrack, streamType) => {
@@ -479,8 +481,8 @@ export class RoomEngine {
     const { videoManager, peerManager } = this;
     if (!videoManager || !peerManager) return;
     if (!this.screenSource) this.screenSource = createVideoSource({ isScreencast: true });
-    videoManager.startScreenCapture(this.screenSource.source, device);
-    peerManager.setScreenTrack(this.screenSource.track);
+    const shape = videoManager.startScreenCapture(this.screenSource.source, device);
+    peerManager.setScreenTrack(this.screenSource.track, shape);
     this.patch({ isScreenSharing: true });
     this.broadcastStates();
   }

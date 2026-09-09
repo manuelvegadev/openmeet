@@ -129,6 +129,8 @@ const { values } = parseArgs({
     'input-gain': { type: 'string' },
     'audio-send-kbps': { type: 'string' },
     'audio-receive-kbps': { type: 'string' },
+    'screen-send-kbps': { type: 'string' },
+    'screen-receive-kbps': { type: 'string' },
     'noise-suppression': { type: 'boolean' },
     'no-noise-suppression': { type: 'boolean' },
     'pause-rendering': { type: 'string' },
@@ -164,6 +166,8 @@ Usage: openmeet [options]
   --input-gain <dB>      Capture gain in dB, e.g. 6 or -3 (saved)
   --audio-send-kbps <n>  Opus ceiling for what we send (default 128, saved)
   --audio-receive-kbps <n>  Opus ceiling for what peers send us (default 128, saved)
+  --screen-send-kbps <n>    Screen-share ceiling per peer at 1080p (default 2500, saved)
+  --screen-receive-kbps <n> Screen-share ceiling we ask of each peer (default 2500, saved)
   --noise-suppression    Enable RNNoise on the mic (--no-noise-suppression to turn off, saved)
   --pause-rendering <p>  minimized (default) | unfocused | never — when to pause TUI rendering (saved)
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
@@ -291,14 +295,16 @@ Your terminal app needs microphone permission on macOS:
     }
     saveSettings({ audioInputGainDb: gainDb });
   }
-  for (const [flag, key] of [
-    ['audio-send-kbps', 'audioSendKbps'],
-    ['audio-receive-kbps', 'audioReceiveKbps'],
+  for (const [flag, key, min, max] of [
+    ['audio-send-kbps', 'audioSendKbps', AUDIO_KBPS_MIN, AUDIO_KBPS_MAX],
+    ['audio-receive-kbps', 'audioReceiveKbps', AUDIO_KBPS_MIN, AUDIO_KBPS_MAX],
+    ['screen-send-kbps', 'screenSendKbps', SCREEN_KBPS_MIN, SCREEN_KBPS_MAX],
+    ['screen-receive-kbps', 'screenReceiveKbps', SCREEN_KBPS_MIN, SCREEN_KBPS_MAX],
   ] as const) {
     if (values[flag] === undefined) continue;
-    const kbps = parseAudioKbpsFlag(values[flag]);
+    const kbps = parseKbpsFlag(values[flag], min, max);
     if (kbps === null) {
-      process.stderr.write(`Error: --${flag} must be ${AUDIO_KBPS_MIN}..${AUDIO_KBPS_MAX} (got "${values[flag]}")\n`);
+      process.stderr.write(`Error: --${flag} must be ${min}..${max} (got "${values[flag]}")\n`);
       process.exit(1);
     }
     saveSettings({ [key]: kbps });

@@ -11,20 +11,15 @@ import {
   capOutgoingAudioBitrate,
   DEFAULT_AUDIO_KBPS,
   forceScreenSendrecv,
+  pixelFactor,
   preferAudioRed,
+  setScreenBandwidth,
 } from '../src/lib/sdp.js';
+import { check, finish } from './harness.js';
 
 const line = (sdp: string, re: RegExp): string => re.exec(sdp)?.[0] ?? '(absent)';
 const fmtp = (sdp: string) => line(sdp, /^a=fmtp:111 [^\r\n]+$/m);
 const mAudio = (sdp: string) => line(sdp, /^m=audio [^\r\n]+$/m);
-
-let failures = 0;
-function check(label: string, actual: unknown, expected: unknown): void {
-  const ok = actual === expected;
-  if (!ok) failures++;
-  console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}`);
-  if (!ok) console.log(`       expected ${expected}\n       actual   ${actual}`);
-}
 
 async function main(): Promise<void> {
   const pc = new (wrtc as any).RTCPeerConnection({ iceServers: [] });
@@ -68,8 +63,33 @@ async function main(): Promise<void> {
   check('the webcam m-line is left alone', /a=mid:1\r\na=recvonly/.test(forced), true);
   check('forcing twice changes nothing', forceScreenSendrecv(forced), forced);
 
-  console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`);
-  process.exit(failures === 0 ? 0 : 1);
+  // b=AS on the screen m-line: the one lever that is read again on every renegotiation.
+  const withC =
+    'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nc=IN IP4 0.0.0.0\r\na=mid:0\r\n' +
+    'm=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=mid:1\r\n' +
+    'm=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\nb=AS:999\r\na=mid:2\r\n';
+  const screenCapped = setScreenBandwidth(withC, 2884);
+  check(
+    'b=AS goes after c= on the screen section',
+    /a=mid:1\r\nm=video[^\r]*\r\nc=IN IP4 0.0.0.0\r\nb=AS:2884\r\na=mid:2/.test(screenCapped),
+    true,
+  );
+  check('an existing b=AS on that section is replaced, not doubled', (screenCapped.match(/b=AS:/g) ?? []).length, 1);
+  check('the audio and webcam sections get none', /a=mid:0[\s\S]*b=AS[\s\S]*a=mid:1/.test(screenCapped), false);
+  check('null clears it', setScreenBandwidth(screenCapped, null).includes('b=AS:'), false);
+  check('setting the same value twice changes nothing', setScreenBandwidth(screenCapped, 2884), screenCapped);
+  check(
+    'without a c= line it follows the m= line',
+    /^m=video[^\r]*\r\nb=AS:500\r\n/m.test(setScreenBandwidth(twoVideo, 500)),
+    true,
+  );
+  check('the pixel factor of 1080p is 1', pixelFactor(1920, 1080), 1);
+  check('an ultrawide at 1080 tall gets a third more', Math.round(pixelFactor(2580, 1080) * 100) / 100, 1.34);
+  check('a small screen never gets less than 1', pixelFactor(1366, 768), 1);
+  check('the factor is capped at 2', pixelFactor(3840, 2160), 2);
+  check('unknown shape is 1', pixelFactor(undefined, undefined), 1);
+
+  finish();
 }
 
 main();

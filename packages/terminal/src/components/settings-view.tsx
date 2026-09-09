@@ -26,16 +26,10 @@ interface SettingRow {
   key: string;
   label: string;
   value: string;
-  action:
-    | 'pick-input'
-    | 'pick-output'
-    | 'pick-camera'
-    | 'toggle-overlay'
-    | 'cycle-channels'
-    | 'cycle-pause'
-    | 'toggle-noise'
-    | 'cycle-send-kbps'
-    | 'cycle-receive-kbps';
+  /** What Enter does on this row. */
+  run: () => void;
+  /** Shown, but not actionable: something else already owns the choice. */
+  disabled?: boolean;
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
@@ -74,38 +68,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     ? (videoDevices.find((d) => d.id === settings.videoDeviceId)?.name ?? `Device ${settings.videoDeviceId}`)
     : 'Default (0)';
 
-  const allRows: SettingRow[] = [
-    { key: 'input', label: 'Audio Input', value: inputName, action: 'pick-input' },
-    { key: 'output', label: 'Audio Output', value: outputName, action: 'pick-output' },
-    { key: 'camera', label: 'Camera', value: cameraName, action: 'pick-camera' },
-    { key: 'overlay', label: 'Video Overlay', value: settings.videoOverlay ? 'On' : 'Off', action: 'toggle-overlay' },
-    { key: 'channels', label: 'Mic Channels', value: settings.audioInputChannels, action: 'cycle-channels' },
-    {
-      key: 'noise',
-      label: 'Noise Suppression',
-      value: settings.noiseSuppression ? 'On (RNNoise)' : 'Off',
-      action: 'toggle-noise',
-    },
-    {
-      key: 'send-kbps',
-      label: 'Audio Send',
-      value: `${settings.audioSendKbps} kbps (applies on next join)`,
-      action: 'cycle-send-kbps',
-    },
-    {
-      key: 'receive-kbps',
-      label: 'Audio Receive',
-      value: `${settings.audioReceiveKbps} kbps (applies on next join)`,
-      action: 'cycle-receive-kbps',
-    },
-    {
-      key: 'pause',
-      label: 'Pause Rendering',
-      value: `when ${settings.pauseRendering} (applies on next start)`,
-      action: 'cycle-pause',
-    },
-  ];
-  const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
   const cycle = <T extends string>(list: readonly T[], current: T): T =>
     list[(list.indexOf(current) + 1) % list.length];
   /** Same idea for the bitrate steps, where the saved value may not be one of them. */
@@ -117,6 +79,64 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     saveSettings(patch);
     setSettings(next);
   };
+
+  const allRows: SettingRow[] = [
+    { key: 'input', label: 'Audio Input', value: inputName, run: () => setStep('pick-input') },
+    { key: 'output', label: 'Audio Output', value: outputName, run: () => setStep('pick-output') },
+    { key: 'camera', label: 'Camera', value: cameraName, run: () => setStep('pick-camera') },
+    {
+      key: 'overlay',
+      label: 'Video Overlay',
+      value: settings.videoOverlay ? 'On' : 'Off',
+      run: () => update({ videoOverlay: !settings.videoOverlay }),
+    },
+    {
+      key: 'channels',
+      label: 'Mic Channels',
+      value: settings.audioInputChannels,
+      run: () => update({ audioInputChannels: cycle(INPUT_CHANNEL_POLICIES, settings.audioInputChannels) }),
+    },
+    {
+      key: 'noise',
+      // Broadcast cleans the signal before any API we control ever sees it, so RNNoise on top
+      // would only spend 0.22 ms a frame denoising what is already denoised.
+      label: 'Noise Suppression',
+      value: broadcastActive ? 'NVIDIA Broadcast (GPU)' : settings.noiseSuppression ? 'On (RNNoise, CPU)' : 'Off',
+      run: () => update({ noiseSuppression: !settings.noiseSuppression }),
+      disabled: broadcastActive,
+    },
+    {
+      key: 'send-kbps',
+      label: 'Audio Send',
+      value: `${settings.audioSendKbps} kbps (applies on next join)`,
+      run: () => update({ audioSendKbps: cycleNumber(AUDIO_KBPS_STEPS, settings.audioSendKbps) }),
+    },
+    {
+      key: 'receive-kbps',
+      label: 'Audio Receive',
+      value: `${settings.audioReceiveKbps} kbps (applies on next join)`,
+      run: () => update({ audioReceiveKbps: cycleNumber(AUDIO_KBPS_STEPS, settings.audioReceiveKbps) }),
+    },
+    {
+      key: 'screen-send-kbps',
+      label: 'Screen Send',
+      value: `${settings.screenSendKbps} kbps per peer at 1080p (applies on next join)`,
+      run: () => update({ screenSendKbps: cycleNumber(SCREEN_KBPS_STEPS, settings.screenSendKbps) }),
+    },
+    {
+      key: 'screen-receive-kbps',
+      label: 'Screen Receive',
+      value: `${settings.screenReceiveKbps} kbps from each peer (applies on next join)`,
+      run: () => update({ screenReceiveKbps: cycleNumber(SCREEN_KBPS_STEPS, settings.screenReceiveKbps) }),
+    },
+    {
+      key: 'pause',
+      label: 'Pause Rendering',
+      value: `when ${settings.pauseRendering} (applies on next start)`,
+      run: () => update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) }),
+    },
+  ];
+  const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
 
   useInput((_input, key) => {
     if (step !== 'menu') {
@@ -138,34 +158,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
     if (key.return) {
       const row = rows[selectedIdx];
-      if (row.action === 'toggle-overlay') {
-        update({ videoOverlay: !settings.videoOverlay });
-      } else if (row.action === 'cycle-channels') {
-        update({ audioInputChannels: cycle(INPUT_CHANNEL_POLICIES, settings.audioInputChannels) });
-      } else if (row.action === 'toggle-noise') {
-        update({ noiseSuppression: !settings.noiseSuppression });
-      } else if (row.action === 'cycle-send-kbps') {
-        update({ audioSendKbps: cycleNumber(AUDIO_KBPS_STEPS, settings.audioSendKbps) });
-      } else if (row.action === 'cycle-receive-kbps') {
-        update({ audioReceiveKbps: cycleNumber(AUDIO_KBPS_STEPS, settings.audioReceiveKbps) });
-      } else if (row.action === 'cycle-pause') {
-        update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) });
-      } else if (row.action === 'pick-input') {
-        setStep('pick-input');
-      } else if (row.action === 'pick-output') {
-        setStep('pick-output');
-      } else if (row.action === 'pick-camera') {
-        setStep('pick-camera');
-      }
+      if (!row.disabled) row.run();
     }
   });
 
   // Device selection sub-screens
   if (step === 'pick-input') {
-    const items = [
-      { label: 'System Default', value: '__default__' },
-      ...devices.inputs.map((d) => ({ label: d.name, value: d.id })),
-    ];
+    const items = inputPickerItems(devices.inputs);
     return (
       <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
         <Text bold color={theme.accent}>

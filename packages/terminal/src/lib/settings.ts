@@ -3,7 +3,7 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import type { AudioBackendPreference } from './audio/backend.js';
 import type { InputChannelPolicy } from './audio/channels.js';
-import { DEFAULT_AUDIO_KBPS } from './sdp.js';
+import { DEFAULT_AUDIO_KBPS, DEFAULT_SCREEN_KBPS } from './sdp.js';
 import type { RenderPausePolicy } from './window-state.js';
 
 /** ~/.config/openmeet on macOS/Linux, %APPDATA%\openmeet on Windows. */
@@ -33,6 +33,10 @@ export interface AppSettings {
   audioSendKbps: number;
   /** Opus ceiling in kbps for what peers send us. Declared in our own description. */
   audioReceiveKbps: number;
+  /** Screen-share ceiling in kbps for what we send, per peer, at 1080p (more for wider shares). */
+  screenSendKbps: number;
+  /** Screen-share ceiling in kbps we ask each peer to respect towards us. */
+  screenReceiveKbps: number;
   /** RNNoise on the capture path. Opt-in: it is a taste call, and it costs ~0.2 ms a frame. */
   noiseSuppression: boolean;
   /** Pause TUI rendering when the window is minimized (default) or unfocused, or never. */
@@ -50,6 +54,8 @@ const DEFAULTS: AppSettings = {
   audioInputGainDb: 0,
   audioSendKbps: DEFAULT_AUDIO_KBPS,
   audioReceiveKbps: DEFAULT_AUDIO_KBPS,
+  screenSendKbps: DEFAULT_SCREEN_KBPS,
+  screenReceiveKbps: DEFAULT_SCREEN_KBPS,
   noiseSuppression: false,
   pauseRendering: 'minimized',
 };

@@ -1,11 +1,15 @@
 import type { WSMessage } from '@openmeet/shared';
 import wrtc from '@roamhq/wrtc';
 import {
+  BANDWIDTH_AUDIO_ALLOWANCE_KBPS,
   boostOpusQuality,
   capOutgoingAudioBitrate,
   DEFAULT_AUDIO_KBPS,
+  DEFAULT_SCREEN_KBPS,
   forceScreenSendrecv,
+  pixelFactor,
   preferAudioRed,
+  setScreenBandwidth,
 } from './sdp.js';
 
 const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } = wrtc;
@@ -14,15 +18,18 @@ const ICE_SERVERS = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }],
 };
 
-const SCREEN_MAX_BITRATE = 2_500_000;
 const SCREEN_MIN_BITRATE = 800_000;
 /** Mesh sends one copy per peer, so the ceiling is a share of this, not the whole link. */
 const MESH_UPLINK_BUDGET = 6_000_000;
 
-/** Screen-share ceiling for a room where we send to `receiverCount` peers. */
-export function screenBitrateFor(receiverCount: number): number {
+/**
+ * Screen-share ceiling in bps for a room where we send to `receiverCount` peers, under the
+ * user's `screenSendKbps`. The mesh budget is split per receiver; the floor keeps a full
+ * room legible rather than fair.
+ */
+export function screenBitrateFor(receiverCount: number, screenSendKbps: number): number {
   const share = MESH_UPLINK_BUDGET / Math.max(1, receiverCount);
-  return Math.round(Math.min(SCREEN_MAX_BITRATE, Math.max(SCREEN_MIN_BITRATE, share)));
+  return Math.round(Math.min(screenSendKbps * 1000, Math.max(SCREEN_MIN_BITRATE, share)));
 }
 
 /**
@@ -131,6 +138,12 @@ export class PeerConnectionManager {
   private static MAX_RETRIES = 3;
   private audioSendKbps = DEFAULT_AUDIO_KBPS;
   private audioReceiveKbps = DEFAULT_AUDIO_KBPS;
+  private screenSendKbps = DEFAULT_SCREEN_KBPS;
+  private screenReceiveKbps = DEFAULT_SCREEN_KBPS;
+  /** The shape the current share goes out at; null when not sharing. Feeds `pixelFactor`. */
+  private screenShape: { width: number; height: number } | null = null;
+  /** How many connections the current share's budgets were computed for; see `refreshBudgets`. */
+  private budgetedCount = 0;
   onDebug?: (msg: string) => void;
 
   constructor(options: {
@@ -146,6 +159,9 @@ export class PeerConnectionManager {
     /** Opus ceilings in kbps. Send is applied to the peer's description, receive to ours. */
     audioSendKbps?: number;
     audioReceiveKbps?: number;
+    /** Screen-share ceilings in kbps, same two places (see `setScreenBandwidth`). */
+    screenSendKbps?: number;
+    screenReceiveKbps?: number;
   }) {
     this.myId = options.myId;
     this.audioTrack = options.audioTrack;
@@ -157,7 +173,21 @@ export class PeerConnectionManager {
     this.onPeerDisconnected = options.onPeerDisconnected;
     this.audioSendKbps = options.audioSendKbps ?? DEFAULT_AUDIO_KBPS;
     this.audioReceiveKbps = options.audioReceiveKbps ?? DEFAULT_AUDIO_KBPS;
+    this.screenSendKbps = options.screenSendKbps ?? DEFAULT_SCREEN_KBPS;
+    this.screenReceiveKbps = options.screenReceiveKbps ?? DEFAULT_SCREEN_KBPS;
     this.onDebug = options.onDebug;
+  }
+
+  /**
+   * What we will send this peer at most, in kbps, as of now: the user's screen ceiling for
+   * the current share's shape, split across the peers we send to, plus room for audio. This
+   * is what goes into every description the peer hands us, so it follows the room and the
+   * share instead of being frozen at connection time like the encoding's `maxBitrate`.
+   */
+  private sendBudgetKbps(): number {
+    const video = screenBitrateFor(this.connections.size, this.screenSendKbps) / 1000;
+    const factor = pixelFactor(this.screenShape?.width, this.screenShape?.height);
+    return Math.round(video * factor) + BANDWIDTH_AUDIO_ALLOWANCE_KBPS;
   }
 
   setMyId(id: string): void {
@@ -202,6 +232,9 @@ export class PeerConnectionManager {
       this.onDebug?.(`RTC ${peerId.slice(0, 6)} state: ${pc.connectionState}`);
       if (pc.connectionState === 'connected') {
         this.retryCount.delete(peerId);
+        // Only now: re-offering the others while this peer's first offer is in flight would
+        // be glare, and its own budget was already computed with it in the map.
+        this.refreshBudgets(peerId);
       }
       if (pc.connectionState === 'failed') {
         const existingTimer = this.retryTimers.get(peerId);
@@ -211,6 +244,7 @@ export class PeerConnectionManager {
         this.makingOffer.delete(peerId);
         this.onPeerDisconnected(peerId);
         this.scheduleRetry(peerId);
+        this.refreshBudgets();
       }
     };
 
@@ -226,7 +260,7 @@ export class PeerConnectionManager {
    */
   private createOffererConnection(peerId: string): any {
     const pc = this.setupPeerConnection(peerId);
-    const policy = sendPolicy(this.connections.size);
+    const policy = sendPolicy(this.connections.size, this.screenSendKbps);
     const tracks = [this.audioTrack, this.videoTrack, this.screenTrack];
 
     for (const [index, { encoding }] of policy.entries()) {
@@ -240,21 +274,25 @@ export class PeerConnectionManager {
       const { sender } = pc.getTransceivers()[index];
       if (track) sender.replaceTrack(track);
       const { degradation } = policy[index];
-      if (degradation) void applySendParameters(sender, degradation, this.onDebug);
+      if (degradation) void applySendParameters(sender, encoding, degradation, this.onDebug);
     }
 
     return pc;
   }
 
-  /** Everything we hand to `setLocalDescription`: what we send, and our receive ceiling. */
+  /** Everything we hand to `setLocalDescription`: what we send, and our receive ceilings. */
   private localSdp(sdp: string): string {
-    return boostOpusQuality(preferAudioRed(sdp), this.audioReceiveKbps);
+    const audio = boostOpusQuality(preferAudioRed(sdp), this.audioReceiveKbps);
+    return setScreenBandwidth(audio, this.screenReceiveKbps + BANDWIDTH_AUDIO_ALLOWANCE_KBPS);
   }
 
-  /** Everything we hand to `setRemoteDescription`: the peer's line, bounded by our send ceiling. */
-  private remoteSdp(sdp: any): any {
+  /** Everything we hand to `setRemoteDescription`: the peer's line, bounded by our send ceilings. */
+  private remoteSdp(sdp: any, peerId: string): any {
     if (typeof sdp?.sdp !== 'string') return sdp;
-    return { ...sdp, sdp: capOutgoingAudioBitrate(sdp.sdp, this.audioSendKbps) };
+    const budget = this.sendBudgetKbps();
+    if (this.screenTrack) this.onDebug?.(`RTC send budget to ${peerId.slice(0, 6)}: ${budget} kbps`);
+    const audio = capOutgoingAudioBitrate(sdp.sdp, this.audioSendKbps);
+    return { ...sdp, sdp: setScreenBandwidth(audio, budget) };
   }
 
   /** Extract a plain { type, sdp } object for safe JSON serialization. */
@@ -328,7 +366,7 @@ export class PeerConnectionManager {
     }
 
     try {
-      await pc.setRemoteDescription(new RTCSessionDescription(this.remoteSdp(sdp)));
+      await pc.setRemoteDescription(new RTCSessionDescription(this.remoteSdp(sdp, peerId)));
 
       // Set transceiver directions BEFORE createAnswer so the answer SDP
       // reflects the correct state natively (no post-creation SDP munging).
@@ -424,9 +462,15 @@ export class PeerConnectionManager {
     }
   }
 
-  /** Set/clear the screen share track on transceiver 2. Triggers renegotiation on direction change. */
-  setScreenTrack(track: any | null): void {
+  /**
+   * Set/clear the screen share track on transceiver 2. Triggers renegotiation on direction
+   * change. `shape` is what the share goes out at, for the bandwidth budget.
+   */
+  setScreenTrack(track: any | null, shape?: { width: number; height: number }): void {
     this.screenTrack = track;
+    this.screenShape = shape ?? null;
+    // The renegotiation below carries the budget to every peer we have right now.
+    this.budgetedCount = this.connections.size;
     for (const [peerId, pc] of this.connections) {
       const transceivers = pc.getTransceivers();
       if (transceivers.length > 2) {
@@ -479,6 +523,20 @@ export class PeerConnectionManager {
     }
   }
 
+  /**
+   * The send budget in `remoteSdp` is a share of the uplink per peer, so while a share is
+   * running every change in how many peers we send to re-offers the others — owned here,
+   * next to the map it depends on, rather than by room events that fire before the newcomer
+   * has a connection. `except` is the peer whose own negotiation just carried its budget.
+   */
+  private refreshBudgets(except?: string): void {
+    if (!this.screenTrack || this.connections.size === this.budgetedCount) return;
+    this.budgetedCount = this.connections.size;
+    for (const [peerId, pc] of this.connections) {
+      if (peerId !== except) void this.renegotiate(peerId, pc);
+    }
+  }
+
   private flushPendingRenegotiation(peerId: string): void {
     if (this.pendingRenegotiation.has(peerId)) {
       this.pendingRenegotiation.delete(peerId);
@@ -525,6 +583,7 @@ export class PeerConnectionManager {
       this.connections.delete(peerId);
       this.makingOffer.delete(peerId);
       this.onPeerDisconnected(peerId);
+      this.refreshBudgets();
     }
   }
 

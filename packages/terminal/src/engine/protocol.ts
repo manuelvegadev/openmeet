@@ -88,10 +88,12 @@ export interface InputOptions {
   gainDb: number;
 }
 
-/** Opus ceilings in kbps, per direction (see lib/sdp.ts). */
-export interface AudioBitrateOptions {
+/** Ceilings in kbps: Opus each way, and the screen share each way (see `sdp.ts`). */
+export interface BitrateOptions {
   sendKbps: number;
   receiveKbps: number;
+  screenSendKbps: number;
+  screenReceiveKbps: number;
 }
 
 export interface JoinOptions {

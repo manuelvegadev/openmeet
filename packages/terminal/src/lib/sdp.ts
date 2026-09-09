@@ -9,6 +9,8 @@
  * @roamhq/wrtc once a sender has an SSRC.
  */
 
+import { SCREEN_FALLBACK_HEIGHT, SCREEN_FALLBACK_WIDTH } from './capture-args.js';
+
 /** 128 kbps stereo is transparent for speech and good for music; 256 was twice the uplink for no audible gain. */
 export const DEFAULT_AUDIO_KBPS = 128;
 export const AUDIO_KBPS_MIN = 16;
@@ -16,10 +18,72 @@ export const AUDIO_KBPS_MAX = 512;
 /** What the settings screen cycles through; the CLI accepts any value in range. */
 export const AUDIO_KBPS_STEPS = [64, 96, 128, 192, 256] as const;
 
-/** `--audio-send-kbps` / `--audio-receive-kbps` value → kbps, or null when it is not one. */
-export function parseAudioKbpsFlag(value: string): number | null {
+/** A `--*-kbps` flag value → kbps within [min, max], or null when it is not one. */
+export function parseKbpsFlag(value: string, min: number, max: number): number | null {
   const kbps = Number(value);
-  return Number.isFinite(kbps) && kbps >= AUDIO_KBPS_MIN && kbps <= AUDIO_KBPS_MAX ? Math.round(kbps) : null;
+  return Number.isFinite(kbps) && kbps >= min && kbps <= max ? Math.round(kbps) : null;
+}
+
+// ─── Screen share bandwidth ──────────────────────────────────────────────────────────
+
+/** 2.5 Mbps reads text at 1080p30; a 2580x1080 ultrawide gets a third more (see `pixelFactor`). */
+export const DEFAULT_SCREEN_KBPS = 2500;
+export const SCREEN_KBPS_MIN = 300;
+export const SCREEN_KBPS_MAX = 20_000;
+/** What the settings screen cycles through; the CLI accepts any value in range. */
+export const SCREEN_KBPS_STEPS = [1000, 1500, 2500, 4000, 6000, 10_000] as const;
+/** Headroom a `b=AS` line leaves for audio (Opus + RED) beside the video it is really about. */
+export const BANDWIDTH_AUDIO_ALLOWANCE_KBPS = 384;
+
+/**
+ * How much more a share of `width`x`height` deserves than 1080p for the same legibility:
+ * proportional to the pixel count, never less than 1, never more than 2. The shape is the
+ * screen's own since gotcha 17, so an ultrawide is 1.34 and a 4K panel scaled to 1080p is 1.
+ */
+export function pixelFactor(width?: number, height?: number): number {
+  if (!width || !height) return 1;
+  return Math.min(2, Math.max(1, (width * height) / (SCREEN_FALLBACK_WIDTH * SCREEN_FALLBACK_HEIGHT)));
+}
+
+/**
+ * Set (or with `null`, clear) `b=AS:<kbps>` on the screen m-line — the second video section.
+ *
+ * This is the one bitrate lever that survives negotiation in @roamhq/wrtc (gotcha 27b):
+ * `setParameters` is refused once a sender exists, but a `b=AS` in the description libwebrtc
+ * treats as *remote* becomes its bandwidth estimator's ceiling towards that peer, and it is
+ * read again on every offer/answer. It is a ceiling for the whole call to that peer, not for
+ * the one m-line — hence the audio allowance the callers add — and it is applied through the
+ * estimator, so it bounds what the encoder is *offered*, not each frame. In our own
+ * description it is what we ask peers not to exceed towards us; in the peer's, what we will
+ * not exceed towards them. Unchanged input comes back unchanged.
+ */
+export function setScreenBandwidth(sdp: string, kbps: number | null): string {
+  return mapScreenSection(sdp, (section) => {
+    const stripped = section.replace(/b=AS:\d+\r\n/g, '');
+    if (kbps === null) return stripped;
+    const line = `b=AS:${Math.round(kbps)}\r\n`;
+    // Media-level b= belongs after c= and before the a= lines; without a c= line (a bare
+    // section, as in tests) it goes straight after the m= line.
+    return /c=IN [^\r\n]*\r\n/.test(stripped)
+      ? stripped.replace(/(c=IN [^\r\n]*\r\n)/, `$1${line}`)
+      : stripped.replace(/^(m=video[^\r\n]*\r\n)/, `$1${line}`);
+  });
+}
+
+/**
+ * Apply `edit` to the screen m-line's section — the second video section, per the
+ * transceiver order both sides rely on (gotcha 5) — and leave every other section alone.
+ */
+function mapScreenSection(sdp: string, edit: (section: string) => string): string {
+  let videoSections = 0;
+  return sdp
+    .split(/(?=m=)/)
+    .map((section) => {
+      if (!section.startsWith('m=video')) return section;
+      videoSections++;
+      return videoSections === 2 ? edit(section) : section;
+    })
+    .join('');
 }
 
 /** Payload type of the Opus line, or null when the description has no Opus. */
@@ -114,14 +178,7 @@ export function preferAudioRed(sdp: string): string {
  * right, so the caller can tell whether it had to intervene.
  */
 export function forceScreenSendrecv(sdp: string): string {
-  let videoSections = 0;
-  return sdp
-    .split(/(?=m=)/)
-    .map((section) => {
-      if (!section.startsWith('m=video')) return section;
-      videoSections++;
-      if (videoSections !== 2 || section.includes('a=sendrecv')) return section;
-      return section.replace(/a=recvonly|a=inactive/, 'a=sendrecv');
-    })
-    .join('');
+  return mapScreenSection(sdp, (section) =>
+    section.includes('a=sendrecv') ? section : section.replace(/a=recvonly|a=inactive/, 'a=sendrecv'),
+  );
 }
