@@ -54,7 +54,7 @@ One package, one version number, for every platform. What that version can do de
 | Platform | Status | Features |
 |----------|--------|----------|
 | macOS 15 (Sequoia) or later | Supported | Audio, chat, webcam, screen sharing |
-| Windows 11 (x64) | Supported | Audio, chat. Video not available yet |
+| Windows 11 (x64) | Supported | Audio, chat, screen sharing. Webcam not available yet |
 | Older macOS / Windows 10 | Untested | The app runs, but nothing is verified there; the home screen says so |
 | Linux | Best effort | Audio, chat, webcam, screen sharing (X11 + PulseAudio); not actively tested |
 
@@ -63,18 +63,21 @@ The app shows the platform and its feature set next to the version on the home s
 ## Prerequisites
 
 - **Node.js 22+** — [download](https://nodejs.org)
-- **ffmpeg** _(optional, macOS/Linux)_ — required for video and screen sharing
+- **ffmpeg** _(optional)_ — required for screen sharing (all platforms) and webcam (macOS/Linux)
 - **sox** _(optional)_ — only for `--audio-backend sox` (the default on Linux)
 
 Audio I/O talks to CoreAudio (macOS) and WASAPI (Windows) directly through a bundled native
-module, so nothing else is needed for audio. On Windows nothing besides Node.js is required;
-video is not available there yet.
+module, so nothing else is needed for audio. On Windows, ffmpeg is only needed for screen
+sharing (the installer adds it with winget); webcam is not available there yet.
 
 Optional dependencies:
 
 ```bash
 # macOS
 brew install ffmpeg
+
+# Windows
+winget install Gyan.FFmpeg
 
 # Ubuntu / Debian
 sudo apt install ffmpeg
