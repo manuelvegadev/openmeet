@@ -20,20 +20,13 @@ actually holds for audio (`priority: 'high'`) after any future `setParameters` o
 is unverified. `scripts/share-probe.ts` is the place to assert it once `getParameters()` can
 be trusted, or once a newer wrtc build reads the fields correctly.
 
-### The theme does not cover third-party components
-`lib/theme.ts` and `components/text.tsx` make our own text terminal-independent, but
-`ink-select-input` renders its items with `color: isSelected ? 'blue' : undefined` and its
-pointer with `color="blue"`, and `ink-text-input` renders the placeholder with `chalk.grey`
-and the typed value with no foreground at all. That is 7 `SelectInput` sites (device-picker,
-room-view, settings-view) and 3 `TextInput` sites (chat-input, home-screen) — including the
-room name you type and the messages you type. Both failure modes the theme exists to remove:
-a named ANSI index whose hue is the terminal's, and a default foreground that is black over
-the painted `#0B0B0B` on a light-theme terminal.
-
-`SelectInput` accepts `itemComponent`/`indicatorComponent`, so one `components/select.tsx`
-built on our `Text` covers all 7 at once; `TextInput` can be nested inside a
-`<Text color={theme.text}>`. Worth adding a Biome `noRestrictedImports` for `Text` from
-`ink` outside `components/text.tsx` afterwards, so the rule is enforced and not remembered.
+### The participants column could be narrower
+`PARTICIPANTS_WIDTH` is 64 columns, from the widest one-line peer row:
+`○ ▸ [MMMMMMMM] [muted] [cam] [scr] ↓999k ~999ms 60% ██████████`. On the Windows profile's
+110 columns that leaves 46 for the chat, of which `[time] icon [who]` takes up to 22. Levers, in order of what they cost the reader: drop the
+`○`/`▸` columns and carry speaking and selection in the name's colour and weight (4 columns);
+shorten `[muted]` to a glyph; a narrower meter. Related: with `w` and `e` drawn, the two-tone
+bar no longer fits in 110 columns and wraps onto a second row.
 
 ### Joining a room that does not exist silently creates it
 `signaling.ts` calls `ensureRoom` on `join-room`, so a typo in the room name lands you alone
