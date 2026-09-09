@@ -58,7 +58,11 @@ let cache: AppSettings | null = null;
 
 function readFromDisk(): AppSettings {
   try {
-    const raw = readFileSync(SETTINGS_FILE, 'utf-8');
+    // Strip a UTF-8 BOM: JSON.parse throws on it, and the catch below would then silently
+    // hand back DEFAULTS — every saved setting lost with nothing said. Windows puts one there
+    // easily (Notepad, and PowerShell's `Set-Content -Encoding UTF8`), which is how this was
+    // found. `wt-profile.cjs` already had to do the same for Windows Terminal's own file.
+    const raw = readFileSync(SETTINGS_FILE, 'utf-8').replace(/^\uFEFF/, '');
     return { ...DEFAULTS, ...JSON.parse(raw) };
   } catch {
     // No settings.json — try migrating from legacy device files
