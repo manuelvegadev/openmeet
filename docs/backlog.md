@@ -25,8 +25,8 @@ be trusted, or once a newer wrtc build reads the fields correctly.
 `○ ▸ [MMMMMMMM] mcs ↓999k ~999ms 60% ██████████`. On the Windows profile's 110 columns that
 leaves 62 for the chat. What is left to trim costs the reader something: dropping the `○`/`▸`
 columns and carrying speaking and selection in the name's colour and weight (4 columns), or a
-shorter meter. Related: with `w` and `e` drawn, the two-tone bar no longer fits in 110 columns
-and wraps onto a second row.
+shorter meter. The two key rows in the column are 43 and 44 cells of the
+46 available, so a longer label or another key needs one of the levers above first.
 
 ### Joining a room that does not exist silently creates it
 `signaling.ts` calls `ensureRoom` on `join-room`, so a typo in the room name lands you alone
@@ -40,15 +40,15 @@ The TUI no longer calls it. `removeParticipant` only sweeps a room when someone 
 so a room created through the endpoint and never joined stays in the map until the server
 restarts. Either delete the endpoint or give it a TTL.
 
-### The status bar mirrors the keymap by hand
+### The key rows mirror the keymap by hand
 `room-view` derives `peerCam`/`peerScreen` from the same conditions its `useInput` handler
-checks, kept in step by a comment. They have already been out of step once: `s share screen`
-was drawn unconditionally while with video disabled the engine built no `VideoManager` (fixed —
-`s` now follows `videoEnabled`, and the room log says why video is off), and `d` (change
-device) and `o` (overlay) are still live keys no bar advertises. One keymap —
-`{ key, label(state), enabled(state), run() }[]` — with `useInput` dispatching from it and
-`StatusBar` rendering `filter(enabled)` would make "a drawn button works, a working key is
-drawn" hold by construction.
+checks, kept in step by a comment, and now four rows draw from that state (`MyActions`,
+`PeerActions`, the chat's own chip, `RoomBar`). They have been out of step twice: `s share
+screen` was drawn unconditionally while with video disabled the engine built no
+`VideoManager`, and `d`/`o` were live keys no row advertised — both fixed, neither by
+construction. One keymap — `{ key, label(state), enabled(state), scope, run() }[]` — with
+`useInput` dispatching from it and each row rendering `filter(scope)` would make "a drawn
+button works, a working key is drawn" hold by itself.
 
 ### The engine learns user choices two ways
 `room-engine` receives most settings through `JoinOptions` but still calls `loadSettings()`
