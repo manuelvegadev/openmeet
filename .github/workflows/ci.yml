@@ -35,10 +35,11 @@ jobs:
       - name: Type-check terminal
         run: pnpm --filter openmeet-terminal exec tsc --noEmit
 
-      - name: Audio unit checks (resampler, channel policy)
+      - name: Audio unit checks (resampler, channel policy, SDP)
         run: |
           pnpm --filter openmeet-terminal exec tsx scripts/resampler-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/channels-test.ts
+          pnpm --filter openmeet-terminal exec tsx scripts/sdp-test.ts
 
       # audify links against PulseAudio on Linux; the runner image ships no libpulse.
       - name: Install Linux audio libraries
