@@ -9,6 +9,17 @@ const server = createServer(app);
 
 app.use(express.json());
 
+// Liveness/readiness for the container healthcheck and uptime monitoring.
+app.get('/health', (_req, res) => {
+  const rooms = listRooms();
+  res.json({
+    status: 'ok',
+    uptime: Math.round(process.uptime()),
+    rooms: rooms.length,
+    participants: rooms.reduce((total, room) => total + (room.participantCount ?? 0), 0),
+  });
+});
+
 // REST API
 app.get('/api/rooms', (_req, res) => {
   res.json(listRooms());
@@ -40,3 +51,13 @@ setupSignaling(server);
 server.listen(config.port, () => {
   console.log(`OpenMeet server running on http://localhost:${config.port}`);
 });
+
+// Docker/orchestrators stop containers with SIGTERM: close listeners so in-flight
+// requests finish and the process does not wait for the 10 s kill timeout.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    console.log(`${signal} received, shutting down`);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+  });
+}
