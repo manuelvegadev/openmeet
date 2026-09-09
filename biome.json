@@ -34,10 +34,29 @@
       },
       "style": {
         "noNonNullAssertion": "off",
-        "useImportType": "off"
+        "useImportType": "off",
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "ink": {
+                "importNames": ["Text"],
+                "message": "Import Text from components/text.tsx: it applies the theme's foreground (gotcha 30b)."
+              },
+              "ink-select-input": "Import Select from components/select.tsx: the stock items render in the terminal's blue.",
+              "ink-text-input": "Use TextInput from components/text-input.tsx: it replaced the package (theme foreground, blinking cursor)."
+            }
+          }
+        }
       }
     }
   },
+  "overrides": [
+    {
+      "includes": ["packages/terminal/src/components/text.tsx", "packages/terminal/src/components/select.tsx"],
+      "linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
+    }
+  ],
   "files": {
     "includes": ["packages/**/*.ts", "packages/**/*.tsx", "packages/**/*.json", "!**/dist"]
   }

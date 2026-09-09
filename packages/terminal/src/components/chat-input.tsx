@@ -1,9 +1,8 @@
 import { Box } from 'ink';
-import TextInput from 'ink-text-input';
 import { useState } from 'react';
 import { theme } from '../lib/theme.js';
-import { KeyChip } from './key-hints.js';
 import { Text } from './text.js';
+import { TextInput } from './text-input.js';
 
 interface ChatInputProps {
   focused: boolean;
@@ -31,12 +30,8 @@ export function ChatInput({ focused, onSend }: ChatInputProps) {
           placeholder="Type message..."
         />
       ) : (
-        <Text>
-          {/* The chip stays out of the dim wrapper so it keeps its full contrast. */}
-          <Text dimColor>Press </Text>
-          <KeyChip>tab</KeyChip>
-          <Text dimColor> to type a message</Text>
-        </Text>
+        // Plain grey: the bar below already shows `tab` as a live button, a second chip here was noise.
+        <Text dimColor>Press tab to type a message</Text>
       )}
     </Box>
   );

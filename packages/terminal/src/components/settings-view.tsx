@@ -1,18 +1,21 @@
 import { Box, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
 import { useEffect, useState } from 'react';
 import { type AudioDevice, listAudioDevices } from '../engine/client.js';
 import { INPUT_CHANNEL_POLICIES } from '../lib/audio/channels.js';
 import { isBroadcastDevice, resolveBroadcastDefault } from '../lib/audio/nvidia-broadcast.js';
 import { listVideoDevices, type VideoDevice } from '../lib/devices.js';
+import { bracketed } from '../lib/identity.js';
 import { getPlatformSupport } from '../lib/platform.js';
 import { AUDIO_KBPS_STEPS, SCREEN_KBPS_STEPS } from '../lib/sdp.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
 import { theme } from '../lib/theme.js';
 import { RENDER_PAUSE_POLICIES } from '../lib/window-state.js';
-import { BroadcastHint, inputPickerItems } from './broadcast.js';
-import { KeyHints } from './key-hints.js';
-import { Rule, Text } from './text.js';
+import { BroadcastHint, inputPickerItems, SYSTEM_DEFAULT_ITEM } from './broadcast.js';
+import type { KeyHint } from './key-hints.js';
+import { ProfileSetup } from './profile-setup.js';
+import { Screen } from './screen.js';
+import { Select } from './select.js';
+import { Pointer, Text } from './text.js';
 
 interface SettingsViewProps {
   onBack: () => void;
@@ -20,12 +23,22 @@ interface SettingsViewProps {
 
 const webcamSupported = getPlatformSupport().webcam;
 
-type Step = 'menu' | 'pick-input' | 'pick-output' | 'pick-camera';
+type Picker = 'pick-input' | 'pick-output' | 'pick-camera';
+type Step = 'menu' | 'profile' | Picker;
+
+const PICK_HINTS: KeyHint[] = [
+  { key: '↑↓', label: 'navigate' },
+  { key: 'enter', label: 'select' },
+  { key: 'esc', label: 'cancel' },
+];
+const DEFAULT = SYSTEM_DEFAULT_ITEM.value;
 
 interface SettingRow {
   key: string;
   label: string;
   value: string;
+  /** Draw the value in this colour rather than the text colour: the name row, in the name's colour. */
+  valueColor?: string;
   /** What Enter does on this row. */
   run: () => void;
   /** Shown, but not actionable: something else already owns the choice. */
@@ -80,7 +93,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     setSettings(next);
   };
 
+  const name = settings.name ?? '';
+  const color = settings.color ?? undefined;
   const allRows: SettingRow[] = [
+    // Name and colour together: the same two screens as the first start, with the colour
+    // picked on the name itself.
+    { key: 'profile', label: 'Profile', value: bracketed(name), valueColor: color, run: () => setStep('profile') },
     { key: 'input', label: 'Audio Input', value: inputName, run: () => setStep('pick-input') },
     { key: 'output', label: 'Audio Output', value: outputName, run: () => setStep('pick-output') },
     { key: 'camera', label: 'Camera', value: cameraName, run: () => setStep('pick-camera') },
@@ -138,9 +156,35 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   ];
   const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
 
+  /** The three device pickers: one screen, three tables. */
+  const PICKERS: Record<
+    Picker,
+    { title: string; items: () => { label: string; value: string }[]; apply: (v: string) => void }
+  > = {
+    'pick-input': {
+      title: 'Audio Input',
+      items: () => inputPickerItems(devices.inputs),
+      apply: (v) => update({ audioInputId: v === DEFAULT ? null : v, devicesConfigured: true }),
+    },
+    'pick-output': {
+      title: 'Audio Output',
+      items: () => [SYSTEM_DEFAULT_ITEM, ...devices.outputs.map((d) => ({ label: d.name, value: d.id }))],
+      apply: (v) => update({ audioOutputId: v === DEFAULT ? null : v, devicesConfigured: true }),
+    },
+    'pick-camera': {
+      title: 'Camera',
+      items: () => [
+        { label: 'Default (0)', value: DEFAULT },
+        ...videoDevices.map((d) => ({ label: `[${d.id}] ${d.name}`, value: d.id })),
+      ],
+      apply: (v) => update({ videoDeviceId: v === DEFAULT ? null : v }),
+    },
+  };
+
   useInput((_input, key) => {
     if (step !== 'menu') {
-      if (key.escape) setStep('menu');
+      // ProfileSetup owns Escape on its two steps (back to the name, then out).
+      if (key.escape && step !== 'profile') setStep('menu');
       return;
     }
 
@@ -162,91 +206,31 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
   });
 
-  // Device selection sub-screens
-  if (step === 'pick-input') {
-    const items = inputPickerItems(devices.inputs);
+  if (step === 'profile') {
     return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color={theme.accent}>
-          Settings {'>'} Audio Input
-        </Text>
-        <Rule />
-        <SelectInput
-          items={items}
-          onSelect={(item) => {
-            update({ audioInputId: item.value === '__default__' ? null : item.value, devicesConfigured: true });
-            setStep('menu');
-          }}
-        />
-        <Text />
-        <KeyHints
-          hints={[
-            { key: '↑↓', label: 'navigate' },
-            { key: 'enter', label: 'select' },
-            { key: 'esc', label: 'cancel' },
-          ]}
-        />
-      </Box>
+      <ProfileSetup
+        initial={color ? { name, color } : null}
+        onDone={(id) => {
+          update(id);
+          setStep('menu');
+        }}
+        onCancel={() => setStep('menu')}
+      />
     );
   }
 
-  if (step === 'pick-output') {
-    const items = [
-      { label: 'System Default', value: '__default__' },
-      ...devices.outputs.map((d) => ({ label: d.name, value: d.id })),
-    ];
+  if (step !== 'menu') {
+    const picker = PICKERS[step];
     return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color={theme.accent}>
-          Settings {'>'} Audio Output
-        </Text>
-        <Rule />
-        <SelectInput
-          items={items}
+      <Screen title={`Settings > ${picker.title}`} hints={PICK_HINTS}>
+        <Select
+          items={picker.items()}
           onSelect={(item) => {
-            update({ audioOutputId: item.value === '__default__' ? null : item.value, devicesConfigured: true });
+            picker.apply(item.value);
             setStep('menu');
           }}
         />
-        <Text />
-        <KeyHints
-          hints={[
-            { key: '↑↓', label: 'navigate' },
-            { key: 'enter', label: 'select' },
-            { key: 'esc', label: 'cancel' },
-          ]}
-        />
-      </Box>
-    );
-  }
-
-  if (step === 'pick-camera') {
-    const items = [
-      { label: 'Default (0)', value: '__default__' },
-      ...videoDevices.map((d) => ({ label: `[${d.id}] ${d.name}`, value: d.id })),
-    ];
-    return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color={theme.accent}>
-          Settings {'>'} Camera
-        </Text>
-        <Rule />
-        <SelectInput
-          items={items}
-          onSelect={(item) => {
-            update({ videoDeviceId: item.value === '__default__' ? null : item.value });
-            setStep('menu');
-          }}
-        />
-        <Text />
-        <KeyHints
-          hints={[
-            { key: '↑↓', label: 'navigate' },
-            { key: 'enter', label: 'select' },
-            { key: 'esc', label: 'cancel' },
-          ]}
-        />
-      </Box>
+      </Screen>
     );
   }
 
@@ -254,12 +238,14 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const labelWidth = 18;
 
   return (
-    <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-      <Text bold color={theme.accent}>
-        Settings
-      </Text>
-      <Rule />
-
+    <Screen
+      title="Settings"
+      hints={[
+        { key: '↑↓', label: 'navigate' },
+        { key: 'enter', label: 'change' },
+        { key: 'esc', label: 'back' },
+      ]}
+    >
       {!devicesLoaded ? (
         <Text color={theme.warn}>Loading devices...</Text>
       ) : (
@@ -268,10 +254,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             const selected = idx === selectedIdx;
             return (
               <Box key={row.key} gap={1}>
-                <Text color={selected ? theme.accent : theme.text}>{selected ? '▸' : ' '}</Text>
+                <Pointer on={selected} />
                 <Text bold={selected}>{row.label.padEnd(labelWidth)}</Text>
                 {/* A disabled row stays muted even when selected: enter does nothing on it. */}
-                <Text color={selected && !row.disabled ? theme.text : theme.muted}>{row.value}</Text>
+                <Text color={row.valueColor ?? (selected && !row.disabled ? theme.text : theme.muted)}>
+                  {row.value}
+                </Text>
               </Box>
             );
           })}
@@ -281,15 +269,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       <Box marginTop={1}>
         <BroadcastHint inputs={devices.inputs} loaded={devicesLoaded} />
       </Box>
-
-      <Box flexGrow={1} />
-      <KeyHints
-        hints={[
-          { key: '↑↓', label: 'navigate' },
-          { key: 'enter', label: 'change' },
-          { key: 'esc', label: 'back' },
-        ]}
-      />
-    </Box>
+    </Screen>
   );
 }

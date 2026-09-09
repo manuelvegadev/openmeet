@@ -1,14 +1,15 @@
 import { Box, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
 import { useEffect, useRef, useState } from 'react';
 import type { AudioDevice } from '../engine/client.js';
 import { findBroadcastInput } from '../lib/audio/nvidia-broadcast.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
 import { theme } from '../lib/theme.js';
 import { BroadcastHint, inputPickerItems } from './broadcast.js';
-import { KeyChip, KeyHints } from './key-hints.js';
+import { KeyChip } from './key-hints.js';
 import { MicBar } from './level-bar.js';
-import { Rule, Text } from './text.js';
+import { Screen } from './screen.js';
+import { Select } from './select.js';
+import { Text } from './text.js';
 
 interface DevicePickerProps {
   inputs: AudioDevice[];
@@ -27,13 +28,11 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
   const [selectedOutput, setSelectedOutput] = useState<AudioDevice | undefined>();
   const [micLevel, setMicLevel] = useState(0);
   const testerRef = useRef<MicTester | null>(null);
-  const smoothedRef = useRef(0);
   // Mic tester lifecycle — active only during 'test' step
   useEffect(() => {
     if (step !== 'test') {
       testerRef.current?.stop();
       testerRef.current = null;
-      smoothedRef.current = 0;
       setMicLevel(0);
       return;
     }
@@ -43,11 +42,11 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
 
     let lastUpdate = 0;
     tester.setLevelCallback((rms) => {
-      smoothedRef.current = smoothedRef.current * 0.7 + rms * 0.3;
+      // Already smoothed by the engine's ballistics; just cap the renders.
       const now = Date.now();
       if (now - lastUpdate > 80) {
         lastUpdate = now;
-        setMicLevel(smoothedRef.current);
+        setMicLevel(rms);
       }
     });
 
@@ -98,10 +97,10 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
         <Text bold color={theme.accent}>
           Audio Setup
         </Text>
-        <Text />
+        <Box height={1} />
         <Text>No specific audio devices found.</Text>
         <Text>Using system default devices.</Text>
-        <Text />
+        <Box height={1} />
         <Text>
           {/* The chip stays out of the dim wrapper so it keeps its full contrast. */}
           <Text dimColor>Press </Text>
@@ -127,13 +126,15 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
 
   if (step === 'input') {
     return (
-      <Box flexDirection="column" paddingX={1} paddingY={1}>
-        <Text bold color={theme.accent}>
-          Audio Setup
-        </Text>
-        <Rule />
+      <Screen
+        title="Audio Setup"
+        hints={[
+          { key: '↑↓', label: 'navigate' },
+          { key: 'enter', label: 'select' },
+        ]}
+      >
         <Text bold>Input (Microphone):</Text>
-        <SelectInput
+        <Select
           items={inputItems}
           initialIndex={savedInputIndex >= 0 ? savedInputIndex : 0}
           onSelect={(item) => {
@@ -147,32 +148,25 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
             }
           }}
         />
-        <Text />
         <BroadcastHint inputs={inputs} loaded={!loading} />
-        <Text />
-        <KeyHints
-          hints={[
-            { key: '↑↓', label: 'navigate' },
-            { key: 'enter', label: 'select' },
-          ]}
-        />
-      </Box>
+      </Screen>
     );
   }
 
   if (step === 'output') {
     return (
-      <Box flexDirection="column" paddingX={1} paddingY={1}>
-        <Text bold color={theme.accent}>
-          Audio Setup
-        </Text>
-        <Rule />
+      <Screen
+        title="Audio Setup"
+        hints={[
+          { key: '↑↓', label: 'navigate' },
+          { key: 'enter', label: 'select' },
+        ]}
+      >
         <Text>
           Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
         </Text>
-        <Text />
         <Text bold>Output (Speakers):</Text>
-        <SelectInput
+        <Select
           items={outputItems}
           initialIndex={savedOutputIndex >= 0 ? savedOutputIndex : 0}
           onSelect={(item) => {
@@ -181,43 +175,30 @@ export function DevicePicker({ inputs, outputs, loading, savedInputId, savedOutp
             setStep('test');
           }}
         />
-        <Text />
-        <KeyHints
-          hints={[
-            { key: '↑↓', label: 'navigate' },
-            { key: 'enter', label: 'select' },
-          ]}
-        />
-      </Box>
+      </Screen>
     );
   }
 
   // Test step
   return (
-    <Box flexDirection="column" paddingX={1} paddingY={1}>
-      <Text bold color={theme.accent}>
-        Audio Test
-      </Text>
-      <Rule />
+    <Screen
+      title="Audio Test"
+      hints={[
+        { key: 't', label: 'test tone' },
+        { key: 'enter', label: 'confirm' },
+        { key: 'esc', label: 're-select' },
+      ]}
+    >
       <Text>
         Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
       </Text>
       <Text>
         Output: <Text bold>{selectedOutput?.name ?? 'System Default'}</Text>
       </Text>
-      <Text />
       <Text bold>Mic level:</Text>
       <Text>
         <MicBar level={micLevel} />
       </Text>
-      <Text />
-      <KeyHints
-        hints={[
-          { key: 't', label: 'test tone' },
-          { key: 'enter', label: 'confirm' },
-          { key: 'esc', label: 're-select' },
-        ]}
-      />
-    </Box>
+    </Screen>
   );
 }

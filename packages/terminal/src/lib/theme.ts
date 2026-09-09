@@ -9,9 +9,13 @@
  *
  * 24-bit hex avoids both. chalk emits it as `38;2;R;G;B` on a truecolor terminal and
  * quantises to `38;5;N` with N ≥ 16 on a 256-colour one — and indices 16-255 are fixed by
- * the xterm specification rather than by the theme, so Ghostty, iTerm2, Windows Terminal and
- * macOS Terminal (256-colour only) all land on the same thing. Only a 16-colour terminal
- * (bare `TERM=xterm` over ssh) falls back to the theme's palette, and nothing can fix that.
+ * the xterm specification rather than by the theme, so Ghostty, iTerm2 and Windows Terminal
+ * show the hex and macOS Terminal (256-colour only) shows the nearest cube entry. Nearest by
+ * chalk's reckoning, which assumes evenly spaced levels, so a hue can land one step off
+ * there: `#4ADE80` becomes the aquamarine `#5FD7AF`. `scripts/theme-test.ts` pins what that
+ * rounding must preserve — every pair that carries meaning stays distinct, and everything
+ * clears 4.5:1 on the background. Only a 16-colour terminal (bare `TERM=xterm` over ssh)
+ * falls back to the theme's palette, and nothing can fix that.
  *
  * The background is painted rather than inherited, which is what makes the app look the same
  * on a light terminal: a dark panel inside it.
@@ -29,6 +33,8 @@ export const theme = {
   onAccent: '#0B0B0B',
   /** The second accent, for the one thing that is not an ordinary action: debug output. */
   accentAlt: '#C084FC',
+  /** A raised grey: the background of a button that would do nothing right now. */
+  surface: '#222222',
 
   // State. Deliberately not yellow: the accent owns yellow now, so a warning needs its own
   // hue or it stops reading as a warning.
@@ -37,8 +43,13 @@ export const theme = {
   danger: '#F87171',
   info: '#7DD3FC',
 
-  /** Chat usernames, picked by hash. Distinct from each other and from the state colours. */
-  users: ['#F87171', '#4ADE80', '#7DD3FC', '#C084FC', '#FB923C', '#5EEAD4'],
+  /**
+   * Chat usernames, picked by hash. Six hues from the same lightness band as the state
+   * colours but none of *their* hues: a name in the danger red or the warning orange reads as
+   * an error or a warning, and the chat sits right beside the list where those mean things.
+   * Pink, blue, lime, teal, fuchsia, indigo.
+   */
+  users: ['#F472B6', '#60A5FA', '#A3E635', '#2DD4BF', '#E879F9', '#818CF8'],
 } as const;
 
 /**
