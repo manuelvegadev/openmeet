@@ -45,4 +45,8 @@ ENV PORT=3001
 
 EXPOSE 3001
 
+# Marks the container unhealthy if the HTTP server stops answering.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -q --spider http://127.0.0.1:3001/health || exit 1
+
 CMD ["node", "packages/server/dist/index.js"]
