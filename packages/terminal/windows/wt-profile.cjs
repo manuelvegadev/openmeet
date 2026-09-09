@@ -41,8 +41,8 @@ if (!file) {
 
 const raw = fs.readFileSync(file, 'utf8');
 fs.writeFileSync(`${file}.openmeet-backup`, raw);
-// settings.json may carry // comments (Windows Terminal's own template does).
-const cfg = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, ''));
+// settings.json may carry a UTF-8 BOM and // comments (Windows Terminal's own template does).
+const cfg = JSON.parse(raw.replace(/^\uFEFF/, '').replace(/^\s*\/\/.*$/gm, ''));
 
 const BG = '#282c34'; // One Half Dark background, what the TUI renders on
 
