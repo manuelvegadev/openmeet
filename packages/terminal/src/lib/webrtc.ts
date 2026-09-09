@@ -47,32 +47,63 @@ export function screenBitrateFor(receiverCount: number): number {
  * answerer's audio keeps the allocator's default share and its screen share is uncapped
  * until it becomes the offerer of a renegotiation. Nothing here can change that.
  */
-function sendPolicy(receiverCount: number): { encoding: Record<string, unknown>; degradation?: string }[] {
+function sendPolicy(
+  receiverCount: number,
+  screenSendKbps: number,
+): { encoding: Record<string, unknown>; degradation?: string }[] {
   return [
     { encoding: { priority: 'high' } }, // audio: first claim on the allocator
     { encoding: { priority: 'low' } }, // webcam
     // Screen: shed frames before pixels — a blurry screen is unreadable, a jerky one is not.
-    { encoding: { priority: 'low', maxBitrate: screenBitrateFor(receiverCount) }, degradation: 'maintain-resolution' },
+    {
+      encoding: { priority: 'low', maxBitrate: screenBitrateFor(receiverCount, screenSendKbps) },
+      degradation: 'maintain-resolution',
+    },
   ];
 }
 
 /**
  * Apply what `addTransceiver` could not carry. Reports rather than swallows — a refused cap
  * is worth knowing about, and a silent catch here hid the answerer problem above for a while.
+ *
+ * Never trust what `getParameters()` hands back (gotcha 33): on the Windows prebuild the
+ * `maxBitrate` it returns right after `addTransceiver` is uninitialised memory — a denormal
+ * like 4.3e-312 some of the time, the real value other times — and writing that back through
+ * `setParameters()` lands as a ceiling of 0 bps, after which the encoder never produces a
+ * frame. `priority` does not come back at all, on any platform. So the intended encoding is
+ * merged over the read-back, field by field, and the read-back only supplies what we never set.
  */
 async function applySendParameters(
   sender: any,
+  encoding: Record<string, unknown>,
   degradationPreference: string,
   onDebug?: (msg: string) => void,
 ): Promise<void> {
   try {
     const params = sender.getParameters();
     // Never add or remove an encoding: libwebrtc refuses a changed count outright.
-    if (!params.encodings?.length) return;
+    if (!params.encodings?.length) {
+      onDebug?.(`RTC setParameters skipped (${degradationPreference}): no encodings yet`);
+      return;
+    }
+    onDebug?.(`RTC encodings read back: ${JSON.stringify(params.encodings)}`);
+    // Only the count is taken from the read-back: every value in it is suspect (gotcha 33).
+    params.encodings = params.encodings.map(() => ({ ...encoding, active: true }));
     params.degradationPreference = degradationPreference;
     await sender.setParameters(params);
+    onDebug?.(`RTC encodings applied: ${JSON.stringify(sender.getParameters().encodings)} ${degradationPreference}`);
   } catch (err) {
     onDebug?.(`RTC setParameters refused (${degradationPreference}): ${err}`);
+  }
+}
+
+/** One line of a sender's live parameters, for the debug log. */
+function describeSender(sender: any): string {
+  try {
+    const p = sender.getParameters();
+    return `encodings ${JSON.stringify(p.encodings)} degradation ${p.degradationPreference ?? '-'} track ${sender.track ? sender.track.kind + (sender.track.enabled ? '' : '(disabled)') : 'none'}`;
+  } catch (err) {
+    return `getParameters failed: ${err}`;
   }
 }
 
@@ -353,11 +384,16 @@ export class PeerConnectionManager {
     const pc = this.connections.get(peerId);
     if (!pc) return;
     try {
-      await pc.setRemoteDescription(new RTCSessionDescription(this.remoteSdp(sdp)));
+      await pc.setRemoteDescription(new RTCSessionDescription(this.remoteSdp(sdp, peerId)));
       // Log transceiver states after answer is applied
       const transceivers = pc.getTransceivers();
       const dirs = transceivers.map((t: any, i: number) => `t${i}:${t.direction}/${t.currentDirection ?? '?'}`);
       this.onDebug?.(`RTC answer applied for ${peerId.slice(0, 6)} [${dirs.join(', ')}]`);
+      if (this.screenTrack && transceivers[2]) {
+        this.onDebug?.(
+          `RTC screen sender for ${peerId.slice(0, 6)} after answer: ${describeSender(transceivers[2].sender)}`,
+        );
+      }
     } catch (err) {
       this.onDebug?.(`RTC handleAnswer from ${peerId.slice(0, 6)} failed: ${err}`);
     }
