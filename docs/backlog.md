@@ -5,6 +5,21 @@ value within each section. Measurements live in [performance.md](performance.md)
 
 ## Correctness and consistency
 
+### The screen bandwidth budget is bounded by the estimator, not clamped per frame
+`b=AS` (gotcha 27b) sets what the bandwidth estimator will offer the encoder towards a peer,
+and follows the room and the share's shape on every renegotiation. What it is not is a hard
+per-frame clamp: on pathological content (noise at 1080p) VP8's screenshare mode overshoots
+both this and the frozen `sendEncodings.maxBitrate`. A browser-grade clamp needs
+`setParameters` after negotiation, which this wrtc refuses. Worth re-probing on a newer
+@roamhq/wrtc; `scripts/share-probe.ts` is where to assert it.
+
+### The screen bitrate cap and priority may not survive on the answerer either
+Gotcha 33 fixed the offerer's round-trip through `getParameters()`. The answerer never gets
+any of it (gotcha 30g), and the read-back drops `priority` everywhere, so what the allocator
+actually holds for audio (`priority: 'high'`) after any future `setParameters` on that sender
+is unverified. `scripts/share-probe.ts` is the place to assert it once `getParameters()` can
+be trusted, or once a newer wrtc build reads the fields correctly.
+
 ### The theme does not cover third-party components
 `lib/theme.ts` and `components/text.tsx` make our own text terminal-independent, but
 `ink-select-input` renders its items with `color: isSelected ? 'blue' : undefined` and its
@@ -34,20 +49,13 @@ restarts. Either delete the endpoint or give it a TTL.
 
 ### The status bar mirrors the keymap by hand
 `room-view` derives `peerCam`/`peerScreen` from the same conditions its `useInput` handler
-checks, kept in step by a comment. They are already out of step: `s share screen` is drawn
-unconditionally but with `--no-video` the engine builds no `VideoManager`, and `d` (change
-device) and `o` (overlay) are live keys no bar advertises. One keymap —
+checks, kept in step by a comment. They have already been out of step once: `s share screen`
+was drawn unconditionally while with video disabled the engine built no `VideoManager` (fixed —
+`s` now follows `videoEnabled`, and the room log says why video is off), and `d` (change
+device) and `o` (overlay) are still live keys no bar advertises. One keymap —
 `{ key, label(state), enabled(state), run() }[]` — with `useInput` dispatching from it and
 `StatusBar` rendering `filter(enabled)` would make "a drawn button works, a working key is
 drawn" hold by construction.
-
-### `screenBitrateFor` reads like a policy but behaves per-peer
-`MESH_UPLINK_BUDGET` is divided by the peer count *at connection time*, and gotcha 27 means
-a connection keeps that ceiling until it renegotiates. So the first peer's connection is
-capped at the full 2.5 Mbps forever while the fifth gets 1.2 Mbps, and the budget bounds
-nothing in aggregate. Either own it at room level and renegotiate on participant change (the
-screen-share path already renegotiates, so the hook exists), or drop the arithmetic and ship
-one honest constant.
 
 ### The engine learns user choices two ways
 `room-engine` receives most settings through `JoinOptions` but still calls `loadSettings()`
@@ -55,6 +63,15 @@ itself for `videoOverlay` and `videoDeviceId`. Pick one direction.
 
 ## Unverified
 
+- **NVIDIA Broadcast: whether echo is actually gone.** Everything mechanical is verified on
+  the real box (RTX 2080 SUPER): the endpoint is named `Microphone (NVIDIA Broadcast)`, the
+  picker offers it first and labelled, it opens at 48 kHz, `debug.log` says
+  `Noise suppression: left to NVIDIA Broadcast (GPU)`, and a Mac↔Windows call carried audio
+  both ways. What no test can answer is the point of the feature — that echo is gone on
+  speakers, and that the denoiser does not chew up speech. That needs a person listening.
+- **The RTX hint has never been seen.** It only renders on a machine with an RTX and *no*
+  Broadcast; the one RTX box available has Broadcast installed. The probe itself is verified
+  (`hasRtxGpu() = true`, 191 ms cold), so only the two lines of JSX are unexercised.
 - **`ddagrab` `output_idx` with more than one monitor.** It is taken from the order
   `Screen.AllScreens` enumerates, which matches DXGI on a single-adapter machine but is not
   guaranteed to. Verified with one monitor only; a multi-monitor or multi-GPU box may need a
@@ -78,6 +95,16 @@ itself for `videoOverlay` and `videoDeviceId`. Pick one direction.
   there. 256-colour and truecolor are covered because indices ≥ 16 are fixed by the xterm
   spec.
 
+### macOS screen capture should move off `AVCaptureScreenInput`
+ffmpeg's avfoundation grabs the screen through `AVCaptureScreenInput`, deprecated since
+macOS 15. Its failure mode is silence: on 2026-09-09, after a 28-minute share, every new
+capture from the same terminal app ran at 20% CPU and never produced a byte, while
+`screencapture -x` and the same client from Terminal.app worked — the wedge is per hosting
+app and only quitting it clears it. The watchdog (gotcha 16) now reports it instead of
+hanging; the fix is a native ScreenCaptureKit source (a small Swift helper writing I420 to a
+pipe, or ffmpeg once it grows an SCK input), which would also drop the deprecated-API
+warnings and the `NSKVONotifying_AVCaptureScreenInput` noise.
+
 ## Bigger bets, in rough order of appeal
 
 ### Take video off WebRTC and encode with NVENC
@@ -98,11 +125,14 @@ end-to-end encryption any more, and `mediasoup-client` has no official handler f
 `@roamhq/wrtc` — `mediasoup-client-node` is a third party and is the piece to derisk first.
 
 ### Echo cancellation
-Deferred, headphones-first. We push PCM through `RTCAudioSource.onData`, which bypasses
-libwebrtc's audio processing module entirely, and Windows' driver AEC would need
-`AudioCategory_Communications`, which RtAudio does not set. On an RTX machine, NVIDIA
-Broadcast's virtual microphone already gives GPU noise removal and echo cancellation with no
-code at all — it enumerates as an ordinary WASAPI endpoint.
+Deferred everywhere except Windows + RTX, headphones-first. We push PCM through
+`RTCAudioSource.onData`, which bypasses libwebrtc's audio processing module entirely, and
+Windows' driver AEC would need `AudioCategory_Communications`, which RtAudio does not set.
+NVIDIA Broadcast is now recognised (`audio/nvidia-broadcast.ts`), which covers RTX machines
+and nothing else; macOS and non-RTX Windows still have no answer but headphones. The routes
+worth costing if it ever matters: WebRTC's own APM fed a reference signal, or speexdsp's AEC
+as a `CaptureProcessor` — the latter needs the playback frame that `FrameMixer` already has,
+so the plumbing is short; the hard part is the capture/playback delay estimate.
 
 ## Chores
 
