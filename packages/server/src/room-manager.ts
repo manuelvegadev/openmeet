@@ -53,7 +53,7 @@ export function addParticipant(roomId: string, username: string, client: Connect
   const room = rooms.get(roomId);
   if (!room) throw new Error(`Room ${roomId} not found`);
   room.clients.set(client.participantId, client);
-  return { id: client.participantId, username, joinedAt: new Date().toISOString() };
+  return { id: client.participantId, username, color: client.color, joinedAt: new Date().toISOString() };
 }
 
 export function removeParticipant(roomId: string, participantId: string): void {
@@ -70,7 +70,7 @@ export function getParticipants(roomId: string): Participant[] {
   if (!room) return [];
   const result: Participant[] = [];
   for (const [id, client] of room.clients) {
-    result.push({ id, username: client.username, joinedAt: new Date().toISOString() });
+    result.push({ id, username: client.username, color: client.color, joinedAt: new Date().toISOString() });
   }
   return result;
 }
