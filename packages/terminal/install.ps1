@@ -1,6 +1,6 @@
 # OpenMeet Terminal installer for Windows
 # Usage (PowerShell):
-#   irm https://raw.githubusercontent.com/manuvega/openmeet/main/packages/terminal/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/terminal/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
@@ -29,6 +29,28 @@ Info "Installing openmeet-terminal..."
 & npm install -g openmeet-terminal
 if ($LASTEXITCODE -ne 0) { Fail "npm install failed" }
 
+# The npm global bin directory may have just been created; pick it up in this session.
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+
+# --- Native modules ---
+# audify ships no prebuilt binary in its npm tarball: it downloads one from an install
+# script. Some npm versions skip package install scripts by default, which would leave the
+# app without audio, so check and repair once.
+$pkgRoot = Join-Path (& npm root -g) 'openmeet-terminal'
+Push-Location $pkgRoot
+& node -e "require('audify'); require('@roamhq/wrtc')" 2>$null
+$nativeOk = $LASTEXITCODE -eq 0
+Pop-Location
+if (-not $nativeOk) {
+  Warn "The native audio module did not build; retrying with install scripts enabled..."
+  & npm install -g --allow-scripts=audify openmeet-terminal
+  Push-Location $pkgRoot
+  & node -e "require('audify'); require('@roamhq/wrtc')" 2>$null
+  $nativeOk = $LASTEXITCODE -eq 0
+  Pop-Location
+  if (-not $nativeOk) { Fail "The native audio module could not be installed. Run: npm install -g --allow-scripts=audify openmeet-terminal" }
+}
+
 # --- ffmpeg (screen sharing); optional ---
 if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
   if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -56,6 +78,14 @@ if ($wt) {
   }
 } else {
   Warn "Windows Terminal not found; install it from the Microsoft Store for the best experience."
+}
+
+# --- Smoke test ---
+if (-not (Get-Command openmeet -ErrorAction SilentlyContinue)) {
+  Warn "openmeet is installed but not on PATH yet; open a new terminal."
+} else {
+  & openmeet --help | Select-Object -First 1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { Fail "openmeet was installed but does not run" }
 }
 
 Info "Installed successfully!"

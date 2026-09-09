@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # OpenMeet Terminal Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/<owner>/openmeet/main/packages/terminal/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/terminal/install.sh | bash
 
 BOLD='\033[1m'
 GREEN='\033[0;32m'

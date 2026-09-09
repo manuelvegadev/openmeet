@@ -99,12 +99,12 @@ Or with the one-liner installer (checks prerequisites for you):
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/manuvega/openmeet/main/packages/terminal/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/terminal/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell) — installs Node.js LTS via winget if missing
-irm https://raw.githubusercontent.com/manuvega/openmeet/main/packages/terminal/install.ps1 | iex
+irm https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/terminal/install.ps1 | iex
 ```
 
 On Windows use [Windows Terminal](https://aka.ms/terminal) (the default on Windows 11); the legacy console host is not supported. The installer registers an "OpenMeet" Windows Terminal profile and a desktop shortcut that opens the app in its own window (app icon and title, no scrollbar, closes on exit). Windows Terminal cannot hide its new-tab buttons or change the taskbar icon; a bundled terminal emulator would be the next step for a fully branded window.
@@ -193,7 +193,7 @@ How "minimized" is detected: on Windows the app asks the OS about the Windows Te
 
 ## Self-hosted server
 
-If you're running your own [OpenMeet server](https://github.com/manuvega/openmeet), point the CLI at it:
+If you're running your own [OpenMeet server](https://github.com/manuelvegadev/openmeet), point the CLI at it:
 
 ```bash
 openmeet --server wss://your-server.com/ws

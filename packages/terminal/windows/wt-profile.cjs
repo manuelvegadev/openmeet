@@ -25,10 +25,18 @@ const candidates = [
   path.join(process.env.LOCALAPPDATA ?? '', 'Packages', 'Microsoft.WindowsTerminal_8wekyb3d8bbwe', 'LocalState', 'settings.json'),
   path.join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'Windows Terminal', 'settings.json'),
 ];
-const file = candidates.find((p) => fs.existsSync(p));
+// Windows Terminal only writes settings.json the first time it is opened, so on a fresh
+// machine seed a minimal one in the LocalState directory its installer created.
+const EMPTY_SETTINGS = '{"$schema":"https://aka.ms/terminal-profiles-schema","profiles":{"list":[]}}';
+let file = candidates.find((p) => fs.existsSync(p));
 if (!file) {
-  console.error('Windows Terminal settings.json not found; is Windows Terminal installed?');
-  process.exit(1);
+  const seedable = candidates.find((p) => fs.existsSync(path.dirname(p)));
+  if (!seedable) {
+    console.error('Windows Terminal settings.json not found; is Windows Terminal installed?');
+    process.exit(1);
+  }
+  fs.writeFileSync(seedable, EMPTY_SETTINGS);
+  file = seedable;
 }
 
 const raw = fs.readFileSync(file, 'utf8');
