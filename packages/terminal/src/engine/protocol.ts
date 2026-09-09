@@ -88,12 +88,20 @@ export interface InputOptions {
   gainDb: number;
 }
 
+/** Opus ceilings in kbps, per direction (see lib/sdp.ts). */
+export interface AudioBitrateOptions {
+  sendKbps: number;
+  receiveKbps: number;
+}
+
 export interface JoinOptions {
   serverUrl: string;
   roomId: string;
   username: string;
   deviceSelection: AudioDeviceSelection;
   input: InputOptions;
+  bitrate: AudioBitrateOptions;
+  noiseSuppression: boolean;
   debug: boolean;
   videoEnabled: boolean;
   webcamEnabled: boolean;

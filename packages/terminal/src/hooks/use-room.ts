@@ -126,6 +126,8 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         username,
         deviceSelection,
         input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
+        bitrate: { sendKbps: s.audioSendKbps, receiveKbps: s.audioReceiveKbps },
+        noiseSuppression: s.noiseSuppression,
         debug,
         videoEnabled,
         webcamEnabled,

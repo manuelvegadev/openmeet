@@ -1,8 +1,10 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
+import { constants, setPriority } from 'node:os';
 import { join } from 'node:path';
 import type { WSMessage } from '@openmeet/shared';
 import { VU_BAR_COUNT, VU_MAX_RMS } from '../lib/audio/constants.js';
 import { type AudioDeviceSelection, AudioManager } from '../lib/audio/index.js';
+import { createNoiseSuppressor } from '../lib/audio/noise-suppression.js';
 import type { ScreenDevice } from '../lib/devices.js';
 import { diagnosticsEnabled, fileLoggingEnabled, startLoopDelayMonitor } from '../lib/diagnostics.js';
 import { CONFIG_DIR, loadSettings, saveSettings } from '../lib/settings.js';
@@ -146,6 +148,7 @@ export class RoomEngine {
     const diagnostics = diagnosticsEnabled(options.debug);
     if (diagnostics) this.openLogFile();
     const debugFn = diagnostics ? this.debugFn : undefined;
+    raiseProcessPriority(this.debugFn);
 
     const ws = new WebSocketClient(options.serverUrl, { onDebug: debugFn });
     this.ws = ws;
@@ -156,6 +159,20 @@ export class RoomEngine {
       inputChannels: options.input.channels,
       inputGainDb: options.input.gainDb,
     });
+
+    if (options.noiseSuppression) {
+      // Not awaited: loading the wasm costs ~10 ms and joining should not wait for it. The
+      // processor chain is consulted per frame, so it takes effect as soon as it is attached
+      // and the handful of frames before that simply go through unprocessed.
+      void createNoiseSuppressor().then((suppressor) => {
+        if (suppressor) {
+          audioManager.addCaptureProcessor(suppressor);
+          debugFn?.('Noise suppression: RNNoise active');
+        } else {
+          this.addEvent('Noise suppression unavailable — continuing without it', 'info');
+        }
+      });
+    }
     audioManager.setSpeakingCallback((id, speaking) => {
       this.patch({ speakingStates: { ...this.state.speakingStates, [id]: speaking } });
     });
@@ -186,6 +203,8 @@ export class RoomEngine {
       myId: '',
       audioTrack: track,
       videoTrack,
+      audioSendKbps: options.bitrate.sendKbps,
+      audioReceiveKbps: options.bitrate.receiveKbps,
       sendSignal: (msg) => ws.send(msg),
       onRemoteAudioTrack: (peerId, remoteTrack) => audioManager.addRemotePeer(peerId, remoteTrack),
       onRemoteVideoTrack: (peerId, remoteTrack, streamType) => {
@@ -434,7 +453,7 @@ export class RoomEngine {
   startScreenShare(device: ScreenDevice): void {
     const { videoManager, peerManager } = this;
     if (!videoManager || !peerManager) return;
-    if (!this.screenSource) this.screenSource = createVideoSource();
+    if (!this.screenSource) this.screenSource = createVideoSource({ isScreencast: true });
     videoManager.startScreenCapture(this.screenSource.source, device);
     peerManager.setScreenTrack(this.screenSource.track);
     this.patch({ isScreenSharing: true });
@@ -674,5 +693,25 @@ export class RoomEngine {
     };
 
     this.statsTimer = setInterval(() => void poll(), 2000);
+  }
+}
+
+/**
+ * Ask Windows to schedule this process ahead of ordinary background work.
+ *
+ * RtAudio's WASAPI thread already registers with MMCSS as "Pro Audio", but the mixing and
+ * the hand-off to WebRTC happen on this process's event loop, which is an ordinary thread —
+ * and a fullscreen game, with Game Mode deprioritizing background apps, wins against it.
+ * `PRIORITY_HIGH` maps to HIGH_PRIORITY_CLASS and needs no elevation; `PRIORITY_HIGHEST`
+ * would be silently downgraded without it. Windows only: the POSIX equivalent is a negative
+ * nice value, which requires root and would only throw.
+ */
+function raiseProcessPriority(log: (message: string) => void): void {
+  if (process.platform !== 'win32') return;
+  try {
+    setPriority(constants.priority.PRIORITY_HIGH);
+    log(`Engine process priority raised to high (pid ${process.pid})`);
+  } catch (err) {
+    log(`Engine process priority unchanged: ${err}`);
   }
 }

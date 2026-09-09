@@ -3,6 +3,7 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import type { AudioBackendPreference } from './audio/backend.js';
 import type { InputChannelPolicy } from './audio/channels.js';
+import { DEFAULT_AUDIO_KBPS } from './sdp.js';
 import type { RenderPausePolicy } from './window-state.js';
 
 /** ~/.config/openmeet on macOS/Linux, %APPDATA%\openmeet on Windows. */
@@ -28,6 +29,12 @@ export interface AppSettings {
   audioInputChannels: InputChannelPolicy;
   /** Capture gain in dB applied before sending (0 = as captured). */
   audioInputGainDb: number;
+  /** Opus ceiling in kbps for what we send. Bounds our encoder via the peer's description. */
+  audioSendKbps: number;
+  /** Opus ceiling in kbps for what peers send us. Declared in our own description. */
+  audioReceiveKbps: number;
+  /** RNNoise on the capture path. Opt-in: it is a taste call, and it costs ~0.2 ms a frame. */
+  noiseSuppression: boolean;
   /** Pause TUI rendering when the window is minimized (default) or unfocused, or never. */
   pauseRendering: RenderPausePolicy;
 }
@@ -41,6 +48,9 @@ const DEFAULTS: AppSettings = {
   audioBackend: 'auto',
   audioInputChannels: 'auto',
   audioInputGainDb: 0,
+  audioSendKbps: DEFAULT_AUDIO_KBPS,
+  audioReceiveKbps: DEFAULT_AUDIO_KBPS,
+  noiseSuppression: false,
   pauseRendering: 'minimized',
 };
 
