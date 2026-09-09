@@ -65,6 +65,7 @@ export class RoomEngine {
   private readonly fileOnlyLog = fileLoggingEnabled();
   private levelTimer: ReturnType<typeof setInterval> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
+  private statsPolls = 0;
   private visible = true;
   private stopLoopMonitor: (() => void) | null = null;
 
@@ -585,6 +586,10 @@ export class RoomEngine {
     if (this.statsTimer) return;
     let prev: PrevStatsEntry | null = null;
     const peerPrevStats = new Map<string, PeerPrevStats>();
+    /** Video byte/frame counters per (peer, direction, m-line) at the last logged sample. */
+    const videoPrev = new Map<string, { bytes: number; frames: number; ts: number }>();
+    const kbpsBetween = (bytes: number, prevBytes: number, dtSec: number) =>
+      Math.max(0, Math.round(((bytes - prevBytes) * 8) / dtSec / 1000));
 
     const poll = async () => {
       const pm = this.peerManager;
@@ -594,8 +599,10 @@ export class RoomEngine {
         if (this.state.connectionStats) this.patch({ connectionStats: null });
         prev = null;
         peerPrevStats.clear();
+        videoPrev.clear();
         return;
       }
+      const now = Date.now();
 
       let totalAudioBytesSent = 0;
       let totalAudioBytesRecv = 0;
@@ -605,6 +612,10 @@ export class RoomEngine {
       let rttCount = 0;
       const peerBytesRecv: Record<string, number> = {};
       const peerLatencyMs: Record<string, number> = {};
+      // The header's ↑/↓ are audio only. Video gets its own lines, every 10 s, because "the
+      // window never opened" has two very different causes — no packets, or packets that
+      // never decode — and only these counters tell them apart.
+      const logVideo = ++this.statsPolls % 5 === 0 && diagnosticsEnabled(this.state.debugMode);
 
       for (const peerId of peerIds) {
         const pc = pm.getConnection(peerId);
@@ -637,6 +648,38 @@ export class RoomEngine {
                 );
               }
             }
+            if (logVideo && (stat.type === 'inbound-rtp' || stat.type === 'outbound-rtp') && stat.kind === 'video') {
+              const dir = stat.type === 'inbound-rtp' ? 'in' : 'out';
+              const key = `${peerId}:${dir}:${stat.mid ?? stat.ssrc}`;
+              const bytes = (dir === 'in' ? stat.bytesReceived : stat.bytesSent) ?? 0;
+              const frames = (dir === 'in' ? stat.framesDecoded : stat.framesEncoded) ?? 0;
+              const p = videoPrev.get(key);
+              if (p) {
+                const dt = (now - p.ts) / 1000;
+                const fps = ((frames - p.frames) / dt).toFixed(1);
+                const geom = stat.frameWidth ? `${stat.frameWidth}x${stat.frameHeight}` : 'no frames yet';
+                const detail =
+                  dir === 'in'
+                    ? `packets ${stat.packetsReceived ?? 0}, decoded ${frames}, dropped ${stat.framesDropped ?? 0}, keyframes ${stat.keyFramesDecoded ?? 0}, pli sent ${stat.pliCount ?? 0}`
+                    : `packets ${stat.packetsSent ?? 0}, encoded ${frames}, sent ${stat.framesSent ?? 0}, keyframes ${stat.keyFramesEncoded ?? 0}, limited by ${stat.qualityLimitationReason ?? '?'}`;
+                this.debugFn(
+                  `Video ${dir} ${dir === 'in' ? 'from' : 'to'} ${peerId.slice(0, 6)} mid ${stat.mid ?? '?'}: ${kbpsBetween(bytes, p.bytes, dt)} kbps, ${fps} fps, ${geom}, ${detail}`,
+                );
+              }
+              videoPrev.set(key, { bytes, frames, ts: now });
+            }
+            if (
+              stat.type === 'candidate-pair' &&
+              stat.state === 'succeeded' &&
+              logVideo &&
+              stat.availableOutgoingBitrate != null
+            ) {
+              // What the bandwidth estimator thinks the link can take: a screen stream that
+              // stays at `encoded 0` with a target of 0 is starved here, not broken.
+              this.debugFn(
+                `BWE to ${peerId.slice(0, 6)}: ${Math.round(stat.availableOutgoingBitrate / 1000)} kbps available`,
+              );
+            }
             if (stat.type === 'candidate-pair' && stat.state === 'succeeded' && stat.currentRoundTripTime != null) {
               rttSum += stat.currentRoundTripTime * 1000;
               rttCount++;
@@ -661,7 +704,6 @@ export class RoomEngine {
         }
       }
 
-      const now = Date.now();
       if (prev) {
         const timeDelta = (now - prev.timestamp) / 1000;
         if (timeDelta > 0) {
@@ -670,26 +712,15 @@ export class RoomEngine {
             const prevPeer = peerPrevStats.get(peerId);
             if (prevPeer) {
               const dt = (now - prevPeer.timestamp) / 1000;
-              if (dt > 0) {
-                peerRecvBitrateKbps[peerId] = Math.max(
-                  0,
-                  Math.round(((peerBytesRecv[peerId] - prevPeer.bytesRecv) * 8) / dt / 1000),
-                );
-              }
+              if (dt > 0) peerRecvBitrateKbps[peerId] = kbpsBetween(peerBytesRecv[peerId], prevPeer.bytesRecv, dt);
             }
           }
           const newPacketsRecv = totalPacketsRecv - prev.packetsRecv;
           const newPacketsLost = totalPacketsLost - prev.packetsLost;
           const totalNew = newPacketsRecv + newPacketsLost;
           const stats: ConnectionStats = {
-            sendBitrateKbps: Math.max(
-              0,
-              Math.round(((totalAudioBytesSent - prev.audioBytesSent) * 8) / timeDelta / 1000),
-            ),
-            recvBitrateKbps: Math.max(
-              0,
-              Math.round(((totalAudioBytesRecv - prev.audioBytesRecv) * 8) / timeDelta / 1000),
-            ),
+            sendBitrateKbps: kbpsBetween(totalAudioBytesSent, prev.audioBytesSent, timeDelta),
+            recvBitrateKbps: kbpsBetween(totalAudioBytesRecv, prev.audioBytesRecv, timeDelta),
             rttMs: rttCount > 0 ? Math.round(rttSum / rttCount) : 0,
             packetLossPercent: totalNew > 0 ? Math.round((newPacketsLost / totalNew) * 1000) / 10 : 0,
             peerRecvBitrateKbps,
@@ -707,6 +738,7 @@ export class RoomEngine {
       for (const peerId of peerIds)
         peerPrevStats.set(peerId, { bytesRecv: peerBytesRecv[peerId] ?? 0, timestamp: now });
       for (const peerId of peerPrevStats.keys()) if (!peerIds.includes(peerId)) peerPrevStats.delete(peerId);
+      for (const key of videoPrev.keys()) if (!peerIds.includes(key.slice(0, key.indexOf(':')))) videoPrev.delete(key);
       prev = {
         audioBytesSent: totalAudioBytesSent,
         audioBytesRecv: totalAudioBytesRecv,
