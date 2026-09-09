@@ -30,8 +30,16 @@ jobs:
       - name: Build terminal bundle
         run: pnpm --filter openmeet-terminal build
 
+      # Skips the publish when the version is already on the registry, so a re-run (or a
+      # release published by hand) still gets its GitHub Release instead of failing.
       - name: Publish to npm
-        run: pnpm --filter openmeet-terminal publish --no-git-checks
+        run: |
+          version=$(node -p "require('./packages/terminal/package.json').version")
+          if npm view "openmeet-terminal@$version" version >/dev/null 2>&1; then
+            echo "openmeet-terminal@$version is already on npm; skipping publish"
+          else
+            pnpm --filter openmeet-terminal publish --no-git-checks
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
