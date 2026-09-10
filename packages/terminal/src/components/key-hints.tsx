@@ -1,10 +1,11 @@
+import { Box } from 'ink';
 import { theme } from '../lib/theme.js';
 import { Text } from './text.js';
 
 /**
  * Footer buttons, two-tone: the key on a gold keycap, what it does on a grey pill right
  * after it — ` m ` + ` mute ` — so a button reads as a keycap on a label rather than as a
- * gold block, and the bar stops competing with the frame. One space separates buttons — flush,
+ * gold block, and the bar stops competing with the frame. One space separates buttons: flush,
  * a run of disabled ones melts into a single grey bar.
  *
  * Colours come from lib/theme.ts, which explains why none of them are named ANSI colours.
@@ -31,17 +32,23 @@ export function KeyChip({ children }: { children: string }) {
   return <Text {...KEY} bold>{` ${children} `}</Text>;
 }
 
-/** A row of footer buttons. */
+/**
+ * A row of footer buttons, wrapping between buttons and never inside one.
+ *
+ * One `Text` for the whole row wraps where the words fall, which put ` v `` stop ` at the end
+ * of a line and `cam ` at the start of the next — half a button, its background split across
+ * two rows. Each button is its own box in a wrapping row instead, and none of them shrinks,
+ * so a row too narrow moves the whole button down.
+ */
 export function KeyHints({ hints }: { hints: KeyHint[] }) {
   return (
-    <Text>
-      {hints.map((hint, index) => (
-        <Text key={`${hint.key}-${hint.label}`}>
-          {index > 0 ? ' ' : ''}
+    <Box flexWrap="wrap" columnGap={1}>
+      {hints.map((hint) => (
+        <Box key={`${hint.key}-${hint.label}`} flexShrink={0}>
           <Text {...(hint.disabled ? OFF : KEY)} bold>{` ${hint.key} `}</Text>
           <Text {...(hint.disabled ? OFF : LABEL)}>{` ${hint.label} `}</Text>
-        </Text>
+        </Box>
       ))}
-    </Text>
+    </Box>
   );
 }
