@@ -19,7 +19,7 @@ import { type ChatEntry, ChatLog } from '../src/components/chat-log.js';
 import { KeyHints } from '../src/components/key-hints.js';
 import { ParticipantList } from '../src/components/participant-list.js';
 import { SplitPanes } from '../src/components/split-panes.js';
-import { Rule, Text } from '../src/components/text.js';
+import { Text } from '../src/components/text.js';
 import type { RoomEvent } from '../src/engine/protocol.js';
 import { NAME_PALETTE } from '../src/lib/identity.js';
 import { framedBorder, theme } from '../src/lib/theme.js';
@@ -151,7 +151,6 @@ function Demo() {
         chat={
           <>
             <ChatLog entries={entries} arrowsScroll={focused} />
-            <Rule />
             <ChatInput focused={focused} onSend={() => {}} />
           </>
         }

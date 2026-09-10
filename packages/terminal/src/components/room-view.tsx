@@ -444,7 +444,6 @@ export function RoomView({
         chat={
           <>
             <ChatLog entries={chat} arrowsScroll={inputFocused} active={!overlay} />
-            <Rule />
             <ChatInput focused={inputFocused} active={!overlay} onSend={room.sendMessage} />
           </>
         }

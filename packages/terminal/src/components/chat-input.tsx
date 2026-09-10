@@ -1,8 +1,8 @@
 import { Box, useInput } from 'ink';
 import { useEffect, useRef, useState } from 'react';
 import { theme } from '../lib/theme.js';
-import { type KeyHint, KeyHints } from './key-hints.js';
-import { Text } from './text.js';
+import { KeyHints } from './key-hints.js';
+import { Rule, Text } from './text.js';
 import { TextInput } from './text-input.js';
 
 interface ChatInputProps {
@@ -16,11 +16,17 @@ interface ChatInputProps {
 const CLEAR_ARM_MS = 2000;
 
 /**
- * The chat's row: the prompt, what you are typing, and the chat's own keys on the right —
- * `tab` to hand the keyboard back and forth, and, once there is a draft, Escape twice to
- * throw it away rather than holding backspace down a long message. Two presses because one
- * would make a stray Escape cost you the message; the same reason the room asks for `q`
- * twice before leaving.
+ * The chat's composer: its rule, and under it the prompt, what you are typing, and `tab` to
+ * hand the keyboard back and forth.
+ *
+ * Escape twice throws the draft away — better than holding backspace down a long message —
+ * and two presses because one stray Escape should not cost you what you wrote. The offer only
+ * appears once you have pressed it: a chip sitting in the row permanently would take a fifth
+ * of the width to advertise a key you rarely want, so the first press puts a line above the
+ * rule instead, and it goes away with the arming.
+ *
+ * The rule belongs to this component because that line is where the notice goes; the room
+ * just places the composer under the conversation.
  */
 export function ChatInput({ focused, active = true, onSend }: ChatInputProps) {
   const [value, setValue] = useState('');
@@ -53,36 +59,48 @@ export function ChatInput({ focused, active = true, onSend }: ChatInputProps) {
     { isActive: active && focused },
   );
 
-  const hints: KeyHint[] = [{ key: 'tab', label: focused ? 'controls' : 'chat' }];
-  if (focused && value) hints.push({ key: 'esc esc', label: armed ? 'again to clear' : 'clear' });
-
   return (
-    <Box paddingX={1} justifyContent="space-between" gap={1}>
-      <Box>
-        <Text bold color={focused ? theme.ok : theme.muted}>
-          {'> '}
-        </Text>
-        {focused ? (
-          <TextInput
-            focus={active}
-            value={value}
-            onChange={(next) => {
-              setValue(next);
-              setArmed(false);
-            }}
-            onSubmit={(val) => {
-              if (val.trim()) {
-                onSend(val);
-                setValue('');
-              }
-            }}
-            placeholder="Type message..."
-          />
-        ) : (
-          <Text dimColor>Type message...</Text>
-        )}
+    <>
+      {armed && (
+        <Box paddingX={1} justifyContent="flex-end">
+          <Text dimColor>esc again to clear</Text>
+        </Box>
+      )}
+      <Rule />
+      <Box paddingX={1}>
+        {/* Never shrinks: squeezed to one column, the prompt loses the space after it and the
+            message starts against the `>`. */}
+        <Box flexShrink={0}>
+          <Text bold color={focused ? theme.ok : theme.muted}>
+            {'> '}
+          </Text>
+        </Box>
+        <Box flexGrow={1} flexShrink={1}>
+          {focused ? (
+            <TextInput
+              focus={active}
+              value={value}
+              onChange={(next) => {
+                setValue(next);
+                setArmed(false);
+              }}
+              onSubmit={(val) => {
+                if (val.trim()) {
+                  onSend(val);
+                  setValue('');
+                }
+              }}
+              placeholder="Type message..."
+            />
+          ) : (
+            // Unfocused, the draft stays on screen — it is still there when you come back.
+            <Text dimColor>{value || 'Type message...'}</Text>
+          )}
+        </Box>
+        <Box flexShrink={0} marginLeft={1}>
+          <KeyHints hints={[{ key: 'tab', label: focused ? 'controls' : 'chat' }]} />
+        </Box>
       </Box>
-      <KeyHints hints={hints} />
-    </Box>
+    </>
   );
 }
