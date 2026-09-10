@@ -20,7 +20,7 @@ import { Screen } from './screen.js';
 import { Select } from './select.js';
 import { SplitPanes } from './split-panes.js';
 import { MyActions, PeerActions, type PeerWindowAction, RoomBar } from './status-bar.js';
-import { Rule, Text } from './text.js';
+import { Divider, Rule, Text } from './text.js';
 
 interface RoomViewProps {
   serverUrl: string;
@@ -487,7 +487,8 @@ export function RoomView({
             )}
             {/* Pinned to the bottom of the pane: on a short terminal the list gives way first. */}
             <Box flexGrow={1} />
-            <Box paddingX={1}>
+            <Box paddingX={1} flexDirection={'column'}>
+              <Divider />
               <PeerActions
                 hasPeers={room.participants.length > 0}
                 videoEnabled={room.videoEnabled}

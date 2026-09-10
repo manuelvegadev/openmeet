@@ -8,7 +8,7 @@ import { NAME_MAX_CELLS } from '../lib/identity.js';
 import { theme } from '../lib/theme.js';
 import { VuMeter } from './level-bar.js';
 import { Name } from './name.js';
-import { Divider, POINTER, Pointer, Text } from './text.js';
+import { Divider, POINTER, Pointer, Rule, Text } from './text.js';
 
 /**
  * The column's width, from the widest line it can ever hold, so nothing wraps and the chat
@@ -95,64 +95,73 @@ export function ParticipantList({
   const localSpeaking = speakingStates.__local__ && !isMuted;
 
   return (
-    <Box flexDirection="column" paddingX={PADDING}>
-      <Box justifyContent="space-between">
-        <Text>
-          <Text color={localSpeaking ? theme.ok : theme.text}>{localSpeaking ? '● ' : '○ '}</Text>
-          <Name name={username} color={color} />
-          {/* Your own tags are always lower: there is no watching yourself. */}
-          {(isMuted || (videoEnabled && !isVideoMuted) || isScreenSharing) && <Text> </Text>}
-          {isMuted && <Tag letter={TAG.muted} color={theme.warn} />}
-          {videoEnabled && !isVideoMuted && <Tag letter={TAG.cam} color={theme.accentAlt} />}
-          {isScreenSharing && <Tag letter={TAG.scr} color={theme.info} />}
-        </Text>
-        <Text>
-          {connectionStats && <Text dimColor>↑{connectionStats.sendBitrateKbps}k </Text>}
-          <VuMeter level={audioLevels.__local__ ?? 0} />
-        </Text>
+    // No padding on the column itself: the `Rule` below has to bleed past the pane to land on
+    // the panes' divider and the frame, and a padding here would cancel exactly that bleed.
+    // The rows carry it instead.
+    <Box flexDirection="column">
+      <Box flexDirection="column" paddingX={PADDING}>
+        <Box justifyContent="space-between">
+          <Text>
+            <Text color={localSpeaking ? theme.ok : theme.text}>{localSpeaking ? '● ' : '○ '}</Text>
+            <Name name={username} color={color} />
+            {/* Your own tags are always lower: there is no watching yourself. */}
+            {(isMuted || (videoEnabled && !isVideoMuted) || isScreenSharing) && <Text> </Text>}
+            {isMuted && <Tag letter={TAG.muted} color={theme.warn} />}
+            {videoEnabled && !isVideoMuted && <Tag letter={TAG.cam} color={theme.accentAlt} />}
+            {isScreenSharing && <Tag letter={TAG.scr} color={theme.info} />}
+          </Text>
+          <Text>
+            {connectionStats && <Text dimColor>↑{connectionStats.sendBitrateKbps}k </Text>}
+            <VuMeter level={audioLevels.__local__ ?? 0} />
+          </Text>
+        </Box>
+        {/* Inside the padding, so it groups your row with your keys rather than reading as a
+            break across the room. */}
+        <Divider />
+        {myActions}
       </Box>
-      {myActions}
-      {/* Deliberately a `Divider` and not a `Rule`: this separates you from the rest inside
-          the column, so it stays clear of the frame and the panes' divider. */}
-      <Divider />
-      {participants.map((p, idx) => {
-        const speaking = speakingStates[p.id] && !remoteMuteStates[p.id];
-        const isSelected = idx === selectedPeerIdx;
-        const level = audioLevels[p.id] ?? 0;
-        const vol = peerVolumes[p.id] ?? 1;
-        const peerRecvKbps = connectionStats?.peerRecvBitrateKbps[p.id];
-        const latency = connectionStats?.peerLatencyMs[p.id];
-        const latencyColor =
-          latency != null ? (latency > 150 ? theme.danger : latency > 80 ? theme.warn : undefined) : undefined;
-        return (
-          <Box key={p.id} justifyContent="space-between">
-            <Text>
-              <Text color={speaking ? theme.ok : theme.text}>{speaking ? '● ' : '○ '}</Text>
-              <Pointer on={isSelected} /> <Name name={p.username} color={p.color} />
-              {(remoteMuteStates[p.id] || remoteVideoMuteStates[p.id] === false || remoteScreenShareStates[p.id]) && (
-                <Text> </Text>
-              )}
-              {remoteMuteStates[p.id] && <Tag letter={TAG.muted} color={theme.warn} />}
-              {remoteVideoMuteStates[p.id] === false && (
-                <Tag letter={TAG.cam} color={theme.accentAlt} watching={peerVideoOpen[p.id]} />
-              )}
-              {remoteScreenShareStates[p.id] && (
-                <Tag letter={TAG.scr} color={theme.info} watching={peerScreenOpen[p.id]} />
-              )}
-            </Text>
-            <Text>
-              {peerRecvKbps !== undefined && <Text dimColor>↓{peerRecvKbps}k </Text>}
-              {latency != null && (
-                <Text dimColor={latencyColor == null} color={latencyColor}>
-                  ~{latency}ms{' '}
-                </Text>
-              )}
-              {vol !== 1 && <Text dimColor>{Math.round(vol * 100)}% </Text>}
-              <VuMeter level={level} volume={vol} />
-            </Text>
-          </Box>
-        );
-      })}
+      {/* Outside it, so its `├` and `┤` land on the divider and the frame: you, then everyone else. */}
+      <Rule />
+      <Box flexDirection="column" paddingX={PADDING}>
+        {participants.map((p, idx) => {
+          const speaking = speakingStates[p.id] && !remoteMuteStates[p.id];
+          const isSelected = idx === selectedPeerIdx;
+          const level = audioLevels[p.id] ?? 0;
+          const vol = peerVolumes[p.id] ?? 1;
+          const peerRecvKbps = connectionStats?.peerRecvBitrateKbps[p.id];
+          const latency = connectionStats?.peerLatencyMs[p.id];
+          const latencyColor =
+            latency != null ? (latency > 150 ? theme.danger : latency > 80 ? theme.warn : undefined) : undefined;
+          return (
+            <Box key={p.id} justifyContent="space-between">
+              <Text>
+                <Text color={speaking ? theme.ok : theme.text}>{speaking ? '● ' : '○ '}</Text>
+                <Pointer on={isSelected} /> <Name name={p.username} color={p.color} />
+                {(remoteMuteStates[p.id] || remoteVideoMuteStates[p.id] === false || remoteScreenShareStates[p.id]) && (
+                  <Text> </Text>
+                )}
+                {remoteMuteStates[p.id] && <Tag letter={TAG.muted} color={theme.warn} />}
+                {remoteVideoMuteStates[p.id] === false && (
+                  <Tag letter={TAG.cam} color={theme.accentAlt} watching={peerVideoOpen[p.id]} />
+                )}
+                {remoteScreenShareStates[p.id] && (
+                  <Tag letter={TAG.scr} color={theme.info} watching={peerScreenOpen[p.id]} />
+                )}
+              </Text>
+              <Text>
+                {peerRecvKbps !== undefined && <Text dimColor>↓{peerRecvKbps}k </Text>}
+                {latency != null && (
+                  <Text dimColor={latencyColor == null} color={latencyColor}>
+                    ~{latency}ms{' '}
+                  </Text>
+                )}
+                {vol !== 1 && <Text dimColor>{Math.round(vol * 100)}% </Text>}
+                <VuMeter level={level} volume={vol} />
+              </Text>
+            </Box>
+          );
+        })}
+      </Box>
     </Box>
   );
 }
