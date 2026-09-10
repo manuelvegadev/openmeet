@@ -3,11 +3,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from '../engine/client.js';
 import { useRoom } from '../hooks/use-room.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
-import { listScreenDevices, prefetchScreenDevices, type ScreenDevice } from '../lib/devices.js';
+import {
+  listScreenDevices,
+  listVideoDevices,
+  prefetchScreenDevices,
+  type ScreenDevice,
+  type VideoDevice,
+} from '../lib/devices.js';
 import type { Identity } from '../lib/identity.js';
 import { getPlatformSupport } from '../lib/platform.js';
-import { saveSettings } from '../lib/settings.js';
+import { loadSettings, saveSettings } from '../lib/settings.js';
 import { theme } from '../lib/theme.js';
+import { CameraPicker } from './camera-picker.js';
 import { ChatInput } from './chat-input.js';
 import { ChatLog, mergeChat } from './chat-log.js';
 import { DebugLog } from './debug-log.js';
@@ -19,7 +26,7 @@ import { ParticipantList } from './participant-list.js';
 import { Screen } from './screen.js';
 import { Select } from './select.js';
 import { SplitPanes } from './split-panes.js';
-import { MyActions, PeerActions, type PeerWindowAction, RoomBar } from './status-bar.js';
+import { MyActions, PeerActions, type PeerWindowAction } from './status-bar.js';
 import { Divider, Rule, Text } from './text.js';
 
 interface RoomViewProps {
@@ -82,6 +89,7 @@ export function RoomView({
   const [micLevel, setMicLevel] = useState(0);
   const [selectedPeerIdx, setSelectedPeerIdx] = useState(0);
   const [screenPickerOpen, setScreenPickerOpen] = useState(false);
+  const [cameraList, setCameraList] = useState<VideoDevice[] | null>(null);
   // Leaving takes two presses of `q`: one key should not end a call by accident. The home
   // screen asks the same way before quitting.
   const [leaveArmed, setLeaveArmed] = useState(false);
@@ -152,13 +160,12 @@ export function RoomView({
   };
 
   useInput((input, key) => {
-    // Screen picker open — only Escape to cancel
+    // A modal is up: it answers its own keys (see `Modal`), the room answers none.
     if (screenPickerOpen) {
-      if (key.escape) {
-        setScreenPickerOpen(false);
-      }
+      if (key.escape) setScreenPickerOpen(false);
       return;
     }
+    if (cameraList) return;
 
     // Device picker open — handle its keybindings
     if (deviceStep && deviceStep !== 'loading') {
@@ -204,13 +211,22 @@ export function RoomView({
         room.toggleMute();
       }
       if (input === 'v' && room.webcamEnabled) {
-        room.toggleVideo();
+        // On: turn it off. Off: ask which camera, the way `s` asks which screen — and let go
+        // of the device first, so the picker can preview one (a camera opens once on macOS).
+        if (!room.isVideoMuted) {
+          room.toggleVideo();
+        } else {
+          const cameras = listVideoDevices();
+          if (cameras.length > 1) {
+            room.setVideoDevice(null);
+            setCameraList(cameras);
+          } else {
+            room.toggleVideo();
+          }
+        }
       }
       if (input === 'd') {
         setDeviceStep('loading');
-      }
-      if (input === 'o') {
-        room.toggleOverlay();
       }
       if (input === 's' && room.videoEnabled) {
         if (room.isScreenSharing) {
@@ -361,7 +377,7 @@ export function RoomView({
   }
 
   // A modal is up: the room stays drawn behind it, but nothing in it may take a key.
-  const overlay = screenPickerOpen && screenDeviceList.length > 0;
+  const overlay = (screenPickerOpen && screenDeviceList.length > 0) || cameraList !== null;
 
   // What `w` and `e` would do to the selected peer right now. These duplicate the conditions
   // in the key handlers above — deliberately, and they have to be kept in step: a button that
@@ -385,6 +401,8 @@ export function RoomView({
           <Text bold color={theme.accent}>
             OpenMeet <Text dimColor>v{version}</Text> <Text dimColor>({platformName})</Text>
           </Text>
+          {/* `g` toggles the debug panel and is deliberately not drawn: it is for whoever is
+              debugging the app, not for whoever is in the call. */}
           <KeyHints hints={[{ key: 'q', label: leaveArmed ? 'again to leave' : 'leave', disabled: inputFocused }]} />
           <Text dimColor>|</Text>
           <Text>
@@ -500,14 +518,28 @@ export function RoomView({
         }
       />
 
-      {/* The room's own settings; what acts on people is drawn beside them. */}
-      <RoomBar debugMode={room.debugMode} inputFocused={inputFocused} />
-
       {/* Error */}
       {room.error && (
         <Box paddingX={1}>
           <Text color={theme.danger}>Error: {room.error}</Text>
         </Box>
+      )}
+
+      {cameraList && (
+        <CameraPicker
+          cameras={cameraList}
+          current={loadSettings().videoDeviceId}
+          onSelect={(device) => {
+            setCameraList(null);
+            room.setVideoDevice(device.id);
+            room.toggleVideo();
+          }}
+          onCancel={() => {
+            setCameraList(null);
+            // Hand the camera back to the capture, still off, exactly as it was.
+            room.setVideoDevice(loadSettings().videoDeviceId);
+          }}
+        />
       )}
 
       {/* Over the room, not instead of it: the conversation stays visible behind the choice. */}

@@ -1,4 +1,3 @@
-import { Box } from 'ink';
 import { type KeyHint, KeyHints } from './key-hints.js';
 
 /** What pressing the key would do to that peer's window, or null when it would do nothing. */
@@ -30,7 +29,11 @@ interface MyActionsProps {
   inputFocused?: boolean;
 }
 
-/** What you do to your own microphone, camera and screen. Sits under your row in the list. */
+/**
+ * What you do to your own microphone, camera and screen — including which devices they use:
+ * `d` swaps the microphone and speakers without leaving the room, and `v` asks which camera.
+ * Sits under your row in the list.
+ */
 export function MyActions({
   isMuted,
   isVideoMuted,
@@ -39,9 +42,13 @@ export function MyActions({
   isScreenSharing,
   inputFocused = false,
 }: MyActionsProps) {
-  const hints: KeyHint[] = [{ key: 'm', label: isMuted ? 'unmute' : 'mute' }];
-  if (videoEnabled) hints.push({ key: 's', label: isScreenSharing ? 'stop sharing' : 'share screen' });
-  if (webcamEnabled) hints.push({ key: 'v', label: isVideoMuted ? 'share cam' : 'stop cam' });
+  // Short labels: with `d` alongside them the row is within a column of its limit.
+  const hints: KeyHint[] = [
+    { key: 'm', label: isMuted ? 'unmute' : 'mute' },
+    { key: 'd', label: 'devices' },
+  ];
+  if (videoEnabled) hints.push({ key: 's', label: isScreenSharing ? 'stop share' : 'share' });
+  if (webcamEnabled) hints.push({ key: 'v', label: isVideoMuted ? 'cam' : 'stop cam' });
 
   return <KeyHints hints={row(hints, inputFocused)} />;
 }
@@ -80,24 +87,4 @@ export function PeerActions({
   }
 
   return <KeyHints hints={row(hints, inputFocused)} />;
-}
-
-interface RoomBarProps {
-  debugMode?: boolean;
-  inputFocused?: boolean;
-}
-
-/** The room's own settings, along the bottom. `d` and `o` used to work without being drawn. */
-export function RoomBar({ debugMode = false, inputFocused = false }: RoomBarProps) {
-  const hints: KeyHint[] = [
-    { key: 'd', label: 'devices' },
-    { key: 'o', label: 'overlay' },
-    { key: 'g', label: debugMode ? 'hide debug' : 'debug' },
-  ];
-
-  return (
-    <Box paddingX={1}>
-      <KeyHints hints={row(hints, inputFocused)} />
-    </Box>
-  );
 }

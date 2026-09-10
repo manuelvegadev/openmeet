@@ -22,8 +22,9 @@ const CLEAR_ARM_MS = 2000;
  * Escape twice throws the draft away — better than holding backspace down a long message —
  * and two presses because one stray Escape should not cost you what you wrote. The offer only
  * appears once you have pressed it: a chip sitting in the row permanently would take a fifth
- * of the width to advertise a key you rarely want, so the first press puts a line above the
- * rule instead, and it goes away with the arming.
+ * of the width to advertise a key you rarely want, so the first press writes it on the line
+ * above the rule instead. That line is always there, empty when nothing is armed, so the
+ * conversation does not jump when it comes and goes.
  *
  * The rule belongs to this component because that line is where the notice goes; the room
  * just places the composer under the conversation.
@@ -61,11 +62,11 @@ export function ChatInput({ focused, active = true, onSend }: ChatInputProps) {
 
   return (
     <>
-      {armed && (
-        <Box paddingX={1} justifyContent="flex-end">
-          <Text dimColor>esc again to clear</Text>
-        </Box>
-      )}
+      {/* The row is always here, empty until armed: appearing and disappearing would push the
+          conversation up and down under the reader. */}
+      <Box height={1} flexShrink={0} paddingX={1} justifyContent="flex-end">
+        {armed ? <Text dimColor>esc again to clear</Text> : null}
+      </Box>
       <Rule />
       <Box paddingX={1}>
         {/* Never shrinks: squeezed to one column, the prompt loses the space after it and the

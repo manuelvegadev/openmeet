@@ -95,6 +95,7 @@ export function Divider() {
       borderLeft={false}
       borderRight={false}
       {...framedBorder}
+      borderColor={theme.surface}
     />
   );
 }
