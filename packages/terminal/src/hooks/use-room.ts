@@ -22,9 +22,11 @@ interface UseRoomOptions {
   serverUrl: string;
   roomId: string;
   username: string;
+  color: string;
   deviceSelection: AudioDeviceSelection;
   debug?: boolean;
   videoEnabled?: boolean;
+  videoDisabledReason?: string;
   webcamEnabled?: boolean;
   videoDevice?: string;
 }
@@ -35,6 +37,8 @@ interface UseRoomReturn extends RoomState {
   sendMessage: (content: string) => void;
   toggleMute: () => void;
   toggleVideo: () => void;
+  /** The camera picker chose one: use it and turn the camera on (see `EngineCommand`). */
+  shareCamera: (device: string) => void;
   toggleOverlay: () => void;
   startScreenSharing: (device: ScreenDevice) => void;
   stopScreenSharing: () => void;
@@ -51,9 +55,11 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     serverUrl,
     roomId,
     username,
+    color,
     deviceSelection,
     debug = false,
     videoEnabled = false,
+    videoDisabledReason,
     webcamEnabled = false,
     videoDevice,
   } = options;
@@ -124,10 +130,19 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         serverUrl,
         roomId,
         username,
+        color,
         deviceSelection,
         input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
+        bitrate: {
+          sendKbps: s.audioSendKbps,
+          receiveKbps: s.audioReceiveKbps,
+          screenSendKbps: s.screenSendKbps,
+          screenReceiveKbps: s.screenReceiveKbps,
+        },
+        noiseSuppression: s.noiseSuppression,
         debug,
         videoEnabled,
+        videoDisabledReason,
         webcamEnabled,
         videoDevice,
       },
@@ -141,7 +156,19 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         engine.send({ type: 'leave' });
       }
     };
-  }, [engine, serverUrl, roomId, username, deviceSelection, debug, videoEnabled, webcamEnabled, videoDevice]);
+  }, [
+    engine,
+    serverUrl,
+    roomId,
+    username,
+    color,
+    deviceSelection,
+    debug,
+    videoEnabled,
+    videoDisabledReason,
+    webcamEnabled,
+    videoDevice,
+  ]);
 
   // Diagnostics for *this* process (loop stalls, render cost), logged through the engine
   // so both processes end up in one file.
@@ -162,6 +189,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   const sendMessage = useCallback((content: string) => engine.send({ type: 'send-chat', content }), [engine]);
   const toggleMute = useCallback(() => engine.send({ type: 'toggle-mute' }), [engine]);
   const toggleVideo = useCallback(() => engine.send({ type: 'toggle-video' }), [engine]);
+  const shareCamera = useCallback((device: string) => engine.send({ type: 'share-camera', device }), [engine]);
   const toggleOverlay = useCallback(() => engine.send({ type: 'toggle-overlay' }), [engine]);
   const startScreenSharing = useCallback(
     (device: ScreenDevice) => engine.send({ type: 'start-screen-share', device }),
@@ -197,6 +225,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     sendMessage,
     toggleMute,
     toggleVideo,
+    shareCamera,
     toggleOverlay,
     startScreenSharing,
     stopScreenSharing,

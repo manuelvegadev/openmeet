@@ -1,12 +1,21 @@
-import { Box, Text, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
+import { Box, useInput } from 'ink';
 import { useEffect, useState } from 'react';
 import { type AudioDevice, listAudioDevices } from '../engine/client.js';
 import { INPUT_CHANNEL_POLICIES } from '../lib/audio/channels.js';
+import { isBroadcastDevice, resolveBroadcastDefault } from '../lib/audio/nvidia-broadcast.js';
 import { listVideoDevices, type VideoDevice } from '../lib/devices.js';
+import { bracketed } from '../lib/identity.js';
 import { getPlatformSupport } from '../lib/platform.js';
+import { AUDIO_KBPS_STEPS, SCREEN_KBPS_STEPS } from '../lib/sdp.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
+import { theme } from '../lib/theme.js';
 import { RENDER_PAUSE_POLICIES } from '../lib/window-state.js';
+import { BroadcastHint, inputPickerItems, SYSTEM_DEFAULT_ITEM } from './broadcast.js';
+import type { KeyHint } from './key-hints.js';
+import { ProfileSetup } from './profile-setup.js';
+import { Screen } from './screen.js';
+import { Select } from './select.js';
+import { Pointer, Text } from './text.js';
 
 interface SettingsViewProps {
   onBack: () => void;
@@ -14,13 +23,26 @@ interface SettingsViewProps {
 
 const webcamSupported = getPlatformSupport().webcam;
 
-type Step = 'menu' | 'pick-input' | 'pick-output' | 'pick-camera';
+type Picker = 'pick-input' | 'pick-output' | 'pick-camera';
+type Step = 'menu' | 'profile' | Picker;
+
+const PICK_HINTS: KeyHint[] = [
+  { key: '↑↓', label: 'navigate' },
+  { key: 'enter', label: 'select' },
+  { key: 'esc', label: 'cancel' },
+];
+const DEFAULT = SYSTEM_DEFAULT_ITEM.value;
 
 interface SettingRow {
   key: string;
   label: string;
   value: string;
-  action: 'pick-input' | 'pick-output' | 'pick-camera' | 'toggle-overlay' | 'cycle-channels' | 'cycle-pause';
+  /** Draw the value in this colour rather than the text colour: the name row, in the name's colour. */
+  valueColor?: string;
+  /** What Enter does on this row. */
+  run: () => void;
+  /** Shown, but not actionable: something else already owns the choice. */
+  disabled?: boolean;
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
@@ -45,6 +67,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const inputName = settings.audioInputId
     ? (devices.inputs.find((d) => d.id === settings.audioInputId)?.name ?? 'Unknown')
     : 'System Default';
+  // What the engine will actually open, so the rows below describe the call you would get.
+  const selectedInput = resolveBroadcastDefault(
+    settings.audioInputId ? devices.inputs.find((d) => d.id === settings.audioInputId) : undefined,
+    devices.inputs,
+  );
+  const broadcastActive = isBroadcastDevice(selectedInput);
   const outputName = settings.audioOutputId
     ? (devices.outputs.find((d) => d.id === settings.audioOutputId)?.name ?? 'Unknown')
     : 'System Default';
@@ -53,22 +81,11 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     ? (videoDevices.find((d) => d.id === settings.videoDeviceId)?.name ?? `Device ${settings.videoDeviceId}`)
     : 'Default (0)';
 
-  const allRows: SettingRow[] = [
-    { key: 'input', label: 'Audio Input', value: inputName, action: 'pick-input' },
-    { key: 'output', label: 'Audio Output', value: outputName, action: 'pick-output' },
-    { key: 'camera', label: 'Camera', value: cameraName, action: 'pick-camera' },
-    { key: 'overlay', label: 'Video Overlay', value: settings.videoOverlay ? 'On' : 'Off', action: 'toggle-overlay' },
-    { key: 'channels', label: 'Mic Channels', value: settings.audioInputChannels, action: 'cycle-channels' },
-    {
-      key: 'pause',
-      label: 'Pause Rendering',
-      value: `when ${settings.pauseRendering} (applies on next start)`,
-      action: 'cycle-pause',
-    },
-  ];
-  const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
   const cycle = <T extends string>(list: readonly T[], current: T): T =>
     list[(list.indexOf(current) + 1) % list.length];
+  /** Same idea for the bitrate steps, where the saved value may not be one of them. */
+  const cycleNumber = (list: readonly number[], current: number): number =>
+    list[(list.findIndex((v) => v >= current) + 1) % list.length];
 
   const update = (patch: Partial<AppSettings>) => {
     const next = { ...settings, ...patch };
@@ -76,9 +93,98 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     setSettings(next);
   };
 
+  const name = settings.name ?? '';
+  const color = settings.color ?? undefined;
+  const allRows: SettingRow[] = [
+    // Name and colour together: the same two screens as the first start, with the colour
+    // picked on the name itself.
+    { key: 'profile', label: 'Profile', value: bracketed(name), valueColor: color, run: () => setStep('profile') },
+    { key: 'input', label: 'Audio Input', value: inputName, run: () => setStep('pick-input') },
+    { key: 'output', label: 'Audio Output', value: outputName, run: () => setStep('pick-output') },
+    { key: 'camera', label: 'Camera', value: cameraName, run: () => setStep('pick-camera') },
+    {
+      key: 'overlay',
+      label: 'Video Overlay',
+      value: settings.videoOverlay ? 'On' : 'Off',
+      run: () => update({ videoOverlay: !settings.videoOverlay }),
+    },
+    {
+      key: 'channels',
+      label: 'Mic Channels',
+      value: settings.audioInputChannels,
+      run: () => update({ audioInputChannels: cycle(INPUT_CHANNEL_POLICIES, settings.audioInputChannels) }),
+    },
+    {
+      key: 'noise',
+      // Broadcast cleans the signal before any API we control ever sees it, so RNNoise on top
+      // would only spend 0.22 ms a frame denoising what is already denoised.
+      label: 'Noise Suppression',
+      value: broadcastActive ? 'NVIDIA Broadcast (GPU)' : settings.noiseSuppression ? 'On (RNNoise, CPU)' : 'Off',
+      run: () => update({ noiseSuppression: !settings.noiseSuppression }),
+      disabled: broadcastActive,
+    },
+    {
+      key: 'send-kbps',
+      label: 'Audio Send',
+      value: `${settings.audioSendKbps} kbps (applies on next join)`,
+      run: () => update({ audioSendKbps: cycleNumber(AUDIO_KBPS_STEPS, settings.audioSendKbps) }),
+    },
+    {
+      key: 'receive-kbps',
+      label: 'Audio Receive',
+      value: `${settings.audioReceiveKbps} kbps (applies on next join)`,
+      run: () => update({ audioReceiveKbps: cycleNumber(AUDIO_KBPS_STEPS, settings.audioReceiveKbps) }),
+    },
+    {
+      key: 'screen-send-kbps',
+      label: 'Screen Send',
+      value: `${settings.screenSendKbps} kbps per peer at 1080p (applies on next join)`,
+      run: () => update({ screenSendKbps: cycleNumber(SCREEN_KBPS_STEPS, settings.screenSendKbps) }),
+    },
+    {
+      key: 'screen-receive-kbps',
+      label: 'Screen Receive',
+      value: `${settings.screenReceiveKbps} kbps from each peer (applies on next join)`,
+      run: () => update({ screenReceiveKbps: cycleNumber(SCREEN_KBPS_STEPS, settings.screenReceiveKbps) }),
+    },
+    {
+      key: 'pause',
+      label: 'Pause Rendering',
+      value: `when ${settings.pauseRendering} (applies on next start)`,
+      run: () => update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) }),
+    },
+  ];
+  const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
+
+  /** The three device pickers: one screen, three tables. */
+  const PICKERS: Record<
+    Picker,
+    { title: string; items: () => { label: string; value: string }[]; apply: (v: string) => void }
+  > = {
+    'pick-input': {
+      title: 'Audio Input',
+      items: () => inputPickerItems(devices.inputs),
+      apply: (v) => update({ audioInputId: v === DEFAULT ? null : v, devicesConfigured: true }),
+    },
+    'pick-output': {
+      title: 'Audio Output',
+      items: () => [SYSTEM_DEFAULT_ITEM, ...devices.outputs.map((d) => ({ label: d.name, value: d.id }))],
+      apply: (v) => update({ audioOutputId: v === DEFAULT ? null : v, devicesConfigured: true }),
+    },
+    'pick-camera': {
+      title: 'Camera',
+      items: () => [
+        { label: 'Default (0)', value: DEFAULT },
+        ...videoDevices.map((d) => ({ label: `[${d.id}] ${d.name}`, value: d.id })),
+      ],
+      apply: (v) => update({ videoDeviceId: v === DEFAULT ? null : v }),
+    },
+  };
+
   useInput((_input, key) => {
     if (step !== 'menu') {
-      if (key.escape) setStep('menu');
+      // ProfileSetup owns Escape on its two steps (back to the name, then out).
+      if (key.escape && step !== 'profile') setStep('menu');
       return;
     }
 
@@ -96,98 +202,35 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
     if (key.return) {
       const row = rows[selectedIdx];
-      if (row.action === 'toggle-overlay') {
-        update({ videoOverlay: !settings.videoOverlay });
-      } else if (row.action === 'cycle-channels') {
-        update({ audioInputChannels: cycle(INPUT_CHANNEL_POLICIES, settings.audioInputChannels) });
-      } else if (row.action === 'cycle-pause') {
-        update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) });
-      } else if (row.action === 'pick-input') {
-        setStep('pick-input');
-      } else if (row.action === 'pick-output') {
-        setStep('pick-output');
-      } else if (row.action === 'pick-camera') {
-        setStep('pick-camera');
-      }
+      if (!row.disabled) row.run();
     }
   });
 
-  // Device selection sub-screens
-  if (step === 'pick-input') {
-    const items = [
-      { label: 'System Default', value: '__default__' },
-      ...devices.inputs.map((d) => ({ label: d.name, value: d.id })),
-    ];
+  if (step === 'profile') {
     return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
-          Settings {'>'} Audio Input
-        </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
-        <SelectInput
-          items={items}
-          onSelect={(item) => {
-            update({ audioInputId: item.value === '__default__' ? null : item.value, devicesConfigured: true });
-            setStep('menu');
-          }}
-        />
-        <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
-      </Box>
+      <ProfileSetup
+        initial={color ? { name, color } : null}
+        onDone={(id) => {
+          update(id);
+          setStep('menu');
+        }}
+        onCancel={() => setStep('menu')}
+      />
     );
   }
 
-  if (step === 'pick-output') {
-    const items = [
-      { label: 'System Default', value: '__default__' },
-      ...devices.outputs.map((d) => ({ label: d.name, value: d.id })),
-    ];
+  if (step !== 'menu') {
+    const picker = PICKERS[step];
     return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
-          Settings {'>'} Audio Output
-        </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
-        <SelectInput
-          items={items}
+      <Screen title={`Settings > ${picker.title}`} hints={PICK_HINTS}>
+        <Select
+          items={picker.items()}
           onSelect={(item) => {
-            update({ audioOutputId: item.value === '__default__' ? null : item.value, devicesConfigured: true });
+            picker.apply(item.value);
             setStep('menu');
           }}
         />
-        <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
-      </Box>
-    );
-  }
-
-  if (step === 'pick-camera') {
-    const items = [
-      { label: 'Default (0)', value: '__default__' },
-      ...videoDevices.map((d) => ({ label: `[${d.id}] ${d.name}`, value: d.id })),
-    ];
-    return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
-          Settings {'>'} Camera
-        </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
-        <SelectInput
-          items={items}
-          onSelect={(item) => {
-            update({ videoDeviceId: item.value === '__default__' ? null : item.value });
-            setStep('menu');
-          }}
-        />
-        <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
-      </Box>
+      </Screen>
     );
   }
 
@@ -195,33 +238,37 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const labelWidth = 18;
 
   return (
-    <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-      <Text bold color="blue">
-        Settings
-      </Text>
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
-
+    <Screen
+      title="Settings"
+      hints={[
+        { key: '↑↓', label: 'navigate' },
+        { key: 'enter', label: 'change' },
+        { key: 'esc', label: 'back' },
+      ]}
+    >
       {!devicesLoaded ? (
-        <Text color="yellow">Loading devices...</Text>
+        <Text color={theme.warn}>Loading devices...</Text>
       ) : (
         <Box flexDirection="column">
           {rows.map((row, idx) => {
             const selected = idx === selectedIdx;
             return (
               <Box key={row.key} gap={1}>
-                <Text color={selected ? 'blue' : undefined}>{selected ? '▸' : ' '}</Text>
+                <Pointer on={selected} />
                 <Text bold={selected}>{row.label.padEnd(labelWidth)}</Text>
-                <Text color={selected ? 'white' : 'gray'}>{row.value}</Text>
+                {/* A disabled row stays muted even when selected: enter does nothing on it. */}
+                <Text color={row.valueColor ?? (selected && !row.disabled ? theme.text : theme.muted)}>
+                  {row.value}
+                </Text>
               </Box>
             );
           })}
         </Box>
       )}
 
-      <Box flexGrow={1} />
-      <Text dimColor>[↑↓] navigate [Enter] change [Esc] back</Text>
-    </Box>
+      <Box marginTop={1}>
+        <BroadcastHint inputs={devices.inputs} loaded={devicesLoaded} />
+      </Box>
+    </Screen>
   );
 }

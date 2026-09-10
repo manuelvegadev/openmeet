@@ -1,5 +1,8 @@
 import { execFile, execSync, spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
+import { type CameraMode, pickWebcamMode, type Size, webcamCaptureArgs, webcamOutputSize } from './capture-args.js';
+import { POWERSHELL, powershellArgs, runPowerShell } from './powershell.js';
+import { ffmpegBin } from './tool-path.js';
 
 export interface VideoDevice {
   id: string; // avfoundation index (e.g., "0") or v4l2 path
@@ -15,6 +18,15 @@ export interface ScreenDevice {
   x?: number;
   y?: number;
   primary?: boolean;
+  /**
+   * Windows: which DXGI output ddagrab should capture.
+   *
+   * Taken from the order `Screen.AllScreens` enumerates monitors, which matches DXGI's
+   * output order on a single-adapter machine but is not guaranteed to in general. Verified
+   * with one monitor only; a multi-monitor or multi-GPU box may need a real
+   * `DXGI_OUTPUT_DESC.DeviceName` lookup.
+   */
+  outputIndex?: number;
 }
 
 // ─── Video devices ───────────────────────────────────────────────────
@@ -30,6 +42,71 @@ export function listVideoDevices(): VideoDevice[] {
   }
 
   return [];
+}
+
+/**
+ * The capture modes a camera declares — its resolutions and frame rates.
+ *
+ * Asked for by demanding a size no camera has: avfoundation refuses and prints the list it
+ * does have, which is the only way to get it (`-list_devices` gives names only). It fails
+ * before opening a stream, so it is cheap and does not hold the device — unlike opening the
+ * camera for a frame, which is what this used to do.
+ *
+ * macOS only: the reply is avfoundation's, and v4l2 prints nothing of the sort. Elsewhere the
+ * shape is unknown and the caller falls back to the caps, which is also what happens when the
+ * camera cannot be opened at all — another app has it, or a capture card has no signal.
+ *
+ * Cached per device *including* the empty answer: an unopenable camera is exactly the case
+ * that would otherwise re-probe, and wait out the timeout, on every attempt to start it.
+ * `forgetCameraModes` is how a camera that has been reconfigured is looked at again. Async
+ * because the engine calls this next to the audio cadence (gotcha 25).
+ */
+const cameraModes = new Map<string, CameraMode[]>();
+
+/** Forget what a camera declared: it may have been reconfigured, which is why its stream died. */
+export function forgetCameraModes(device: string): void {
+  cameraModes.delete(device);
+}
+
+export async function probeCameraModes(device: string): Promise<CameraMode[]> {
+  const cached = cameraModes.get(device);
+  if (cached) return cached;
+  if (platform() !== 'darwin') return [];
+  const modes = await new Promise<CameraMode[]>((resolve) => {
+    execFile(
+      ffmpegBin(),
+      ['-f', 'avfoundation', '-video_size', '1x1', '-framerate', '30', '-i', `${device}:none`],
+      { timeout: 5000 },
+      (_err, _stdout, stderr) => {
+        // "  1280x720@[30.000030 30.000030]fps" — the second rate is the highest it offers.
+        const found: CameraMode[] = [];
+        for (const line of (stderr ?? '').split('\n')) {
+          const m = /(\d+)x(\d+)@\[[\d.]+\s+([\d.]+)\]fps/.exec(line);
+          if (m) found.push({ width: Number(m[1]), height: Number(m[2]), fps: Math.round(Number(m[3])) });
+        }
+        resolve(found);
+      },
+    );
+  });
+  cameraModes.set(device, modes);
+  return modes;
+}
+
+/**
+ * Everything needed to capture a camera: the ffmpeg arguments and the frame size they will
+ * produce. The two must agree — the pipe carries raw frames with no header and the reader
+ * slices them by length — so they are decided together, here, rather than by each of the three
+ * callers (the room's capture, the picker's preview, `--test-camera`) in its own words.
+ *
+ * `null` where this platform has no webcam pipeline at all.
+ */
+export async function webcamCapturePlan(device?: string): Promise<{ args: string[]; size: Size } | null> {
+  // Nothing to probe where there is no pipeline: asked first, so Windows never spawns a doomed
+  // ffmpeg only to be told afterwards that it has no webcam.
+  if (!webcamCaptureArgs(device, webcamOutputSize())) return null;
+  const size = webcamOutputSize(pickWebcamMode(await probeCameraModes(device ?? '0')));
+  const args = webcamCaptureArgs(device, size);
+  return args ? { args, size } : null;
 }
 
 // ─── Screen devices ──────────────────────────────────────────────────
@@ -52,9 +129,8 @@ export function listScreenDevices(): ScreenDevice[] {
 /** Fill the cache without blocking (Windows only; the other platforms enumerate fast enough). */
 export function prefetchScreenDevices(): void {
   if (platform() !== 'win32') return;
-  execFile('powershell', WINDOWS_SCREENS_ARGS, { windowsHide: true, timeout: 10000 }, (err, stdout) => {
-    if (err) return;
-    screenCache = { at: Date.now(), screens: windowsScreensFromOutput(stdout) };
+  void runPowerShell(WINDOWS_SCREENS_SCRIPT).then((stdout) => {
+    if (stdout != null) screenCache = { at: Date.now(), screens: windowsScreensFromOutput(stdout) };
   });
 }
 
@@ -63,13 +139,14 @@ function enumerateScreens(): ScreenDevice[] {
 
   if (os === 'darwin') {
     const screens = parseMacOSAvfoundation().screens;
-    // Enrich with display resolutions from system_profiler
-    const resolutions = getMacOSScreenResolutions();
-    for (let i = 0; i < screens.length; i++) {
-      if (i < resolutions.length) {
-        screens[i].width = resolutions[i].width;
-        screens[i].height = resolutions[i].height;
-      }
+    const displays = getMacOSDisplays();
+    for (const [i, screen] of screens.entries()) {
+      const display = displays[i];
+      if (!display) continue;
+      if (display.name) screen.name = display.name;
+      screen.width = display.width;
+      screen.height = display.height;
+      screen.primary = display.primary;
     }
     return screens;
   }
@@ -90,7 +167,7 @@ function parseMacOSAvfoundation(): { cameras: VideoDevice[]; screens: ScreenDevi
   const screens: ScreenDevice[] = [];
 
   try {
-    const result = spawnSync('ffmpeg', ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''], {
+    const result = spawnSync(ffmpegBin(), ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''], {
       encoding: 'utf-8',
       timeout: 5000,
     });
@@ -125,26 +202,34 @@ function parseMacOSAvfoundation(): { cameras: VideoDevice[]; screens: ScreenDevi
   return { cameras, screens };
 }
 
-function getMacOSScreenResolutions(): { width: number; height: number }[] {
-  const resolutions: { width: number; height: number }[] = [];
+/**
+ * What macOS knows about each attached display: the monitor's own name ("Odyssey G85SB",
+ * "Built-in Retina Display"), its logical resolution and whether it is the main one.
+ * `ffmpeg -list_devices` only ever says "Capture screen 0", which is no help with two
+ * monitors, so the picker's labels come from here and the index still comes from ffmpeg.
+ * The two lists are matched by position, as the resolutions already were.
+ */
+function getMacOSDisplays(): { name?: string; width?: number; height?: number; primary?: boolean }[] {
+  const displays: { name?: string; width?: number; height?: number; primary?: boolean }[] = [];
   try {
     const json = execSync('system_profiler SPDisplaysDataType -json', { encoding: 'utf-8', timeout: 5000 });
     const data = JSON.parse(json);
     for (const gpu of data.SPDisplaysDataType ?? []) {
       for (const display of gpu.spdisplays_ndrvs ?? []) {
-        const res = display._spdisplays_resolution;
-        if (res) {
-          const match = res.match(/(\d+)\s*x\s*(\d+)/);
-          if (match) {
-            resolutions.push({ width: Number.parseInt(match[1], 10), height: Number.parseInt(match[2], 10) });
-          }
-        }
+        // "3096 x 1296 @ 120.00Hz" — the logical size, which is what avfoundation captures.
+        const match = /(\d+)\s*x\s*(\d+)/.exec(display._spdisplays_resolution ?? '');
+        displays.push({
+          name: typeof display._name === 'string' ? display._name : undefined,
+          width: match ? Number.parseInt(match[1], 10) : undefined,
+          height: match ? Number.parseInt(match[2], 10) : undefined,
+          primary: display.spdisplays_main === 'spdisplays_yes',
+        });
       }
     }
   } catch {
     // system_profiler not available
   }
-  return resolutions;
+  return displays;
 }
 
 // ─── Windows screens ─────────────────────────────────────────────────
@@ -162,11 +247,11 @@ Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Screen]::AllScreens | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.DeviceName, $_.Bounds.X, $_.Bounds.Y, $_.Bounds.Width, $_.Bounds.Height, $_.Primary }
 `;
 
-const WINDOWS_SCREENS_ARGS = ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_SCREENS_SCRIPT];
+const WINDOWS_SCREENS_ARGS = powershellArgs(WINDOWS_SCREENS_SCRIPT);
 
 function listWindowsScreenDevices(): ScreenDevice[] {
   try {
-    const result = spawnSync('powershell', WINDOWS_SCREENS_ARGS, {
+    const result = spawnSync(POWERSHELL, WINDOWS_SCREENS_ARGS, {
       encoding: 'utf-8',
       timeout: 10000,
       windowsHide: true,
@@ -180,12 +265,18 @@ function listWindowsScreenDevices(): ScreenDevice[] {
 /** Parse `name|x|y|w|h|primary` lines; primary first so a single Enter shares the main monitor. */
 function windowsScreensFromOutput(output: string): ScreenDevice[] {
   const screens: ScreenDevice[] = [];
+  // Enumeration order, kept before the primary-first reorder below: it is what ddagrab's
+  // output_idx counts, and it is not the order the user sees in the list.
+  let enumerated = 0;
   for (const line of output.split(/\r?\n/)) {
     const [device, x, y, w, h, primary] = line.trim().split('|');
     if (!device || !w || !h) continue;
     const screen: ScreenDevice = {
       id: device,
-      name: `Display ${screens.length + 1} (${w}x${h}${primary === 'True' ? ', primary' : ''})`,
+      outputIndex: enumerated++,
+      // `\\.\DISPLAY1` is not a name anyone recognises; the picker adds the size and the
+      // "main" mark itself, so this is just which monitor Windows thinks it is.
+      name: `Display ${device.replace(/^\\\\[.?]\\/, '')}`,
       width: Number.parseInt(w, 10),
       height: Number.parseInt(h, 10),
       x: Number.parseInt(x, 10),
@@ -229,7 +320,7 @@ function listLinuxScreenDevices(): ScreenDevice[] {
         const [, name, primary, w, h, offX, offY] = match;
         screens.push({
           id: `:0.0+${offX},${offY}`,
-          name: `${name} (${w}x${h})`,
+          name,
           width: Number.parseInt(w, 10),
           height: Number.parseInt(h, 10),
           primary: !!primary,

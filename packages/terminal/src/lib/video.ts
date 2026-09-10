@@ -1,101 +1,100 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { platform } from 'node:os';
 import wrtc from '@roamhq/wrtc';
 import {
+  i420FrameBytes,
   rawVideoPlayerArgs,
   SCREEN_FPS,
-  SCREEN_FRAME_BYTES,
-  SCREEN_MAX_HEIGHT,
-  SCREEN_MAX_WIDTH,
-  screenCaptureArgs,
+  screenCaptureCandidates,
+  screenOutputSize,
   WEBCAM_FPS,
-  WEBCAM_FRAME_BYTES,
-  WEBCAM_HEIGHT,
-  WEBCAM_WIDTH,
-  webcamCaptureArgs,
 } from './capture-args.js';
-import type { ScreenDevice } from './devices.js';
+import { killChild, spawnChild } from './children.js';
+import { type ScreenDevice, webcamCapturePlan } from './devices.js';
 import { renderOverlay } from './overlay.js';
+import { ffmpegBin, ffplayBin } from './tool-path.js';
 
 // @roamhq/wrtc's type definitions omit the video nonstandard APIs
 const { RTCVideoSink, RTCVideoSource } = wrtc.nonstandard as any;
 
-// Display: ffplay output resolution (fixed — we rescale any input to this in JS)
-const DISPLAY_WIDTH = 1280;
-const DISPLAY_HEIGHT = 720;
-const DISPLAY_FRAME_BYTES = DISPLAY_WIDTH * DISPLAY_HEIGHT * 1.5; // I420
+/** Frames of slack allowed in ffplay's stdin before we start dropping. */
+const MAX_WRITE_FRAMES = 3;
+/** Write buffers rotated per peer. Larger than the queue cap, so none in flight is reused. */
+const WRITE_RING = MAX_WRITE_FRAMES + 2;
 
-// Backpressure: max bytes buffered in ffplay stdin before dropping frames.
-// ~5 frames at 720p ≈ 7MB — generous enough to absorb event loop stalls.
-const MAX_WRITE_BUFFER = DISPLAY_FRAME_BYTES * 5;
-
-// Pre-allocate output buffers for rescaled frames (reused across all peers)
-const scaledFrame = Buffer.alloc(DISPLAY_FRAME_BYTES);
-const fitFrame = Buffer.alloc(DISPLAY_FRAME_BYTES); // intermediate buffer for letterboxing
+/** How long a still screen may go without a frame before we re-send the last one. */
+const SCREEN_REFRESH_MS = 1000;
 
 /**
- * Bilinear I420 rescale — blends 4 neighboring source pixels for smooth output.
- * Uses 16.16 fixed-point mapping with 8-bit interpolation fractions.
+ * Assembles fixed-size raw frames out of a pipe, without reallocating.
+ *
+ * ffmpeg hands over ~64 KB at a time and a 1080p I420 frame is 3.1 MB, so growing a Buffer
+ * with `Buffer.concat` re-copies the partial frame on every chunk: 2.3 GB/s of memcpy at
+ * 1080p30, on the very event loop the 10 ms audio cadence runs on. Filling one preallocated
+ * frame copies each byte once — measured 5.22 ms/frame down to 0.03 ms/frame.
+ *
+ * The frame buffer is reused, so consumers must finish with it before returning. When a
+ * single chunk completes several frames (only after a stall) the older ones are skipped:
+ * they are already stale, and skipping them costs nothing because the next frame simply
+ * overwrites them.
  */
-function bilinearPlane(
-  src: Uint8Array,
-  srcOff: number,
-  srcW: number,
-  srcH: number,
-  dst: Buffer,
-  dstOff: number,
-  dstW: number,
-  dstH: number,
-): void {
-  if (dstW <= 1 || dstH <= 1 || srcW <= 1 || srcH <= 1) {
-    dst.fill(src[srcOff] ?? 0, dstOff, dstOff + dstW * dstH);
-    return;
+class FrameAssembler {
+  private readonly frame: Uint8ClampedArray;
+  private readonly view: Buffer;
+  private filled = 0;
+
+  constructor(private readonly frameBytes: number) {
+    this.frame = new Uint8ClampedArray(frameBytes);
+    this.view = Buffer.from(this.frame.buffer);
   }
 
-  const xRatio = (((srcW - 1) << 16) / (dstW - 1)) | 0;
-  const yRatio = (((srcH - 1) << 16) / (dstH - 1)) | 0;
-  const srcWMax = srcW - 1;
-  const srcHMax = srcH - 1;
-
-  for (let y = 0; y < dstH; y++) {
-    const sy = y * yRatio;
-    const y0 = sy >> 16;
-    const yf = (sy >> 8) & 0xff;
-    const yfi = 256 - yf;
-    const y1 = y0 < srcHMax ? y0 + 1 : y0;
-    const r0 = srcOff + y0 * srcW;
-    const r1 = srcOff + y1 * srcW;
-    const dr = dstOff + y * dstW;
-
-    for (let x = 0; x < dstW; x++) {
-      const sx = x * xRatio;
-      const x0 = sx >> 16;
-      const xf = (sx >> 8) & 0xff;
-      const xfi = 256 - xf;
-      const x1 = x0 < srcWMax ? x0 + 1 : x0;
-
-      dst[dr + x] =
-        (src[r0 + x0] * xfi * yfi + src[r0 + x1] * xf * yfi + src[r1 + x0] * xfi * yf + src[r1 + x1] * xf * yf) >> 16;
+  /** Feed one chunk. Returns how many stale frames were skipped. */
+  push(chunk: Buffer, onFrame: (frame: Uint8ClampedArray) => void): number {
+    const total = this.filled + chunk.length;
+    const completing = Math.floor(total / this.frameBytes);
+    if (completing === 0) {
+      chunk.copy(this.view, this.filled);
+      this.filled = total;
+      return 0;
     }
+
+    // Only the newest complete frame is worth delivering — the ones before it are already
+    // stale by the time we would encode them — so seek straight to it instead of copying
+    // bytes we would immediately overwrite. At 3.1 MB a frame that memcpy would land on the
+    // event loop at the one moment it is already behind.
+    const lastFrameStart = (completing - 1) * this.frameBytes - this.filled;
+    if (lastFrameStart > 0) this.filled = 0;
+    const from = Math.max(lastFrameStart, 0);
+    chunk.copy(this.view, this.filled, from, from + this.frameBytes - this.filled);
+    this.filled = 0;
+    onFrame(this.frame);
+
+    // Whatever trails the delivered frame begins the next one.
+    const tail = total - completing * this.frameBytes;
+    if (tail > 0) {
+      chunk.copy(this.view, 0, chunk.length - tail);
+      this.filled = tail;
+    }
+    return completing - 1;
+  }
+
+  get residual(): number {
+    return this.filled;
   }
 }
 
+/** How long a screen grabber may stay silent before it counts as failed. */
+const SCREEN_SILENCE_MS = 8000;
 /**
- * Bilinear I420 rescale. Scales Y, U, V planes independently.
- * I420 layout: Y plane (WxH) + U plane (W/2 x H/2) + V plane (W/2 x H/2).
+ * The same for a camera, and shorter: a screen may legitimately be still, a camera never is.
+ * A camera reconfigured from its own control app (an Insta360 Link switching resolution) is
+ * the case this catches — the stream stops without the process necessarily dying, and peers
+ * would otherwise keep the last frame forever.
  */
-function scaleI420(src: Uint8Array, srcW: number, srcH: number, dst: Buffer, dstW: number, dstH: number): void {
-  const srcUOff = srcW * srcH;
-  const srcVOff = srcUOff + (srcW >> 1) * (srcH >> 1);
-  const dstUOff = dstW * dstH;
-  const dstVOff = dstUOff + (dstW >> 1) * (dstH >> 1);
+const WEBCAM_SILENCE_MS = 5000;
 
-  bilinearPlane(src, 0, srcW, srcH, dst, 0, dstW, dstH);
-  bilinearPlane(src, srcUOff, srcW >> 1, srcH >> 1, dst, dstUOff, dstW >> 1, dstH >> 1);
-  bilinearPlane(src, srcVOff, srcW >> 1, srcH >> 1, dst, dstVOff, dstW >> 1, dstH >> 1);
-}
-
-export function createVideoSource(): { source: any; track: any } {
-  const source = new RTCVideoSource();
+export function createVideoSource(options?: { isScreencast?: boolean }): { source: any; track: any } {
+  const source = new RTCVideoSource(options?.isScreencast ? { isScreencast: true } : undefined);
   const track = source.createTrack();
   return { source, track };
 }
@@ -108,6 +107,14 @@ interface PeerVideoPlayback {
   streamType: 'webcam' | 'screen';
   peerName: string;
   windowClosed: boolean;
+  /** Geometry the running ffplay was told about; a frame of another size respawns it. */
+  width: number;
+  height: number;
+  /** Rotated so a buffer is never rewritten while its `write()` is still queued. */
+  ring: Buffer[];
+  ringIndex: number;
+  /** A short frame has already been reported; the log should say it once, not per frame. */
+  warnedShortFrame: boolean;
 }
 
 export class VideoManager {
@@ -117,11 +124,15 @@ export class VideoManager {
   private _isVideoMuted = true; // starts muted — no camera by default
   private capturing = false;
   private screenCaptureProcess: ChildProcess | null = null;
+  private webcamSilenceTimer: ReturnType<typeof setInterval> | null = null;
+  private screenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   overlayEnabled = true;
   onDebug?: (msg: string) => void;
   onWindowClosed?: (peerId: string, streamType: 'webcam' | 'screen') => void;
-  /** The capture process ended, whether by stopScreenCapture() or on its own (permission denied, no desktop, crash). */
-  onScreenCaptureEnded?: () => void;
+  /** The screen capture stopped without us asking; `reason` is what the room log should say. */
+  onScreenCaptureEnded?: (reason: string) => void;
+  /** The camera stopped without us asking — died, or went silent. Same contract. */
+  onWebcamCaptureEnded?: (reason: string) => void;
 
   constructor(options?: { onDebug?: (msg: string) => void }) {
     this.onDebug = options?.onDebug;
@@ -143,6 +154,11 @@ export class VideoManager {
         streamType,
         windowClosed: false,
         peerName,
+        width: 0,
+        height: 0,
+        ring: [],
+        ringIndex: 0,
+        warnedShortFrame: false,
       };
       this.peers.set(key, peer);
       this.wireSink(peer);
@@ -181,190 +197,169 @@ export class VideoManager {
     }
   }
 
-  /** Spawn ffplay at the fixed display resolution. Called once per peer. */
-  private spawnFfplay(peer: PeerVideoPlayback): void {
+  /**
+   * Spawn ffplay for this peer's current frame geometry.
+   *
+   * Raw frames carry no geometry, so ffplay has to be told once at spawn. That is the only
+   * reason the pipe has a fixed size — and the reason a resolution change restarts the
+   * window instead of costing a rescale on every frame. Scaling to whatever size the user
+   * drags the window to is ffplay's job, and it does it on the GPU for free.
+   */
+  private spawnFfplay(peer: PeerVideoPlayback, width: number, height: number): void {
     const title = `${peer.peerName} (${peer.streamType})`;
-    const proc = spawn('ffplay', rawVideoPlayerArgs(DISPLAY_WIDTH, DISPLAY_HEIGHT, 30, title), {
+    const proc = spawnChild('player', ffplayBin(), rawVideoPlayerArgs(width, height, 30, title), {
       stdio: ['pipe', 'ignore', 'ignore'],
     });
-
+    if (!proc) {
+      // Latched, not retried: `wireSink` runs per decoded frame, so retrying here would ask
+      // the gate — and write to the debug log — thirty times a second for as long as the peer
+      // keeps sending. Pressing `w`/`e` again is what reopens it.
+      peer.windowClosed = true;
+      this.onDebug?.(`No window for ${peer.peerName} (${peer.streamType}): too many child processes just now`);
+      return;
+    }
     peer.ffplayProcess = proc;
-    proc.on('error', () => {
-      peer.ffplayProcess = null;
-    });
+    peer.width = width;
+    peer.height = height;
+    const frameBytes = i420FrameBytes(width, height);
+    peer.ring = Array.from({ length: WRITE_RING }, () => Buffer.allocUnsafe(frameBytes));
+    peer.ringIndex = 0;
+
     proc.on('close', () => {
       peer.ffplayProcess = null;
+      // The user closing the window means "stop showing me this", not "reopen it".
       peer.windowClosed = true;
       this.onWindowClosed?.(peer.peerId, peer.streamType);
     });
-    proc.stdin?.on('error', () => {});
-
-    this.onDebug?.(`ffplay started for ${peer.peerName} (${peer.streamType}) ${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}`);
+    proc.on('error', () => {
+      peer.ffplayProcess = null;
+    });
+    proc.stdin?.on('error', () => {
+      // ffplay went away between the writable check and the write.
+    });
+    this.onDebug?.(`ffplay started for ${peer.peerName} (${peer.streamType}) ${width}x${height}`);
   }
 
   /**
-   * Wire RTCVideoSink directly to ffplay. Frames are rescaled in JS using
-   * bilinear I420 scaling to fit within the fixed display resolution while
-   * preserving aspect ratio (letterbox/pillarbox with black bars).
+   * Wire RTCVideoSink to ffplay, 1:1. Frames go out at the resolution they arrived in —
+   * rescaling them in JS used to cost 2.66 ms per frame on Apple Silicon and 6.5 ms on the
+   * Windows box, on the same event loop as the 10 ms audio cadence, and it threw away
+   * pixels we had already paid to encode and transmit.
    */
   private wireSink(peer: PeerVideoPlayback): void {
     peer.sink.onframe = ({ frame }: { frame: { width: number; height: number; data: Uint8Array } }) => {
       const { width, height, data } = frame;
+      if (peer.windowClosed) return;
 
-      // Lazy-spawn ffplay on first frame (skip if user closed the window)
-      if (!peer.ffplayProcess) {
-        if (peer.windowClosed) return;
-        this.spawnFfplay(peer);
-      }
-
-      // Scale to fit within DISPLAY_WIDTH x DISPLAY_HEIGHT preserving aspect ratio.
-      // Fill the output with black first, then scale into the centered sub-rect.
-      const srcAspect = width / height;
-      const dstAspect = DISPLAY_WIDTH / DISPLAY_HEIGHT;
-
-      let fitW: number;
-      let fitH: number;
-      if (srcAspect > dstAspect) {
-        // Source is wider — letterbox (black bars top/bottom)
-        fitW = DISPLAY_WIDTH;
-        fitH = Math.round(DISPLAY_WIDTH / srcAspect);
-      } else {
-        // Source is taller — pillarbox (black bars left/right)
-        fitH = DISPLAY_HEIGHT;
-        fitW = Math.round(DISPLAY_HEIGHT * srcAspect);
-      }
-      // Ensure even dimensions (required for I420 chroma subsampling)
-      fitW &= ~1;
-      fitH &= ~1;
-
-      if (fitW === DISPLAY_WIDTH && fitH === DISPLAY_HEIGHT) {
-        // Perfect fit — no letterboxing needed
-        if (width === DISPLAY_WIDTH && height === DISPLAY_HEIGHT) {
-          scaledFrame.set(data);
-        } else {
-          scaleI420(data, width, height, scaledFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT);
-        }
-      } else {
-        // Fill with black (Y=0, U=128, V=128)
-        const ySize = DISPLAY_WIDTH * DISPLAY_HEIGHT;
-        const uvSize = (DISPLAY_WIDTH >> 1) * (DISPLAY_HEIGHT >> 1);
-        scaledFrame.fill(0, 0, ySize);
-        scaledFrame.fill(128, ySize, ySize + uvSize * 2);
-
-        // Scale source into pre-allocated intermediate buffer at the fitted size
-        scaleI420(data, width, height, fitFrame, fitW, fitH);
-
-        // Copy fitted frame into the center of the display frame (I420 plane by plane)
-        const offX = (DISPLAY_WIDTH - fitW) >> 1;
-        const offY = (DISPLAY_HEIGHT - fitH) >> 1;
-
-        // Y plane
-        for (let y = 0; y < fitH; y++) {
-          fitFrame.copy(scaledFrame, (offY + y) * DISPLAY_WIDTH + offX, y * fitW, y * fitW + fitW);
-        }
-        // U plane
-        const fitUOff = fitW * fitH;
-        const dstUOff = ySize;
-        const fitUW = fitW >> 1;
-        const fitUH = fitH >> 1;
-        const dstUW = DISPLAY_WIDTH >> 1;
-        const uOffX = offX >> 1;
-        const uOffY = offY >> 1;
-        for (let y = 0; y < fitUH; y++) {
-          fitFrame.copy(
-            scaledFrame,
-            dstUOff + (uOffY + y) * dstUW + uOffX,
-            fitUOff + y * fitUW,
-            fitUOff + y * fitUW + fitUW,
+      // Before anything is spent on this frame: a short one is a header that has moved on
+      // ahead of its data (gotcha 32b), and it is not evidence of a new resolution — acting on
+      // it would restart the window and reallocate its buffers for a frame we then drop.
+      if (data.byteLength < i420FrameBytes(width, height)) {
+        if (!peer.warnedShortFrame) {
+          peer.warnedShortFrame = true;
+          this.onDebug?.(
+            `${peer.peerName} (${peer.streamType}): frame says ${width}x${height} but carries ${data.byteLength} of ${i420FrameBytes(width, height)} bytes; skipping until they agree`,
           );
         }
-        // V plane
-        const fitVOff = fitUOff + fitUW * fitUH;
-        const dstVOff = dstUOff + uvSize;
-        for (let y = 0; y < fitUH; y++) {
-          fitFrame.copy(
-            scaledFrame,
-            dstVOff + (uOffY + y) * dstUW + uOffX,
-            fitVOff + y * fitUW,
-            fitVOff + y * fitUW + fitUW,
-          );
+        return;
+      }
+      peer.warnedShortFrame = false;
+
+      if (!peer.ffplayProcess || peer.width !== width || peer.height !== height) {
+        if (peer.ffplayProcess) {
+          this.onDebug?.(`${peer.peerName} (${peer.streamType}) now ${width}x${height}, restarting window`);
+          const old = peer.ffplayProcess;
+          peer.ffplayProcess = null;
+          // Our own kill must not be read as the user closing the window.
+          old.removeAllListeners('close');
+          old.stdin?.end();
+          old.kill('SIGKILL');
         }
+        this.spawnFfplay(peer, width, height);
       }
 
-      // Burn overlay (name, stream type, source resolution) onto the frame
-      if (this.overlayEnabled) {
-        renderOverlay(scaledFrame, DISPLAY_WIDTH, DISPLAY_HEIGHT, peer.peerName, peer.streamType, width, height);
-      }
-
-      // Write to ffplay stdin with backpressure guard
       const stdin = peer.ffplayProcess?.stdin;
-      if (stdin?.writable && stdin.writableLength < MAX_WRITE_BUFFER) {
-        // Write a copy — scaledFrame is reused for the next frame
-        const frameCopy = Buffer.allocUnsafe(DISPLAY_FRAME_BYTES);
-        scaledFrame.copy(frameCopy);
-        stdin.write(frameCopy);
+      const frameBytes = i420FrameBytes(width, height);
+      if (!stdin?.writable || stdin.writableLength >= frameBytes * MAX_WRITE_FRAMES) return;
+
+      // A copy is required regardless: the sink reuses `data`, and Node queues a pending
+      // write by reference, so writing a shared buffer would corrupt frames already queued.
+      const out = peer.ring[peer.ringIndex];
+      peer.ringIndex = (peer.ringIndex + 1) % peer.ring.length;
+      Buffer.from(data.buffer, data.byteOffset, frameBytes).copy(out);
+      if (this.overlayEnabled) {
+        renderOverlay(out, width, height, peer.peerName, peer.streamType);
       }
+      stdin.write(out);
     };
   }
 
   // ─── Send ──────────────────────────────────────────────────────────
 
-  startCapture(videoSource: any, device?: string): void {
+  /**
+   * Open the camera and push its frames into the WebRTC source.
+   *
+   * Async because the mode comes first: the camera's declared modes are probed
+   * (`probeCameraModes`, cached), the smallest one covering the target height is asked for,
+   * and the output keeps that shape under the caps — so a 16:9 camera is not letterboxed into
+   * a 4:3 frame, and a 4K camera is not opened at 4K to be scaled down every frame. The pipe
+   * carries raw frames with no header, so the reader has to know their size before the first
+   * byte arrives, which is why none of this can be decided from the stream itself.
+   */
+  async startCapture(videoSource: any, device?: string): Promise<void> {
     if (this.capturing) return;
-    const args = webcamCaptureArgs(device);
-    if (!args) {
-      this.onDebug?.('Webcam capture is not available on this platform');
-      return;
-    }
     this.capturing = true;
     this.videoSource = videoSource;
 
-    this.captureProcess = spawn('ffmpeg', args, {
+    const plan = await webcamCapturePlan(device);
+    if (!plan) {
+      this.capturing = false;
+      this.onDebug?.('Webcam capture is not available on this platform');
+      return;
+    }
+    const { args, size } = plan;
+    // Stopped while the probe was running.
+    if (!this.capturing) return;
+
+    this.captureProcess = spawnChild('webcam', ffmpegBin(), args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    if (!this.captureProcess) {
+      this.capturing = false;
+      this.onDebug?.('Camera not started: too many child processes, or too many attempts just now');
+      return;
+    }
 
-    let buffer = Buffer.alloc(0);
-    const MAX_BUFFER_FRAMES = 4;
+    const frameBytes = i420FrameBytes(size.width, size.height);
+    const assembler = new FrameAssembler(frameBytes);
 
     // Pre-allocate black frame for muted state (Y=0, U=128, V=128)
-    const blackFrame = new Uint8ClampedArray(WEBCAM_FRAME_BYTES);
-    const ySize = WEBCAM_WIDTH * WEBCAM_HEIGHT;
-    // Y plane: all zeros (already)
-    // U and V planes: fill with 128
-    blackFrame.fill(128, ySize);
+    const blackFrame = new Uint8ClampedArray(frameBytes);
+    blackFrame.fill(128, size.width * size.height);
+
+    // A camera that goes quiet without its process dying leaves peers on a frozen frame, so
+    // the frames are watched, not just the process.
+    let lastFrame = Date.now();
+    this.webcamSilenceTimer = setInterval(() => {
+      if (!this.capturing || Date.now() - lastFrame < WEBCAM_SILENCE_MS) return;
+      this.stopWebcamWatchdog();
+      const proc = this.captureProcess;
+      this.captureProcess = null;
+      this.capturing = false;
+      if (proc) void killChild(proc, 300);
+      this.onWebcamCaptureEnded?.(`no frames in ${WEBCAM_SILENCE_MS / 1000} s`);
+    }, 1000);
 
     this.captureProcess.stdout?.on('data', (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk]);
-
-      // Buffer overflow guard
-      const bufferedFrames = Math.floor(buffer.length / WEBCAM_FRAME_BYTES);
-      if (bufferedFrames > MAX_BUFFER_FRAMES) {
-        const keepFrames = 1;
-        buffer = buffer.subarray((bufferedFrames - keepFrames) * WEBCAM_FRAME_BYTES);
-        this.onDebug?.(`Video buffer overflow, dropped ${bufferedFrames - keepFrames} frames`);
-      }
-
-      while (buffer.length >= WEBCAM_FRAME_BYTES) {
-        const frameBuffer = buffer.subarray(0, WEBCAM_FRAME_BYTES);
-        buffer = buffer.subarray(WEBCAM_FRAME_BYTES);
-
-        if (this._isVideoMuted) {
-          this.videoSource.onFrame({
-            width: WEBCAM_WIDTH,
-            height: WEBCAM_HEIGHT,
-            data: blackFrame,
-          });
-        } else {
-          // Copy frame data into a Uint8ClampedArray we own
-          const frameData = new Uint8ClampedArray(WEBCAM_FRAME_BYTES);
-          frameBuffer.copy(Buffer.from(frameData.buffer));
-          this.videoSource.onFrame({
-            width: WEBCAM_WIDTH,
-            height: WEBCAM_HEIGHT,
-            data: frameData,
-          });
-        }
-      }
+      lastFrame = Date.now();
+      const dropped = assembler.push(chunk, (frame) => {
+        this.videoSource.onFrame({
+          width: size.width,
+          height: size.height,
+          data: this._isVideoMuted ? blackFrame : frame,
+        });
+      });
+      if (dropped) this.onDebug?.(`Video capture behind, skipped ${dropped} stale frames`);
     });
 
     // Log ffmpeg errors for debugging
@@ -380,24 +375,42 @@ export class VideoManager {
     });
 
     this.captureProcess.on('error', () => {
+      this.stopWebcamWatchdog();
       this.capturing = false;
       this.onDebug?.('Video capture failed to start');
+      this.onWebcamCaptureEnded?.('the camera could not be opened');
     });
 
     this.captureProcess.on('close', () => {
+      const unexpected = this.capturing;
+      this.stopWebcamWatchdog();
       this.capturing = false;
       this.onDebug?.('Video capture stopped');
+      // `stopCapture()` clears the flag before killing, so anything still capturing here ended
+      // on its own — the camera was unplugged, taken by another app, or reconfigured under us.
+      if (unexpected) this.onWebcamCaptureEnded?.('the camera stopped sending');
     });
 
-    this.onDebug?.(`Video capture started (${WEBCAM_WIDTH}x${WEBCAM_HEIGHT}@${WEBCAM_FPS}fps)`);
+    this.onDebug?.(`Video capture started (${size.width}x${size.height}@${WEBCAM_FPS}fps)`);
   }
 
-  stopCapture(): void {
-    if (this.captureProcess) {
-      this.captureProcess.kill();
-      this.captureProcess = null;
-    }
+  /**
+   * Stop capturing and let go of the camera. Resolves when the grabber has exited, because
+   * the device is held until then — the picker's preview is the next thing to want it, and
+   * "we asked it to stop" is not the same as "it stopped". The grace before SIGKILL is short
+   * for the same reason: there is nothing to flush at the end of a pipe of raw frames.
+   */
+  private stopWebcamWatchdog(): void {
+    if (this.webcamSilenceTimer) clearInterval(this.webcamSilenceTimer);
+    this.webcamSilenceTimer = null;
+  }
+
+  async stopCapture(): Promise<void> {
+    this.stopWebcamWatchdog();
+    const proc = this.captureProcess;
+    this.captureProcess = null;
     this.capturing = false;
+    if (proc) await killChild(proc, 300);
   }
 
   get isCapturing(): boolean {
@@ -421,58 +434,91 @@ export class VideoManager {
     return this.screenCaptureProcess !== null;
   }
 
-  startScreenCapture(screenVideoSource: any, device: ScreenDevice): void {
-    if (this.screenCaptureProcess) return;
-    const args = screenCaptureArgs(device);
+  /** Returns the shape the share goes out at, for the bandwidth budget. */
+  startScreenCapture(screenVideoSource: any, device: ScreenDevice): { width: number; height: number } {
+    const shape = screenOutputSize(device);
+    if (!this.screenCaptureProcess) {
+      this.spawnScreenCapture(screenVideoSource, device, shape, screenCaptureCandidates(device), 0);
+    }
+    return shape;
+  }
 
+  /** Runs candidate `index`; if it yields no frames, moves on to the next one. */
+  private spawnScreenCapture(
+    screenVideoSource: any,
+    device: ScreenDevice,
+    shape: { width: number; height: number },
+    candidates: string[][],
+    index: number,
+  ): void {
+    const args = candidates[index];
+    const { width, height } = shape;
+    const frameBytes = i420FrameBytes(width, height);
     this.onDebug?.(`Screen ffmpeg args: ffmpeg ${args.join(' ')}`);
-    this.onDebug?.(
-      `Screen expected frame size: ${SCREEN_FRAME_BYTES} bytes (${SCREEN_MAX_WIDTH}x${SCREEN_MAX_HEIGHT} I420)`,
-    );
+    this.onDebug?.(`Screen expected frame size: ${frameBytes} bytes (${width}x${height} I420)`);
 
-    this.screenCaptureProcess = spawn('ffmpeg', args, {
+    this.screenCaptureProcess = spawnChild('screen', ffmpegBin(), args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    if (!this.screenCaptureProcess) {
+      this.onScreenCaptureEnded?.('too many child processes, or too many attempts just now');
+      return;
+    }
+    const proc = this.screenCaptureProcess;
 
-    let buffer = Buffer.alloc(0);
-    // One frame buffer reused for every frame (~93 MB/s of allocations otherwise).
-    const screenFrameData = new Uint8ClampedArray(SCREEN_FRAME_BYTES);
-    const screenFrameView = Buffer.from(screenFrameData.buffer);
+    const assembler = new FrameAssembler(frameBytes);
     let screenFrameCount = 0;
     let loggedFirstChunk = false;
     let lastScreenLog = Date.now();
     let totalBytesReceived = 0;
-    const MAX_BUFFER_FRAMES = 4;
+
+    // With change-driven capture a still desktop produces no frames at all, so a peer that
+    // joins mid-share would have nothing to build a keyframe from. Re-push the last frame
+    // when the screen has been quiet: 3 MB/s for one frame per second, against a black window.
+    let lastFrame: Uint8ClampedArray | null = null;
+    let lastFrameAt = 0;
+    const sendFrame = (frame: Uint8ClampedArray) => {
+      lastFrame = frame;
+      lastFrameAt = Date.now();
+      screenVideoSource.onFrame({ width, height, data: frame });
+      screenFrameCount++;
+    };
+    this.clearScreenRefresh();
+    this.screenRefreshTimer = setInterval(() => {
+      if (lastFrame && Date.now() - lastFrameAt >= SCREEN_REFRESH_MS) sendFrame(lastFrame);
+    }, SCREEN_REFRESH_MS);
+
+    // A grabber that produces nothing does not exit either: avfoundation on macOS sits at
+    // 20% CPU forever when ScreenCaptureKit is wedged or the terminal lacks the Screen
+    // Recording permission (2026-09-09: three shares in a row worked, then every capture
+    // after a 28-minute one went silent until the daemon was restarted), and ddagrab in an
+    // RDP session does the same. So silence is a failure too, after a grace period long
+    // enough for the first frame on a slow machine.
+    let silentFailure = false;
+    const silenceTimer = setTimeout(() => {
+      if (this.screenCaptureProcess !== proc) return;
+      silentFailure = true;
+      this.onDebug?.(`Screen capture produced no data in ${SCREEN_SILENCE_MS / 1000} s; giving up on this grabber`);
+      killChild(proc);
+    }, SCREEN_SILENCE_MS);
 
     this.screenCaptureProcess.stdout?.on('data', (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk]);
       totalBytesReceived += chunk.length;
 
       if (!loggedFirstChunk) {
         loggedFirstChunk = true;
-        this.onDebug?.(`Screen ffmpeg first data: ${chunk.length} bytes (frame is ${SCREEN_FRAME_BYTES})`);
+        clearTimeout(silenceTimer);
+        this.onDebug?.(`Screen ffmpeg first data: ${chunk.length} bytes (frame is ${frameBytes})`);
       }
 
-      const bufferedFrames = Math.floor(buffer.length / SCREEN_FRAME_BYTES);
-      if (bufferedFrames > MAX_BUFFER_FRAMES) {
-        buffer = buffer.subarray((bufferedFrames - 1) * SCREEN_FRAME_BYTES);
-        this.onDebug?.(`Screen buffer overflow, dropped ${bufferedFrames - 1} frames`);
-      }
-
-      while (buffer.length >= SCREEN_FRAME_BYTES) {
-        const frameBuffer = buffer.subarray(0, SCREEN_FRAME_BYTES);
-        buffer = buffer.subarray(SCREEN_FRAME_BYTES);
-
-        frameBuffer.copy(screenFrameView);
-        screenVideoSource.onFrame({ width: SCREEN_MAX_WIDTH, height: SCREEN_MAX_HEIGHT, data: screenFrameData });
-        screenFrameCount++;
-      }
+      const dropped = assembler.push(chunk, sendFrame);
+      if (dropped) this.onDebug?.(`Screen capture behind, skipped ${dropped} stale frames`);
 
       // Log stats every 5 seconds
       const now = Date.now();
       if (now - lastScreenLog > 5000) {
         this.onDebug?.(
-          `Screen capture: ${screenFrameCount} frames sent, ${Math.round(totalBytesReceived / 1024 / 1024)}MB received from ffmpeg, buffer residual: ${buffer.length} bytes`,
+          `Screen capture: ${screenFrameCount} frames sent, ${Math.round(totalBytesReceived / 1024 / 1024)}MB received from ffmpeg, buffer residual: ${assembler.residual} bytes`,
         );
         lastScreenLog = now;
       }
@@ -488,33 +534,60 @@ export class VideoManager {
       }
     });
 
-    const proc = this.screenCaptureProcess;
     proc.on('error', () => {
       this.onDebug?.('Screen capture failed to start');
     });
     proc.on('close', (code) => {
-      // Guard against a newer capture already occupying the slot.
-      if (this.screenCaptureProcess === proc) this.screenCaptureProcess = null;
-      this.onDebug?.(`Screen capture ended (ffmpeg exit ${code})`);
-      this.onScreenCaptureEnded?.();
+      clearTimeout(silenceTimer);
+      // False when a newer capture already occupies the slot, or when stopScreenCapture
+      // cleared it — in both cases this exit was asked for: no retry, and above all no
+      // "capture ended" for the share that is running now (a late-dying orphan used to
+      // stop the live share that had replaced it).
+      const wasCurrent = this.screenCaptureProcess === proc;
+      if (!wasCurrent) {
+        this.onDebug?.(`Screen capture ${proc.pid} exited (${code}) after being replaced or stopped`);
+        return;
+      }
+      this.screenCaptureProcess = null;
+      this.clearScreenRefresh();
+
+      const next = index + 1;
+      if (screenFrameCount === 0 && next < candidates.length) {
+        this.onDebug?.(`Screen capture produced no frames (ffmpeg exit ${code}); trying the next grabber`);
+        this.spawnScreenCapture(screenVideoSource, device, shape, candidates, next);
+        return;
+      }
+
+      const reason = silentFailure
+        ? `no frames in ${SCREEN_SILENCE_MS / 1000} s — screen recording permission for this terminal, or a stuck capture${platform() === 'darwin' ? ' (quit and reopen your terminal app, or check Screen Recording in Privacy & Security)' : ''}`
+        : screenFrameCount === 0
+          ? `capture exited without frames (ffmpeg exit ${code}) — check screen recording permission / ffmpeg`
+          : `capture ended (ffmpeg exit ${code})`;
+      this.onDebug?.(`Screen capture ended: ${reason}`);
+      this.onScreenCaptureEnded?.(reason);
     });
 
-    this.onDebug?.(
-      `Screen capture started (${SCREEN_MAX_WIDTH}x${SCREEN_MAX_HEIGHT}@${SCREEN_FPS}fps from ${device.name})`,
-    );
+    this.onDebug?.(`Screen capture started (${width}x${height}@${SCREEN_FPS}fps from ${device.name})`);
+  }
+
+  private clearScreenRefresh(): void {
+    if (!this.screenRefreshTimer) return;
+    clearInterval(this.screenRefreshTimer);
+    this.screenRefreshTimer = null;
   }
 
   stopScreenCapture(): void {
+    this.clearScreenRefresh();
     const proc = this.screenCaptureProcess;
     if (!proc) return;
     this.screenCaptureProcess = null;
-    proc.kill();
+    killChild(proc);
   }
 
   // ─── Cleanup ───────────────────────────────────────────────────────
 
   shutdown(): void {
-    this.stopCapture();
+    void this.stopCapture();
     this.stopScreenCapture();
     for (const [, peer] of this.peers) {
       this.cleanupPeer(peer);

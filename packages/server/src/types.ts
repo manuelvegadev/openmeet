@@ -5,4 +5,5 @@ export interface ConnectedClient {
   participantId: string;
   roomId: string;
   username: string;
+  color?: string;
 }

@@ -1,11 +1,18 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
+import { constants, setPriority } from 'node:os';
 import { join } from 'node:path';
-import type { WSMessage } from '@openmeet/shared';
-import { VU_BAR_COUNT, VU_MAX_RMS } from '../lib/audio/constants.js';
+import type { Participant, WSMessage } from '@openmeet/shared';
+import { VU_LEVEL_STEPS, VU_MAX_RMS } from '../lib/audio/constants.js';
 import { type AudioDeviceSelection, AudioManager } from '../lib/audio/index.js';
+import { createNoiseSuppressor } from '../lib/audio/noise-suppression.js';
+import { isBroadcastDevice } from '../lib/audio/nvidia-broadcast.js';
+import { forgiveChildKind } from '../lib/children.js';
 import type { ScreenDevice } from '../lib/devices.js';
+import { forgetCameraModes } from '../lib/devices.js';
 import { diagnosticsEnabled, fileLoggingEnabled, startLoopDelayMonitor } from '../lib/diagnostics.js';
+import { finishName } from '../lib/identity.js';
 import { CONFIG_DIR, loadSettings, saveSettings } from '../lib/settings.js';
+import { warmTools } from '../lib/tool-path.js';
 import { createVideoSource, VideoManager } from '../lib/video.js';
 import { createAudioSource, PeerConnectionManager } from '../lib/webrtc.js';
 import { WebSocketClient } from '../lib/websocket.js';
@@ -18,8 +25,11 @@ import {
   type RoomState,
 } from './protocol.js';
 
-/** Levels are quantized to the VU meter's resolution so snapshots only change per bar. */
-const LEVEL_STEP = VU_MAX_RMS / VU_BAR_COUNT;
+/** How many times a camera that stopped on its own is reopened before we leave it alone. */
+const MAX_CAMERA_RETRIES = 1;
+
+/** Levels are quantized to the VU meter's resolution so snapshots only change per visible step. */
+const LEVEL_STEP = VU_MAX_RMS / VU_LEVEL_STEPS;
 /** Snapshots are coalesced: at most one every SNAPSHOT_INTERVAL_MS. */
 const SNAPSHOT_INTERVAL_MS = 100;
 
@@ -53,6 +63,10 @@ export class RoomEngine {
   private audioManager: AudioManager | null = null;
   private videoManager: VideoManager | null = null;
   private videoSource: any = null;
+  /** Reopen attempts since the camera was last started on purpose (see `recoverCamera`). */
+  private cameraRetries = 0;
+  /** Camera changes run one at a time; see `setCamera`. */
+  private cameraChange: Promise<void> = Promise.resolve();
   private screenSource: { source: any; track: any } | null = null;
   private readonly screenTracks = new Map<string, any>();
   private readonly webcamTracks = new Map<string, any>();
@@ -61,6 +75,7 @@ export class RoomEngine {
   private readonly fileOnlyLog = fileLoggingEnabled();
   private levelTimer: ReturnType<typeof setInterval> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
+  private statsPolls = 0;
   private visible = true;
   private stopLoopMonitor: (() => void) | null = null;
 
@@ -94,8 +109,15 @@ export class RoomEngine {
     this.emit({ type: 'state', state: this.state });
   }
 
-  private addEvent(message: string, type: RoomEvent['type']): void {
-    const event: RoomEvent = { id: ++this.eventSeq, timestamp: Date.now(), message, type };
+  private addEvent(message: string, type: RoomEvent['type'], who?: Pick<Participant, 'username' | 'color'>): void {
+    const event: RoomEvent = {
+      id: ++this.eventSeq,
+      timestamp: Date.now(),
+      message,
+      type,
+      who: who?.username,
+      color: who?.color,
+    };
     this.emit({ type: 'room-event', event });
   }
 
@@ -128,8 +150,22 @@ export class RoomEngine {
     }
   }
 
-  private resolveName(peerId: string): string {
-    return this.state.participants.find((p) => p.id === peerId)?.username ?? peerId.slice(0, 6);
+  private resolvePeer(peerId: string): Pick<Participant, 'username' | 'color'> {
+    return this.state.participants.find((p) => p.id === peerId) ?? { username: peerId.slice(0, 6) };
+  }
+
+  /** Us, as a participant, for events about ourselves. */
+  private get self(): Pick<Participant, 'username' | 'color'> | undefined {
+    return this.options ? { username: this.options.username, color: this.options.color } : undefined;
+  }
+
+  /**
+   * A peer's name as we will show it: cut to `NAME_MAX_CELLS` here, once, where it enters
+   * from the wire, so every screen can draw it without measuring (an older client, or any
+   * other client, may send more).
+   */
+  private static cleanParticipant<P extends { username: string }>(p: P): P {
+    return { ...p, username: finishName(p.username) || '?' };
   }
 
   // ─── Join / leave ────────────────────────────────────────────────────
@@ -146,6 +182,7 @@ export class RoomEngine {
     const diagnostics = diagnosticsEnabled(options.debug);
     if (diagnostics) this.openLogFile();
     const debugFn = diagnostics ? this.debugFn : undefined;
+    raiseProcessPriority(this.debugFn);
 
     const ws = new WebSocketClient(options.serverUrl, { onDebug: debugFn });
     this.ws = ws;
@@ -156,6 +193,26 @@ export class RoomEngine {
       inputChannels: options.input.channels,
       inputGainDb: options.input.gainDb,
     });
+
+    if (options.noiseSuppression && isBroadcastDevice(options.deviceSelection.input)) {
+      // Broadcast denoises on the GPU before the signal reaches any API we control, so
+      // RNNoise here would spend 0.22 ms of every 10 ms frame cleaning clean audio — on the
+      // one loop that cannot afford it. The setting is left alone; only this call is skipped.
+      debugFn?.('Noise suppression: left to NVIDIA Broadcast (GPU)');
+      this.addEvent('Noise suppression: NVIDIA Broadcast is handling it on the GPU', 'info');
+    } else if (options.noiseSuppression) {
+      // Not awaited: loading the wasm costs ~10 ms and joining should not wait for it. The
+      // processor chain is consulted per frame, so it takes effect as soon as it is attached
+      // and the handful of frames before that simply go through unprocessed.
+      void createNoiseSuppressor().then((suppressor) => {
+        if (suppressor) {
+          audioManager.addCaptureProcessor(suppressor);
+          debugFn?.('Noise suppression: RNNoise active');
+        } else {
+          this.addEvent('Noise suppression unavailable — continuing without it', 'info');
+        }
+      });
+    }
     audioManager.setSpeakingCallback((id, speaking) => {
       this.patch({ speakingStates: { ...this.state.speakingStates, [id]: speaking } });
     });
@@ -163,20 +220,39 @@ export class RoomEngine {
 
     let videoManager: VideoManager | null = null;
     let videoTrack: any = null;
-    if (options.videoEnabled) {
+    if (!options.videoEnabled) {
+      // Say so where it will be read. Without video there is no screen share, no watching
+      // peers, and the `e` button never appears — which looks like a bug unless told why.
+      const reason = options.videoDisabledReason ?? 'unknown reason';
+      debugFn?.(`Video disabled: ${reason}`);
+      this.addEvent(`Video disabled: ${reason} — screen sharing and watching peers are off`, 'info');
+    } else {
       const videoResult = createVideoSource();
       videoTrack = videoResult.track;
       this.videoSource = videoResult.source;
+      // Resolve ffmpeg/ffplay now, without blocking: the first spawn would otherwise run a
+      // synchronous `where`/`which` on this loop, next to live audio (gotcha 25).
+      void warmTools().then((tools) => debugFn?.(`Video tools: ${tools.ffmpeg}, ${tools.ffplay}`));
       videoManager = new VideoManager({ onDebug: debugFn });
       videoManager.overlayEnabled = loadSettings().videoOverlay;
-      videoManager.onWindowClosed = (peerId) => {
-        this.patch({ peerVideoOpen: { ...this.state.peerVideoOpen, [peerId]: false } });
+      // The user closed an ffplay window themselves. Which flag to clear depends on which
+      // window it was: clearing the webcam one for a screen window left `e` reading "close
+      // screen" forever, and silently forgot an open webcam window at the same time.
+      videoManager.onWindowClosed = (peerId, streamType) => {
+        if (streamType === 'screen') {
+          this.patch({ peerScreenOpen: { ...this.state.peerScreenOpen, [peerId]: false } });
+        } else {
+          this.patch({ peerVideoOpen: { ...this.state.peerVideoOpen, [peerId]: false } });
+        }
       };
-      videoManager.onScreenCaptureEnded = () => {
+      videoManager.onWebcamCaptureEnded = (reason) => {
+        void this.recoverCamera(reason);
+      };
+      videoManager.onScreenCaptureEnded = (reason) => {
         // Our own stopScreenShare() clears the flag before killing ffmpeg; anything else is a failure.
         if (!this.state.isScreenSharing) return;
         this.stopScreenShare();
-        this.addEvent('Screen sharing stopped: capture failed (check screen recording permission / ffmpeg)', 'screen');
+        this.addEvent(`screen sharing stopped: ${reason}`, 'screen', this.self);
       };
       this.videoManager = videoManager;
       this.state.overlayEnabled = videoManager.overlayEnabled;
@@ -186,6 +262,10 @@ export class RoomEngine {
       myId: '',
       audioTrack: track,
       videoTrack,
+      audioSendKbps: options.bitrate.sendKbps,
+      audioReceiveKbps: options.bitrate.receiveKbps,
+      screenSendKbps: options.bitrate.screenSendKbps,
+      screenReceiveKbps: options.bitrate.screenReceiveKbps,
       sendSignal: (msg) => ws.send(msg),
       onRemoteAudioTrack: (peerId, remoteTrack) => audioManager.addRemotePeer(peerId, remoteTrack),
       onRemoteVideoTrack: (peerId, remoteTrack, streamType) => {
@@ -207,7 +287,7 @@ export class RoomEngine {
     ws.onConnectionChange((isConnected) => {
       this.patch({ connected: isConnected });
       if (isConnected && !this.state.joined) {
-        ws.send({ type: 'join-room', roomId: options.roomId, username: options.username });
+        ws.send({ type: 'join-room', roomId: options.roomId, username: options.username, color: options.color });
       }
       if (!isConnected) {
         this.patch({ joined: false });
@@ -276,19 +356,18 @@ export class RoomEngine {
     switch (msg.type) {
       case 'room-joined': {
         peerManager.setMyId(msg.yourId);
-        this.patch({ joined: true, myId: msg.yourId, participants: msg.participants, joinedAt: Date.now() });
-        this.addEvent('You joined the room', 'info');
-        for (const p of msg.participants) this.addEvent(`${p.username} is in the room`, 'info');
+        const participants = msg.participants.map(RoomEngine.cleanParticipant);
+        this.patch({ joined: true, myId: msg.yourId, participants, joinedAt: Date.now() });
+        this.addEvent('joined the room', 'join', this.self);
+        for (const p of participants) this.addEvent('is in the room', 'join', p);
 
         void audioManager.start();
-        if (videoManager && this.videoSource && options.webcamEnabled) {
-          const device = options.videoDevice ?? loadSettings().videoDeviceId ?? undefined;
-          videoManager.startCapture(this.videoSource, device);
-        }
+        // The camera is not opened here. It starts muted, and holding a camera nobody is
+        // sharing burns its light for the whole call, keeps it from other apps, and — when it
+        // cannot be opened at all — used to leave the watchdog reopening it forever.
 
         // Wait for the first captured frame so the offer carries a live audio track;
         // 2 s cap so a slow device doesn't block connections.
-        const participants = msg.participants;
         Promise.race([audioManager.ready, new Promise<void>((r) => setTimeout(r, 2000))]).then(() => {
           if (this.peerManager !== peerManager) return;
           for (const p of participants) peerManager.createConnection(p.id);
@@ -299,8 +378,9 @@ export class RoomEngine {
       }
 
       case 'participant-joined': {
-        this.patch({ participants: [...this.state.participants, msg.participant] });
-        this.addEvent(`${msg.participant.username} joined`, 'join');
+        const participant = RoomEngine.cleanParticipant(msg.participant);
+        this.patch({ participants: [...this.state.participants, participant] });
+        this.addEvent('joined', 'join', participant);
         this.broadcastStates();
         break;
       }
@@ -308,7 +388,7 @@ export class RoomEngine {
       case 'participant-left': {
         const id = msg.participantId;
         const leaving = this.state.participants.find((p) => p.id === id);
-        if (leaving) this.addEvent(`${leaving.username} left`, 'leave');
+        if (leaving) this.addEvent('left', 'leave', leaving);
         peerManager.removeConnection(id);
         videoManager?.removeAllForPeer(id);
         this.screenTracks.delete(id);
@@ -344,7 +424,7 @@ export class RoomEngine {
       case 'mute-state': {
         const wasMuted = this.state.remoteMuteStates[msg.fromId];
         if (wasMuted !== undefined && wasMuted !== msg.isAudioMuted) {
-          this.addEvent(`${this.resolveName(msg.fromId)} ${msg.isAudioMuted ? 'muted' : 'unmuted'}`, 'mute');
+          this.addEvent(msg.isAudioMuted ? 'muted' : 'unmuted', 'mute', this.resolvePeer(msg.fromId));
         }
         this.patch({
           remoteMuteStates: { ...this.state.remoteMuteStates, [msg.fromId]: msg.isAudioMuted },
@@ -357,8 +437,9 @@ export class RoomEngine {
         const wasSharing = this.state.remoteScreenShareStates[msg.fromId];
         if (wasSharing !== undefined && wasSharing !== msg.isScreenSharing) {
           this.addEvent(
-            `${this.resolveName(msg.fromId)} ${msg.isScreenSharing ? 'started' : 'stopped'} screen sharing`,
+            `${msg.isScreenSharing ? 'started' : 'stopped'} screen sharing`,
             'screen',
+            this.resolvePeer(msg.fromId),
           );
         }
         const patch: Partial<RoomState> = {
@@ -373,7 +454,7 @@ export class RoomEngine {
       }
 
       case 'chat-broadcast':
-        this.emit({ type: 'chat', message: msg.message });
+        this.emit({ type: 'chat', message: RoomEngine.cleanParticipant(msg.message) });
         break;
 
       case 'error':
@@ -417,10 +498,99 @@ export class RoomEngine {
     this.broadcastStates();
   }
 
-  toggleVideo(): void {
-    if (!this.videoManager) return;
-    const isVideoMuted = this.videoManager.toggleMute();
-    this.patch({ isVideoMuted });
+  /** Which camera the capture uses: the flag, then the setting, then avfoundation's first. */
+  private get videoDevice(): string {
+    return this.options?.videoDevice ?? loadSettings().videoDeviceId ?? '0';
+  }
+
+  /**
+   * The one place the camera is opened and closed.
+   *
+   * `on` says whether it should be sending; `device` names which camera when a person picked
+   * one. Off lets go of the device — a black frame goes out first, so peers see it go dark
+   * rather than freeze — because a camera nobody is watching should not be held: its light
+   * stays on and no other app can open it.
+   *
+   * Serialized behind `cameraChange`, because the picker used to send "use this camera" and
+   * "turn it on" as two commands and the second could open the *previous* camera while the
+   * first was still stopping the old grabber.
+   */
+  private async setCamera(on: boolean, device?: string): Promise<void> {
+    this.cameraChange = this.cameraChange.then(() => this.applyCamera(on, device)).catch(() => {});
+    return this.cameraChange;
+  }
+
+  private async applyCamera(on: boolean, device?: string): Promise<void> {
+    const vm = this.videoManager;
+    if (!vm || !this.videoSource) return;
+
+    if (device && device !== loadSettings().videoDeviceId) saveSettings({ videoDeviceId: device });
+
+    if (!on) {
+      if (!this.state.isVideoMuted) {
+        vm.toggleMute();
+        this.patch({ isVideoMuted: true });
+        this.broadcastStates();
+        // Let one black frame reach the peers before the grabber goes.
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      await vm.stopCapture();
+      this.patch({ webcamCapturing: false });
+      return;
+    }
+
+    // A person asked for the camera, so the retry budget and the spawn budget start fresh.
+    this.cameraRetries = 0;
+    forgiveChildKind('webcam');
+    if (device && vm.isCapturing) await vm.stopCapture();
+    if (!vm.isCapturing) await vm.startCapture(this.videoSource, this.videoDevice);
+    if (!vm.isCapturing) {
+      this.addEvent('the camera could not be opened', 'info', this.self);
+      this.patch({ webcamCapturing: false });
+      return;
+    }
+    if (this.state.isVideoMuted) vm.toggleMute();
+    this.patch({ isVideoMuted: false, webcamCapturing: true });
+    this.broadcastStates();
+  }
+
+  /** `v`: on becomes off and off becomes on, keeping whatever camera is already chosen. */
+  toggleVideo(): Promise<void> {
+    return this.setCamera(this.state.isVideoMuted);
+  }
+
+  /** The camera picker chose one: use it and turn the camera on, in that order, once. */
+  shareCamera(device: string): Promise<void> {
+    return this.setCamera(true, device);
+  }
+
+  /**
+   * The camera stopped on its own: reconfigured from its own control app, unplugged, or taken
+   * by something else. Its declared modes are stale after any of those, so they are forgotten
+   * and it is opened again once. If that fails too, the camera is marked off — peers see it go
+   * dark instead of holding the last frame it sent.
+   */
+  private async recoverCamera(reason: string): Promise<void> {
+    const vm = this.videoManager;
+    // Nothing to recover unless the camera is actually being shared: a capture that dies while
+    // the camera is off is not a problem, and reopening it would be noise.
+    if (!vm || !this.videoSource || !this.options?.webcamEnabled || this.state.isVideoMuted) return;
+    if (this.cameraRetries >= MAX_CAMERA_RETRIES) return;
+    this.cameraRetries++;
+
+    forgetCameraModes(this.videoDevice);
+    this.addEvent(`camera stopped: ${reason} — reopening`, 'info', this.self);
+    await vm.startCapture(this.videoSource, this.videoDevice);
+    if (vm.isCapturing) {
+      this.patch({ webcamCapturing: true });
+      return;
+    }
+    // One try is the limit: a camera that will not open again is usually held by something
+    // else, and retrying forever fills the room log without ever fixing it. The state is set
+    // here rather than through `setCamera`, which is for what a person asked for.
+    this.addEvent('camera could not be reopened; press v to try again', 'info', this.self);
+    vm.toggleMute();
+    this.patch({ isVideoMuted: true, webcamCapturing: false });
     this.broadcastStates();
   }
 
@@ -432,11 +602,13 @@ export class RoomEngine {
   }
 
   startScreenShare(device: ScreenDevice): void {
+    // Same reasoning as the camera: a person asked for this, so the spawn budget starts fresh.
+    forgiveChildKind('screen');
     const { videoManager, peerManager } = this;
     if (!videoManager || !peerManager) return;
-    if (!this.screenSource) this.screenSource = createVideoSource();
-    videoManager.startScreenCapture(this.screenSource.source, device);
-    peerManager.setScreenTrack(this.screenSource.track);
+    if (!this.screenSource) this.screenSource = createVideoSource({ isScreencast: true });
+    const shape = videoManager.startScreenCapture(this.screenSource.source, device);
+    peerManager.setScreenTrack(this.screenSource.track, shape);
     this.patch({ isScreenSharing: true });
     this.broadcastStates();
   }
@@ -457,7 +629,7 @@ export class RoomEngine {
       return;
     }
     const track = this.webcamTracks.get(peerId);
-    if (track) vm.addRemotePeer(peerId, track, 'webcam', this.resolveName(peerId));
+    if (track) vm.addRemotePeer(peerId, track, 'webcam', this.resolvePeer(peerId).username);
     this.patch({ peerVideoOpen: { ...this.state.peerVideoOpen, [peerId]: true } });
   }
 
@@ -470,7 +642,7 @@ export class RoomEngine {
       return;
     }
     const track = this.screenTracks.get(peerId);
-    if (track) vm.addRemotePeer(peerId, track, 'screen', this.resolveName(peerId));
+    if (track) vm.addRemotePeer(peerId, track, 'screen', this.resolvePeer(peerId).username);
     this.patch({ peerScreenOpen: { ...this.state.peerScreenOpen, [peerId]: true } });
   }
 
@@ -523,7 +695,7 @@ export class RoomEngine {
       const raw = am.getAllAudioLevels();
       const next: Record<string, number> = {};
       for (const [id, rms] of Object.entries(raw)) {
-        next[id] = Math.min(Math.round(rms / LEVEL_STEP), VU_BAR_COUNT) * LEVEL_STEP;
+        next[id] = Math.min(Math.round(rms / LEVEL_STEP), VU_LEVEL_STEPS) * LEVEL_STEP;
       }
       const prev = this.state.audioLevels;
       const prevKeys = Object.keys(prev);
@@ -542,6 +714,10 @@ export class RoomEngine {
     if (this.statsTimer) return;
     let prev: PrevStatsEntry | null = null;
     const peerPrevStats = new Map<string, PeerPrevStats>();
+    /** Video byte/frame counters per (peer, direction, m-line) at the last logged sample. */
+    const videoPrev = new Map<string, { bytes: number; frames: number; ts: number }>();
+    const kbpsBetween = (bytes: number, prevBytes: number, dtSec: number) =>
+      Math.max(0, Math.round(((bytes - prevBytes) * 8) / dtSec / 1000));
 
     const poll = async () => {
       const pm = this.peerManager;
@@ -551,8 +727,10 @@ export class RoomEngine {
         if (this.state.connectionStats) this.patch({ connectionStats: null });
         prev = null;
         peerPrevStats.clear();
+        videoPrev.clear();
         return;
       }
+      const now = Date.now();
 
       let totalAudioBytesSent = 0;
       let totalAudioBytesRecv = 0;
@@ -562,6 +740,10 @@ export class RoomEngine {
       let rttCount = 0;
       const peerBytesRecv: Record<string, number> = {};
       const peerLatencyMs: Record<string, number> = {};
+      // The header's ↑/↓ are audio only. Video gets its own lines, every 10 s, because "the
+      // window never opened" has two very different causes — no packets, or packets that
+      // never decode — and only these counters tell them apart.
+      const logVideo = ++this.statsPolls % 5 === 0 && diagnosticsEnabled(this.state.debugMode);
 
       for (const peerId of peerIds) {
         const pc = pm.getConnection(peerId);
@@ -594,6 +776,38 @@ export class RoomEngine {
                 );
               }
             }
+            if (logVideo && (stat.type === 'inbound-rtp' || stat.type === 'outbound-rtp') && stat.kind === 'video') {
+              const dir = stat.type === 'inbound-rtp' ? 'in' : 'out';
+              const key = `${peerId}:${dir}:${stat.mid ?? stat.ssrc}`;
+              const bytes = (dir === 'in' ? stat.bytesReceived : stat.bytesSent) ?? 0;
+              const frames = (dir === 'in' ? stat.framesDecoded : stat.framesEncoded) ?? 0;
+              const p = videoPrev.get(key);
+              if (p) {
+                const dt = (now - p.ts) / 1000;
+                const fps = ((frames - p.frames) / dt).toFixed(1);
+                const geom = stat.frameWidth ? `${stat.frameWidth}x${stat.frameHeight}` : 'no frames yet';
+                const detail =
+                  dir === 'in'
+                    ? `packets ${stat.packetsReceived ?? 0}, decoded ${frames}, dropped ${stat.framesDropped ?? 0}, keyframes ${stat.keyFramesDecoded ?? 0}, pli sent ${stat.pliCount ?? 0}`
+                    : `packets ${stat.packetsSent ?? 0}, encoded ${frames}, sent ${stat.framesSent ?? 0}, keyframes ${stat.keyFramesEncoded ?? 0}, limited by ${stat.qualityLimitationReason ?? '?'}`;
+                this.debugFn(
+                  `Video ${dir} ${dir === 'in' ? 'from' : 'to'} ${peerId.slice(0, 6)} mid ${stat.mid ?? '?'}: ${kbpsBetween(bytes, p.bytes, dt)} kbps, ${fps} fps, ${geom}, ${detail}`,
+                );
+              }
+              videoPrev.set(key, { bytes, frames, ts: now });
+            }
+            if (
+              stat.type === 'candidate-pair' &&
+              stat.state === 'succeeded' &&
+              logVideo &&
+              stat.availableOutgoingBitrate != null
+            ) {
+              // What the bandwidth estimator thinks the link can take: a screen stream that
+              // stays at `encoded 0` with a target of 0 is starved here, not broken.
+              this.debugFn(
+                `BWE to ${peerId.slice(0, 6)}: ${Math.round(stat.availableOutgoingBitrate / 1000)} kbps available`,
+              );
+            }
             if (stat.type === 'candidate-pair' && stat.state === 'succeeded' && stat.currentRoundTripTime != null) {
               rttSum += stat.currentRoundTripTime * 1000;
               rttCount++;
@@ -618,7 +832,6 @@ export class RoomEngine {
         }
       }
 
-      const now = Date.now();
       if (prev) {
         const timeDelta = (now - prev.timestamp) / 1000;
         if (timeDelta > 0) {
@@ -627,26 +840,15 @@ export class RoomEngine {
             const prevPeer = peerPrevStats.get(peerId);
             if (prevPeer) {
               const dt = (now - prevPeer.timestamp) / 1000;
-              if (dt > 0) {
-                peerRecvBitrateKbps[peerId] = Math.max(
-                  0,
-                  Math.round(((peerBytesRecv[peerId] - prevPeer.bytesRecv) * 8) / dt / 1000),
-                );
-              }
+              if (dt > 0) peerRecvBitrateKbps[peerId] = kbpsBetween(peerBytesRecv[peerId], prevPeer.bytesRecv, dt);
             }
           }
           const newPacketsRecv = totalPacketsRecv - prev.packetsRecv;
           const newPacketsLost = totalPacketsLost - prev.packetsLost;
           const totalNew = newPacketsRecv + newPacketsLost;
           const stats: ConnectionStats = {
-            sendBitrateKbps: Math.max(
-              0,
-              Math.round(((totalAudioBytesSent - prev.audioBytesSent) * 8) / timeDelta / 1000),
-            ),
-            recvBitrateKbps: Math.max(
-              0,
-              Math.round(((totalAudioBytesRecv - prev.audioBytesRecv) * 8) / timeDelta / 1000),
-            ),
+            sendBitrateKbps: kbpsBetween(totalAudioBytesSent, prev.audioBytesSent, timeDelta),
+            recvBitrateKbps: kbpsBetween(totalAudioBytesRecv, prev.audioBytesRecv, timeDelta),
             rttMs: rttCount > 0 ? Math.round(rttSum / rttCount) : 0,
             packetLossPercent: totalNew > 0 ? Math.round((newPacketsLost / totalNew) * 1000) / 10 : 0,
             peerRecvBitrateKbps,
@@ -664,6 +866,7 @@ export class RoomEngine {
       for (const peerId of peerIds)
         peerPrevStats.set(peerId, { bytesRecv: peerBytesRecv[peerId] ?? 0, timestamp: now });
       for (const peerId of peerPrevStats.keys()) if (!peerIds.includes(peerId)) peerPrevStats.delete(peerId);
+      for (const key of videoPrev.keys()) if (!peerIds.includes(key.slice(0, key.indexOf(':')))) videoPrev.delete(key);
       prev = {
         audioBytesSent: totalAudioBytesSent,
         audioBytesRecv: totalAudioBytesRecv,
@@ -674,5 +877,25 @@ export class RoomEngine {
     };
 
     this.statsTimer = setInterval(() => void poll(), 2000);
+  }
+}
+
+/**
+ * Ask Windows to schedule this process ahead of ordinary background work.
+ *
+ * RtAudio's WASAPI thread already registers with MMCSS as "Pro Audio", but the mixing and
+ * the hand-off to WebRTC happen on this process's event loop, which is an ordinary thread —
+ * and a fullscreen game, with Game Mode deprioritizing background apps, wins against it.
+ * `PRIORITY_HIGH` maps to HIGH_PRIORITY_CLASS and needs no elevation; `PRIORITY_HIGHEST`
+ * would be silently downgraded without it. Windows only: the POSIX equivalent is a negative
+ * nice value, which requires root and would only throw.
+ */
+function raiseProcessPriority(log: (message: string) => void): void {
+  if (process.platform !== 'win32') return;
+  try {
+    setPriority(constants.priority.PRIORITY_HIGH);
+    log(`Engine process priority raised to high (pid ${process.pid})`);
+  } catch (err) {
+    log(`Engine process priority unchanged: ${err}`);
   }
 }

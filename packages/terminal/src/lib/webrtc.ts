@@ -1,12 +1,118 @@
 import type { WSMessage } from '@openmeet/shared';
 import wrtc from '@roamhq/wrtc';
-import { boostOpusQuality } from './sdp.js';
+import {
+  BANDWIDTH_AUDIO_ALLOWANCE_KBPS,
+  boostOpusQuality,
+  capOutgoingAudioBitrate,
+  DEFAULT_AUDIO_KBPS,
+  DEFAULT_SCREEN_KBPS,
+  forceScreenSendrecv,
+  pixelFactor,
+  preferAudioRed,
+  setScreenBandwidth,
+} from './sdp.js';
 
 const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } = wrtc;
 
 const ICE_SERVERS = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }],
 };
+
+const SCREEN_MIN_BITRATE = 800_000;
+/** Mesh sends one copy per peer, so the ceiling is a share of this, not the whole link. */
+const MESH_UPLINK_BUDGET = 6_000_000;
+
+/**
+ * Screen-share ceiling in bps for a room where we send to `receiverCount` peers, under the
+ * user's `screenSendKbps`. The mesh budget is split per receiver; the floor keeps a full
+ * room legible rather than fair.
+ */
+export function screenBitrateFor(receiverCount: number, screenSendKbps: number): number {
+  const share = MESH_UPLINK_BUDGET / Math.max(1, receiverCount);
+  return Math.round(Math.min(screenSendKbps * 1000, Math.max(SCREEN_MIN_BITRATE, share)));
+}
+
+/**
+ * The send policy, by transceiver index, and what @roamhq/wrtc actually does with it.
+ *
+ * Of the encoding fields only `priority` (the bitrate allocator's share), `maxBitrate` and
+ * `degradationPreference` survive; `networkPriority` and `maxFramerate` are dropped silently
+ * — they never come back from `getParameters()`. `networkPriority` would be a no-op anyway:
+ * libwebrtc leaves DSCP marking off by default, and Windows ignores `setsockopt(IP_TOS)`
+ * unless a machine-wide QoS policy is installed.
+ *
+ * All of it has to be applied before `setLocalDescription`. Once a sender has an SSRC,
+ * `setParameters` fails with "Attempted to set RtpParameters with modified SSRC", because the
+ * binding's `getParameters()` does not expose the per-encoding ssrc to round-trip. A running
+ * connection therefore keeps the ceiling it was created with until it renegotiates.
+ *
+ * Only the offerer can apply any of it. It carries the encodings through `addTransceiver`
+ * and sets `degradationPreference` right after. The answerer cannot: its senders come from
+ * `addTrack` and `setRemoteDescription`, and before negotiation `getParameters()` reports
+ * `encodings: []` — adding one is refused with "Attempted to set RtpParameters with
+ * different encoding count", and after negotiation the ssrc check refuses everything. So an
+ * answerer's audio keeps the allocator's default share and its screen share is uncapped
+ * until it becomes the offerer of a renegotiation. Nothing here can change that.
+ */
+function sendPolicy(
+  receiverCount: number,
+  screenSendKbps: number,
+): { encoding: Record<string, unknown>; degradation?: string }[] {
+  return [
+    { encoding: { priority: 'high' } }, // audio: first claim on the allocator
+    { encoding: { priority: 'low' } }, // webcam
+    // Screen: shed frames before pixels — a blurry screen is unreadable, a jerky one is not.
+    {
+      encoding: { priority: 'low', maxBitrate: screenBitrateFor(receiverCount, screenSendKbps) },
+      degradation: 'maintain-resolution',
+    },
+  ];
+}
+
+/**
+ * Apply what `addTransceiver` could not carry. Reports rather than swallows — a refused cap
+ * is worth knowing about, and a silent catch here hid the answerer problem above for a while.
+ *
+ * Never trust what `getParameters()` hands back (gotcha 33): on the Windows prebuild the
+ * `maxBitrate` it returns right after `addTransceiver` is uninitialised memory — a denormal
+ * like 4.3e-312 some of the time, the real value other times — and writing that back through
+ * `setParameters()` lands as a ceiling of 0 bps, after which the encoder never produces a
+ * frame. `priority` does not come back at all, on any platform. So the intended encoding is
+ * merged over the read-back, field by field, and the read-back only supplies what we never set.
+ */
+async function applySendParameters(
+  sender: any,
+  encoding: Record<string, unknown>,
+  degradationPreference: string,
+  onDebug?: (msg: string) => void,
+): Promise<void> {
+  try {
+    const params = sender.getParameters();
+    // Never add or remove an encoding: libwebrtc refuses a changed count outright.
+    if (!params.encodings?.length) {
+      onDebug?.(`RTC setParameters skipped (${degradationPreference}): no encodings yet`);
+      return;
+    }
+    onDebug?.(`RTC encodings read back: ${JSON.stringify(params.encodings)}`);
+    // Only the count is taken from the read-back: every value in it is suspect (gotcha 33).
+    params.encodings = params.encodings.map(() => ({ ...encoding, active: true }));
+    params.degradationPreference = degradationPreference;
+    await sender.setParameters(params);
+    onDebug?.(`RTC encodings applied: ${JSON.stringify(sender.getParameters().encodings)} ${degradationPreference}`);
+  } catch (err) {
+    onDebug?.(`RTC setParameters refused (${degradationPreference}): ${err}`);
+  }
+}
+
+/** One line of a sender's live parameters, for the debug log. */
+function describeSender(sender: any): string {
+  try {
+    const p = sender.getParameters();
+    return `encodings ${JSON.stringify(p.encodings)} degradation ${p.degradationPreference ?? '-'} track ${sender.track ? sender.track.kind + (sender.track.enabled ? '' : '(disabled)') : 'none'}`;
+  } catch (err) {
+    return `getParameters failed: ${err}`;
+  }
+}
 
 export function createAudioSource(): { source: any; track: any } {
   const { RTCAudioSource } = wrtc.nonstandard;
@@ -30,6 +136,14 @@ export class PeerConnectionManager {
   private retryCount = new Map<string, number>();
   private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private static MAX_RETRIES = 3;
+  private audioSendKbps = DEFAULT_AUDIO_KBPS;
+  private audioReceiveKbps = DEFAULT_AUDIO_KBPS;
+  private screenSendKbps = DEFAULT_SCREEN_KBPS;
+  private screenReceiveKbps = DEFAULT_SCREEN_KBPS;
+  /** The shape the current share goes out at; null when not sharing. Feeds `pixelFactor`. */
+  private screenShape: { width: number; height: number } | null = null;
+  /** How many connections the current share's budgets were computed for; see `refreshBudgets`. */
+  private budgetedCount = 0;
   onDebug?: (msg: string) => void;
 
   constructor(options: {
@@ -42,6 +156,12 @@ export class PeerConnectionManager {
     onRemoteVideoTrack?: (peerId: string, track: any, streamType: 'webcam' | 'screen') => void;
     onPeerDisconnected: (peerId: string) => void;
     onDebug?: (msg: string) => void;
+    /** Opus ceilings in kbps. Send is applied to the peer's description, receive to ours. */
+    audioSendKbps?: number;
+    audioReceiveKbps?: number;
+    /** Screen-share ceilings in kbps, same two places (see `setScreenBandwidth`). */
+    screenSendKbps?: number;
+    screenReceiveKbps?: number;
   }) {
     this.myId = options.myId;
     this.audioTrack = options.audioTrack;
@@ -51,7 +171,23 @@ export class PeerConnectionManager {
     this.onRemoteAudioTrack = options.onRemoteAudioTrack;
     this.onRemoteVideoTrack = options.onRemoteVideoTrack ?? (() => {});
     this.onPeerDisconnected = options.onPeerDisconnected;
+    this.audioSendKbps = options.audioSendKbps ?? DEFAULT_AUDIO_KBPS;
+    this.audioReceiveKbps = options.audioReceiveKbps ?? DEFAULT_AUDIO_KBPS;
+    this.screenSendKbps = options.screenSendKbps ?? DEFAULT_SCREEN_KBPS;
+    this.screenReceiveKbps = options.screenReceiveKbps ?? DEFAULT_SCREEN_KBPS;
     this.onDebug = options.onDebug;
+  }
+
+  /**
+   * What we will send this peer at most, in kbps, as of now: the user's screen ceiling for
+   * the current share's shape, split across the peers we send to, plus room for audio. This
+   * is what goes into every description the peer hands us, so it follows the room and the
+   * share instead of being frozen at connection time like the encoding's `maxBitrate`.
+   */
+  private sendBudgetKbps(): number {
+    const video = screenBitrateFor(this.connections.size, this.screenSendKbps) / 1000;
+    const factor = pixelFactor(this.screenShape?.width, this.screenShape?.height);
+    return Math.round(video * factor) + BANDWIDTH_AUDIO_ALLOWANCE_KBPS;
   }
 
   setMyId(id: string): void {
@@ -96,6 +232,9 @@ export class PeerConnectionManager {
       this.onDebug?.(`RTC ${peerId.slice(0, 6)} state: ${pc.connectionState}`);
       if (pc.connectionState === 'connected') {
         this.retryCount.delete(peerId);
+        // Only now: re-offering the others while this peer's first offer is in flight would
+        // be glare, and its own budget was already computed with it in the map.
+        this.refreshBudgets(peerId);
       }
       if (pc.connectionState === 'failed') {
         const existingTimer = this.retryTimers.get(peerId);
@@ -105,43 +244,55 @@ export class PeerConnectionManager {
         this.makingOffer.delete(peerId);
         this.onPeerDisconnected(peerId);
         this.scheduleRetry(peerId);
+        this.refreshBudgets();
       }
     };
 
     return pc;
   }
 
-  /** Create a peer connection WITH 3 transceivers (offerer path). */
+  /**
+   * Create a peer connection WITH 3 transceivers (offerer path).
+   *
+   * The order is the contract both sides rely on: audio, webcam, screen. `sendEncodings`
+   * carries most of the send policy; `degradationPreference` is the one field
+   * `addTransceiver` cannot express, so it goes in straight after.
+   */
   private createOffererConnection(peerId: string): any {
     const pc = this.setupPeerConnection(peerId);
+    const policy = sendPolicy(this.connections.size, this.screenSendKbps);
+    const tracks = [this.audioTrack, this.videoTrack, this.screenTrack];
 
-    // Transceiver 0: Audio — sendrecv, high priority (attach our audio track)
-    pc.addTransceiver('audio', {
-      direction: 'sendrecv',
-      sendEncodings: [{ priority: 'high', networkPriority: 'high' }],
-    });
-    if (this.audioTrack) {
-      pc.getTransceivers()[0].sender.replaceTrack(this.audioTrack);
-    }
-
-    // Transceiver 1: Webcam video — sendrecv (attach our video track if available)
-    pc.addTransceiver('video', {
-      direction: 'sendrecv',
-      sendEncodings: [{ priority: 'low', networkPriority: 'low', maxFramerate: 30 }],
-    });
-    if (this.videoTrack) {
-      pc.getTransceivers()[1].sender.replaceTrack(this.videoTrack);
-    }
-
-    // Transceiver 2: Screen share video — sendrecv when sharing, recvonly otherwise
-    pc.addTransceiver('video', {
-      direction: this.screenTrack ? 'sendrecv' : 'recvonly',
-    });
-    if (this.screenTrack) {
-      pc.getTransceivers()[2].sender.replaceTrack(this.screenTrack);
+    for (const [index, { encoding }] of policy.entries()) {
+      const track = tracks[index];
+      pc.addTransceiver(index === 0 ? 'audio' : 'video', {
+        // Only the screen transceiver goes recvonly when idle; audio stays sendrecv so
+        // `ontrack` fires on the far side even with no track (see gotcha 2).
+        direction: index === 2 && !track ? 'recvonly' : 'sendrecv',
+        sendEncodings: [encoding],
+      });
+      const { sender } = pc.getTransceivers()[index];
+      if (track) sender.replaceTrack(track);
+      const { degradation } = policy[index];
+      if (degradation) void applySendParameters(sender, encoding, degradation, this.onDebug);
     }
 
     return pc;
+  }
+
+  /** Everything we hand to `setLocalDescription`: what we send, and our receive ceilings. */
+  private localSdp(sdp: string): string {
+    const audio = boostOpusQuality(preferAudioRed(sdp), this.audioReceiveKbps);
+    return setScreenBandwidth(audio, this.screenReceiveKbps + BANDWIDTH_AUDIO_ALLOWANCE_KBPS);
+  }
+
+  /** Everything we hand to `setRemoteDescription`: the peer's line, bounded by our send ceilings. */
+  private remoteSdp(sdp: any, peerId: string): any {
+    if (typeof sdp?.sdp !== 'string') return sdp;
+    const budget = this.sendBudgetKbps();
+    if (this.screenTrack) this.onDebug?.(`RTC send budget to ${peerId.slice(0, 6)}: ${budget} kbps`);
+    const audio = capOutgoingAudioBitrate(sdp.sdp, this.audioSendKbps);
+    return { ...sdp, sdp: setScreenBandwidth(audio, budget) };
   }
 
   /** Extract a plain { type, sdp } object for safe JSON serialization. */
@@ -157,7 +308,7 @@ export class PeerConnectionManager {
       const offer = await pc.createOffer();
       await pc.setLocalDescription({
         ...offer,
-        sdp: boostOpusQuality(offer.sdp ?? ''),
+        sdp: this.localSdp(offer.sdp ?? ''),
       });
 
       this.onDebug?.(`RTC offer created for ${peerId.slice(0, 6)}`);
@@ -215,7 +366,7 @@ export class PeerConnectionManager {
     }
 
     try {
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      await pc.setRemoteDescription(new RTCSessionDescription(this.remoteSdp(sdp, peerId)));
 
       // Set transceiver directions BEFORE createAnswer so the answer SDP
       // reflects the correct state natively (no post-creation SDP munging).
@@ -242,7 +393,7 @@ export class PeerConnectionManager {
       }
 
       const answer = await pc.createAnswer();
-      const modifiedSdp = boostOpusQuality(answer.sdp ?? '');
+      const modifiedSdp = this.localSdp(answer.sdp ?? '');
 
       // Verify directions are correct (diagnostic only, no munging)
       if (this.onDebug) {
@@ -271,11 +422,16 @@ export class PeerConnectionManager {
     const pc = this.connections.get(peerId);
     if (!pc) return;
     try {
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      await pc.setRemoteDescription(new RTCSessionDescription(this.remoteSdp(sdp, peerId)));
       // Log transceiver states after answer is applied
       const transceivers = pc.getTransceivers();
       const dirs = transceivers.map((t: any, i: number) => `t${i}:${t.direction}/${t.currentDirection ?? '?'}`);
       this.onDebug?.(`RTC answer applied for ${peerId.slice(0, 6)} [${dirs.join(', ')}]`);
+      if (this.screenTrack && transceivers[2]) {
+        this.onDebug?.(
+          `RTC screen sender for ${peerId.slice(0, 6)} after answer: ${describeSender(transceivers[2].sender)}`,
+        );
+      }
     } catch (err) {
       this.onDebug?.(`RTC handleAnswer from ${peerId.slice(0, 6)} failed: ${err}`);
     }
@@ -306,9 +462,15 @@ export class PeerConnectionManager {
     }
   }
 
-  /** Set/clear the screen share track on transceiver 2. Triggers renegotiation on direction change. */
-  setScreenTrack(track: any | null): void {
+  /**
+   * Set/clear the screen share track on transceiver 2. Triggers renegotiation on direction
+   * change. `shape` is what the share goes out at, for the bandwidth budget.
+   */
+  setScreenTrack(track: any | null, shape?: { width: number; height: number }): void {
     this.screenTrack = track;
+    this.screenShape = shape ?? null;
+    // The renegotiation below carries the budget to every peer we have right now.
+    this.budgetedCount = this.connections.size;
     for (const [peerId, pc] of this.connections) {
       const transceivers = pc.getTransceivers();
       if (transceivers.length > 2) {
@@ -337,23 +499,12 @@ export class PeerConnectionManager {
     this.makingOffer.add(peerId);
     try {
       const offer = await pc.createOffer();
-      let sdp = boostOpusQuality(offer.sdp ?? '');
+      let sdp = this.localSdp(offer.sdp ?? '');
 
-      // Ensure screen m-line (3rd m= section, 2nd video) reflects sendrecv when sharing.
-      // @roamhq/wrtc may not reflect direction changes in the generated offer SDP.
       if (this.screenTrack) {
-        const sections = sdp.split(/(?=m=)/);
-        let videoCount = 0;
-        for (let i = 0; i < sections.length; i++) {
-          if (sections[i].startsWith('m=video')) {
-            videoCount++;
-            if (videoCount === 2 && !sections[i].includes('a=sendrecv')) {
-              sections[i] = sections[i].replace(/a=recvonly|a=inactive/, 'a=sendrecv');
-              this.onDebug?.(`RTC munged screen m-line to sendrecv for ${peerId.slice(0, 6)}`);
-            }
-          }
-        }
-        sdp = sections.join('');
+        const forced = forceScreenSendrecv(sdp);
+        if (forced !== sdp) this.onDebug?.(`RTC forced screen m-line to sendrecv for ${peerId.slice(0, 6)}`);
+        sdp = forced;
       }
 
       await pc.setLocalDescription({ ...offer, sdp });
@@ -369,6 +520,20 @@ export class PeerConnectionManager {
     } finally {
       this.makingOffer.delete(peerId);
       this.flushPendingRenegotiation(peerId);
+    }
+  }
+
+  /**
+   * The send budget in `remoteSdp` is a share of the uplink per peer, so while a share is
+   * running every change in how many peers we send to re-offers the others — owned here,
+   * next to the map it depends on, rather than by room events that fire before the newcomer
+   * has a connection. `except` is the peer whose own negotiation just carried its budget.
+   */
+  private refreshBudgets(except?: string): void {
+    if (!this.screenTrack || this.connections.size === this.budgetedCount) return;
+    this.budgetedCount = this.connections.size;
+    for (const [peerId, pc] of this.connections) {
+      if (peerId !== except) void this.renegotiate(peerId, pc);
     }
   }
 
@@ -418,6 +583,7 @@ export class PeerConnectionManager {
       this.connections.delete(peerId);
       this.makingOffer.delete(peerId);
       this.onPeerDisconnected(peerId);
+      this.refreshBudgets();
     }
   }
 

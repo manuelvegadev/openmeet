@@ -6,7 +6,7 @@
  */
 
 import { InputConditioner } from '../lib/audio/channels.js';
-import { computeRMS } from '../lib/audio/constants.js';
+import { computeRMS, followLevel } from '../lib/audio/constants.js';
 import {
   type AudioBackend,
   type AudioDeviceList,
@@ -14,6 +14,7 @@ import {
   createAudioBackend,
 } from '../lib/audio/index.js';
 import { ToneGenerator } from '../lib/audio/tone.js';
+import { killAllChildren, setChildLogger } from '../lib/children.js';
 import type { EngineCommand, EngineEvent, InputOptions } from './protocol.js';
 import { RoomEngine } from './room-engine.js';
 
@@ -39,6 +40,7 @@ export function runEngine(): Promise<never> {
   };
 
   const room = new RoomEngine(send);
+  setChildLogger((message) => room.log(message));
   let micTest: AudioBackend | null = null;
 
   const stopMicTest = () => {
@@ -49,6 +51,8 @@ export function runEngine(): Promise<never> {
   const exit = (code: number) => {
     stopMicTest();
     room.shutdown();
+    // Nothing of ours outlives us holding a camera or a screen.
+    killAllChildren();
     // audify keeps its thread-safe callbacks registered until the object is collected,
     // which would keep this loop alive forever: exit explicitly.
     setTimeout(() => process.exit(code), 50);
@@ -82,7 +86,7 @@ export function runEngine(): Promise<never> {
     stopMicTest();
     // Same conditioning as a call, so the meter shows what would be sent.
     const conditioner = new InputConditioner(input.channels, input.gainDb);
-    let peak = 0;
+    let level = 0;
     let lastSent = 0;
     try {
       const backend = await createAudioBackend();
@@ -90,12 +94,12 @@ export function runEngine(): Promise<never> {
       await backend.start(selection, {
         onCapture: (samples) => {
           conditioner.process(samples);
-          // Peak over the reporting window, sent a few times per second instead of 100/s.
-          peak = Math.max(peak, computeRMS(samples));
+          // The same ballistics as the room's meters, stepped every frame; sent a few times a
+          // second instead of 100/s.
+          level = followLevel(level, computeRMS(samples));
           const now = Date.now();
           if (now - lastSent >= MIC_LEVEL_INTERVAL_MS) {
-            send({ type: 'mic-level', rms: peak });
-            peak = 0;
+            send({ type: 'mic-level', rms: level });
             lastSent = now;
           }
         },
@@ -147,7 +151,10 @@ export function runEngine(): Promise<never> {
         room.toggleMute();
         break;
       case 'toggle-video':
-        room.toggleVideo();
+        void room.toggleVideo();
+        break;
+      case 'share-camera':
+        void room.shareCamera(cmd.device);
         break;
       case 'toggle-overlay':
         room.toggleOverlay();

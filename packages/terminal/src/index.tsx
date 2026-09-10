@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { type ChildProcess, execSync, spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { parseArgs } from 'node:util';
 import { render } from 'ink';
@@ -17,19 +17,17 @@ import { parseBackendFlag, resolveBackendName, setActiveBackendName } from './li
 import {
   rawVideoPlayerArgs,
   SCREEN_FPS,
-  SCREEN_MAX_HEIGHT,
-  SCREEN_MAX_WIDTH,
-  screenCaptureArgs,
+  screenCaptureCandidates,
+  screenOutputSize,
   WEBCAM_FPS,
-  WEBCAM_HEIGHT,
-  WEBCAM_WIDTH,
-  webcamCaptureArgs,
 } from './lib/capture-args.js';
-import { listScreenDevices } from './lib/devices.js';
+import { listScreenDevices, webcamCapturePlan } from './lib/devices.js';
 import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
-import { getOrCreateEmoji } from './lib/emoji.js';
 import { getPlatformSupport } from './lib/platform.js';
+import { startPreview } from './lib/preview.js';
+import { AUDIO_KBPS_MAX, AUDIO_KBPS_MIN, parseKbpsFlag, SCREEN_KBPS_MAX, SCREEN_KBPS_MIN } from './lib/sdp.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
+import { findTool } from './lib/tool-path.js';
 import {
   createFocusFilteredStdin,
   parsePausePolicyFlag,
@@ -40,40 +38,27 @@ import {
 } from './lib/window-state.js';
 import { APP_VERSION } from './version.js';
 
-function hasBinary(bin: string): boolean {
-  try {
-    execSync(`${platform() === 'win32' ? 'where' : 'which'} ${bin}`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function checkSox(): boolean {
-  return hasBinary('rec') && hasBinary('play');
+  return findTool('rec') !== null && findTool('play') !== null;
 }
 
-function checkFfmpeg(): { ffplay: boolean; ffmpeg: boolean } {
-  return { ffplay: hasBinary('ffplay'), ffmpeg: hasBinary('ffmpeg') };
+/** Which of ffmpeg/ffplay are nowhere to be found (see lib/tool-path.ts for where we look). */
+function missingVideoTools(): string[] {
+  return ['ffmpeg', 'ffplay'].filter((tool) => findTool(tool) === null);
 }
 
-/** ffmpeg → ffplay preview for the --test-* modes; exits with either process. */
-function runPreview(captureArgs: string[], playerArgs: string[]): void {
-  const capture: ChildProcess = spawn('ffmpeg', captureArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
-  const player: ChildProcess = spawn('ffplay', playerArgs, { stdio: ['pipe', 'ignore', 'ignore'] });
-  capture.stdout?.pipe(player.stdin!);
-  // Closing the ffplay window breaks the pipe before 'close' fires; not an error worth a stack trace.
-  player.stdin?.on('error', () => {});
-  const stop = () => {
-    capture.kill();
-    player.kill();
-  };
-  player.on('close', () => {
-    capture.kill();
-    process.exit(0);
-  });
-  capture.on('close', () => {
-    player.kill();
+/**
+ * The `--test-*` modes: one preview window, walking the candidate grabbers the way a real
+ * capture does — on to the next if one yields nothing — and exiting with the window.
+ */
+function runPreview(candidates: string[][], playerArgs: string[], index = 0): void {
+  const stop = startPreview(candidates[index], playerArgs, ({ sawFrames, error }) => {
+    if (error) process.stderr.write(`${error}\n`);
+    if (!sawFrames && index + 1 < candidates.length) {
+      process.stderr.write('That grabber produced no frames; trying the next one.\n');
+      runPreview(candidates, playerArgs, index + 1);
+      return;
+    }
     process.exit(0);
   });
   process.on('SIGINT', stop);
@@ -124,6 +109,12 @@ const { values } = parseArgs({
     'audio-backend': { type: 'string' },
     'input-channels': { type: 'string' },
     'input-gain': { type: 'string' },
+    'audio-send-kbps': { type: 'string' },
+    'audio-receive-kbps': { type: 'string' },
+    'screen-send-kbps': { type: 'string' },
+    'screen-receive-kbps': { type: 'string' },
+    'noise-suppression': { type: 'boolean' },
+    'no-noise-suppression': { type: 'boolean' },
     'pause-rendering': { type: 'string' },
     'video-device': { type: 'string' },
     'no-overlay': { type: 'boolean', default: false },
@@ -155,6 +146,11 @@ Usage: openmeet [options]
   --audio-backend <name> Audio I/O backend: rtaudio (native; default on macOS/Windows) or sox (default on Linux)
   --input-channels <p>   auto | stereo | mono | left | right — how the mic's channel pair is sent (saved)
   --input-gain <dB>      Capture gain in dB, e.g. 6 or -3 (saved)
+  --audio-send-kbps <n>  Opus ceiling for what we send (default 128, saved)
+  --audio-receive-kbps <n>  Opus ceiling for what peers send us (default 128, saved)
+  --screen-send-kbps <n>    Screen-share ceiling per peer at 1080p (default 2500, saved)
+  --screen-receive-kbps <n> Screen-share ceiling we ask of each peer (default 2500, saved)
+  --noise-suppression    Enable RNNoise on the mic (--no-noise-suppression to turn off, saved)
   --pause-rendering <p>  minimized (default) | unfocused | never — when to pause TUI rendering (saved)
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay (name, stream type, resolution)
@@ -167,16 +163,16 @@ Usage: openmeet [options]
 
 if (values['test-camera']) {
   const device = values['video-device'] ?? loadSettings().videoDeviceId ?? '0';
-  const captureArgs = webcamCaptureArgs(device);
-  if (!captureArgs) {
+  const plan = await webcamCapturePlan(device);
+  if (!plan) {
     process.stderr.write(`Webcam capture is not available on ${getPlatformSupport().name}.\n`);
     process.exit(1);
   }
-  process.stdout.write(`Testing camera (device: ${device})... Press q or Esc in the ffplay window to close.\n`);
-  runPreview(
-    captureArgs,
-    rawVideoPlayerArgs(WEBCAM_WIDTH, WEBCAM_HEIGHT, WEBCAM_FPS, `Camera Test (device ${device})`),
+  const { args: captureArgs, size } = plan;
+  process.stdout.write(
+    `Testing camera (device: ${device}, ${size.width}x${size.height})... Press q or Esc in the ffplay window to close.\n`,
   );
+  runPreview([captureArgs], rawVideoPlayerArgs(size.width, size.height, WEBCAM_FPS, `Camera Test (device ${device})`));
 } else if (values['test-screen']) {
   const screens = listScreenDevices();
   if (screens.length === 0) {
@@ -188,10 +184,13 @@ if (values['test-camera']) {
     process.stdout.write(`  [${s.id}] ${s.name}${s.width && s.height ? ` (${s.width}x${s.height})` : ''}\n`);
   }
   const screen = screens[0];
-  process.stdout.write(`\nTesting screen capture: ${screen.name}... Press q or Esc in the ffplay window to close.\n`);
+  const out = screenOutputSize(screen);
+  process.stdout.write(
+    `\nTesting screen capture: ${screen.name} → ${out.width}x${out.height}... Press q or Esc in the ffplay window to close.\n`,
+  );
   runPreview(
-    screenCaptureArgs(screen),
-    rawVideoPlayerArgs(SCREEN_MAX_WIDTH, SCREEN_MAX_HEIGHT, SCREEN_FPS, `Screen Test (${screen.name})`),
+    screenCaptureCandidates(screen),
+    rawVideoPlayerArgs(out.width, out.height, SCREEN_FPS, `Screen Test (${screen.name})`),
   );
 } else {
   // ─── Normal app flow ──────────────────────────────────────────────────
@@ -221,11 +220,20 @@ Install sox:
 
   // Video support: soft-fail if ffmpeg/ffplay missing. Gated per platform (see lib/platform.ts).
   const support = getPlatformSupport();
-  let videoEnabled = !values['no-video'] && support.video;
-  if (videoEnabled) {
-    const ffStatus = checkFfmpeg();
-    if (!ffStatus.ffplay || !ffStatus.ffmpeg) {
-      process.stderr.write(`Warning: ffmpeg/ffplay not found. Video support disabled.
+  // One fact — why video is off — and `videoEnabled` derived from it. The reason reaches the
+  // room log, because the stderr warning below is covered by the alternate screen the
+  // instant Ink starts; without it a dead `s` key was the only symptom.
+  const missing = values['no-video'] || !support.video ? [] : missingVideoTools();
+  const videoDisabledReason = values['no-video']
+    ? '--no-video'
+    : !support.video
+      ? `not available on ${support.name}`
+      : missing.length > 0
+        ? `${missing.join(' and ')} not found (PATH, WinGet Links, Program Files\\ffmpeg)`
+        : undefined;
+  const videoEnabled = videoDisabledReason === undefined;
+  if (missing.length > 0) {
+    process.stderr.write(`Warning: ffmpeg/ffplay not found. Video support disabled.
 
 Install ffmpeg for video support:
   macOS:   brew install ffmpeg
@@ -234,8 +242,6 @@ Install ffmpeg for video support:
   Fedora:  sudo dnf install ffmpeg
 
 `);
-      videoEnabled = false;
-    }
   }
 
   // The sox probe uses `rec`; with rtaudio a denied mic surfaces as a stream error instead.
@@ -271,6 +277,22 @@ Your terminal app needs microphone permission on macOS:
     }
     saveSettings({ audioInputGainDb: gainDb });
   }
+  for (const [flag, key, min, max] of [
+    ['audio-send-kbps', 'audioSendKbps', AUDIO_KBPS_MIN, AUDIO_KBPS_MAX],
+    ['audio-receive-kbps', 'audioReceiveKbps', AUDIO_KBPS_MIN, AUDIO_KBPS_MAX],
+    ['screen-send-kbps', 'screenSendKbps', SCREEN_KBPS_MIN, SCREEN_KBPS_MAX],
+    ['screen-receive-kbps', 'screenReceiveKbps', SCREEN_KBPS_MIN, SCREEN_KBPS_MAX],
+  ] as const) {
+    if (values[flag] === undefined) continue;
+    const kbps = parseKbpsFlag(values[flag], min, max);
+    if (kbps === null) {
+      process.stderr.write(`Error: --${flag} must be ${min}..${max} (got "${values[flag]}")\n`);
+      process.exit(1);
+    }
+    saveSettings({ [key]: kbps });
+  }
+  if (values['noise-suppression']) saveSettings({ noiseSuppression: true });
+  if (values['no-noise-suppression']) saveSettings({ noiseSuppression: false });
   if (values['pause-rendering'] !== undefined) {
     const policy = parsePausePolicyFlag(values['pause-rendering']);
     if (policy === null) {
@@ -281,8 +303,6 @@ Your terminal app needs microphone permission on macOS:
     }
     saveSettings({ pauseRendering: policy });
   }
-
-  const emoji = getOrCreateEmoji();
 
   // Suppress console output to keep TUI clean
   console.log = () => {};
@@ -301,8 +321,6 @@ Your terminal app needs microphone permission on macOS:
   } as typeof process.stdout.write;
 
   // alternateScreen: Ink enters/leaves the alt buffer itself (like vim/htop).
-  // incrementalRendering: only changed lines are written. On Windows a full-frame write
-  // to ConPTY blocks the event loop for 50-70 ms, which the 10 ms audio path cannot absorb.
   // Rendering pause policy (see lib/window-state.ts). The window title lets the OS-side
   // minimized watchers find our window; Windows Terminal's profile pins it anyway.
   const pausePolicy = loadSettings().pauseRendering;
@@ -314,12 +332,12 @@ Your terminal app needs microphone permission on macOS:
   const instance = render(
     <App
       serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
-      emoji={emoji}
       version={APP_VERSION}
       initialRoom={values.room}
       inputDevice={values['input-device']}
       outputDevice={values['output-device']}
       videoEnabled={videoEnabled}
+      videoDisabledReason={videoDisabledReason}
       webcamEnabled={videoEnabled && support.webcam}
       videoDevice={values['video-device']}
       debug={values.debug ?? false}
@@ -329,7 +347,10 @@ Your terminal app needs microphone permission on macOS:
       // Only override stdin when we actually filter it: an explicit `undefined` makes Ink
       // believe there is no TTY and it stops rendering until unmount.
       ...(stdinForInk ? { stdin: stdinForInk } : {}),
-      incrementalRendering: true,
+      // Off on purpose: incremental writes position the cursor from the previous frame's
+      // geometry, which a resize invalidates, and the frame's right border was the casualty.
+      // Full frames cost 0.19 ms a write — see gotcha 30f for the measurements.
+      incrementalRendering: false,
       onRender: diagnosticsEnabled(values.debug ?? false) ? recordRender : undefined,
     },
   );

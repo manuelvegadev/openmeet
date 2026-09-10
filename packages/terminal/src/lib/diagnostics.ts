@@ -45,12 +45,18 @@ export function recordRender(metrics: { renderTime: number }): void {
   if (renderDurations.length > 2000) renderDurations = renderDurations.slice(-1000);
 }
 
+/** p50/p99/max of `values`. One definition, so debug.log and scripts/av-bench.ts agree. */
+export function percentiles(values: number[]): { p50: number; p99: number; max: number } {
+  if (values.length === 0) return { p50: 0, p99: 0, max: 0 };
+  const sorted = [...values].sort((a, b) => a - b);
+  const pick = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+  return { p50: pick(0.5), p99: pick(0.99), max: sorted[sorted.length - 1] };
+}
+
 /** Summarize and reset. Returns null when nothing was rendered. */
 export function drainRenderStats(): { count: number; p50: number; p99: number; max: number } | null {
   if (renderDurations.length === 0) return null;
-  const sorted = [...renderDurations].sort((a, b) => a - b);
-  const pick = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
-  const stats = { count: sorted.length, p50: pick(0.5), p99: pick(0.99), max: sorted[sorted.length - 1] };
+  const stats = { count: renderDurations.length, ...percentiles(renderDurations) };
   renderDurations = [];
   return stats;
 }

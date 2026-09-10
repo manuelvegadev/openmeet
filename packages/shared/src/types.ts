@@ -4,6 +4,8 @@ export interface Participant {
   id: string;
   username: string;
   joinedAt: string;
+  /** The colour the participant chose for their name, `#rrggbb`. Absent from older clients. */
+  color?: string;
 }
 
 export interface Room {
@@ -19,6 +21,8 @@ export interface JoinRoomMessage {
   type: 'join-room';
   roomId: string;
   username: string;
+  /** See `Participant.color`. */
+  color?: string;
 }
 
 export interface RoomJoinedMessage {
@@ -66,6 +70,8 @@ export interface ChatMessage {
   id: string;
   roomId: string;
   username: string;
+  /** The sender's chosen colour, set by the server from the join, like `username`. */
+  color?: string;
   content: string;
   timestamp: number;
 }

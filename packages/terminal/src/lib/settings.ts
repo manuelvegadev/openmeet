@@ -3,6 +3,8 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import type { AudioBackendPreference } from './audio/backend.js';
 import type { InputChannelPolicy } from './audio/channels.js';
+import { type Identity, isNameColor } from './identity.js';
+import { DEFAULT_AUDIO_KBPS, DEFAULT_SCREEN_KBPS } from './sdp.js';
 import type { RenderPausePolicy } from './window-state.js';
 
 /** ~/.config/openmeet on macOS/Linux, %APPDATA%\openmeet on Windows. */
@@ -17,6 +19,10 @@ const LEGACY_INPUT_FILE = join(CONFIG_DIR, 'audio-input');
 const LEGACY_OUTPUT_FILE = join(CONFIG_DIR, 'audio-output');
 
 export interface AppSettings {
+  /** Your name in a room, up to 8 cells (see lib/identity.ts). Null until the first start sets it. */
+  name: string | null;
+  /** The colour your name is drawn in, `#rrggbb` from `NAME_PALETTE`. */
+  color: string | null;
   audioInputId: string | null;
   audioOutputId: string | null;
   videoDeviceId: string | null;
@@ -28,11 +34,23 @@ export interface AppSettings {
   audioInputChannels: InputChannelPolicy;
   /** Capture gain in dB applied before sending (0 = as captured). */
   audioInputGainDb: number;
+  /** Opus ceiling in kbps for what we send. Bounds our encoder via the peer's description. */
+  audioSendKbps: number;
+  /** Opus ceiling in kbps for what peers send us. Declared in our own description. */
+  audioReceiveKbps: number;
+  /** Screen-share ceiling in kbps for what we send, per peer, at 1080p (more for wider shares). */
+  screenSendKbps: number;
+  /** Screen-share ceiling in kbps we ask each peer to respect towards us. */
+  screenReceiveKbps: number;
+  /** RNNoise on the capture path. Opt-in: it is a taste call, and it costs ~0.2 ms a frame. */
+  noiseSuppression: boolean;
   /** Pause TUI rendering when the window is minimized (default) or unfocused, or never. */
   pauseRendering: RenderPausePolicy;
 }
 
 const DEFAULTS: AppSettings = {
+  name: null,
+  color: null,
   audioInputId: null,
   audioOutputId: null,
   videoDeviceId: null,
@@ -41,6 +59,11 @@ const DEFAULTS: AppSettings = {
   audioBackend: 'auto',
   audioInputChannels: 'auto',
   audioInputGainDb: 0,
+  audioSendKbps: DEFAULT_AUDIO_KBPS,
+  audioReceiveKbps: DEFAULT_AUDIO_KBPS,
+  screenSendKbps: DEFAULT_SCREEN_KBPS,
+  screenReceiveKbps: DEFAULT_SCREEN_KBPS,
+  noiseSuppression: false,
   pauseRendering: 'minimized',
 };
 
@@ -48,7 +71,11 @@ let cache: AppSettings | null = null;
 
 function readFromDisk(): AppSettings {
   try {
-    const raw = readFileSync(SETTINGS_FILE, 'utf-8');
+    // Strip a UTF-8 BOM: JSON.parse throws on it, and the catch below would then silently
+    // hand back DEFAULTS — every saved setting lost with nothing said. Windows puts one there
+    // easily (Notepad, and PowerShell's `Set-Content -Encoding UTF8`), which is how this was
+    // found. `wt-profile.cjs` already had to do the same for Windows Terminal's own file.
+    const raw = readFileSync(SETTINGS_FILE, 'utf-8').replace(/^\uFEFF/, '');
     return { ...DEFAULTS, ...JSON.parse(raw) };
   } catch {
     // No settings.json — try migrating from legacy device files
@@ -74,6 +101,13 @@ export function loadSettings(): AppSettings {
   if (cache) return cache;
   cache = readFromDisk();
   return cache;
+}
+
+/** The saved identity, or null while the first start has not set one (see lib/identity.ts). */
+export function loadIdentity(): Identity | null {
+  const { name, color } = loadSettings();
+  if (!name || !isNameColor(color)) return null;
+  return { name, color };
 }
 
 export function saveSettings(update: Partial<AppSettings>): void {

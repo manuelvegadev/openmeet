@@ -1,41 +1,42 @@
-import { Box, Text, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
-import { useEffect, useRef, useState } from 'react';
+import { Box, useInput } from 'ink';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from '../engine/client.js';
 import { useRoom } from '../hooks/use-room.js';
-import { VU_MAX_RMS as MAX_RMS } from '../lib/audio/constants.js';
 import { MicTester, playTestTone } from '../lib/audio-test.js';
-import { listScreenDevices, prefetchScreenDevices, type ScreenDevice } from '../lib/devices.js';
+import {
+  listScreenDevices,
+  listVideoDevices,
+  prefetchScreenDevices,
+  type ScreenDevice,
+  type VideoDevice,
+} from '../lib/devices.js';
+import type { Identity } from '../lib/identity.js';
 import { getPlatformSupport } from '../lib/platform.js';
-import { saveSettings } from '../lib/settings.js';
+import { loadSettings, saveSettings } from '../lib/settings.js';
+import { theme } from '../lib/theme.js';
+import { CameraPicker } from './camera-picker.js';
 import { ChatInput } from './chat-input.js';
-import { ChatLog } from './chat-log.js';
+import { ChatLog, mergeChat } from './chat-log.js';
+import { DebugLog } from './debug-log.js';
+import { Elapsed } from './elapsed.js';
+import { KeyHints } from './key-hints.js';
+import { MicBar } from './level-bar.js';
+import { Modal } from './modal.js';
 import { ParticipantList } from './participant-list.js';
-import { RoomLog } from './room-log.js';
-import { StatusBar } from './status-bar.js';
-
-const BAR_WIDTH = 30;
-
-function renderBar(level: number): string {
-  const normalized = Math.min(level / MAX_RMS, 1);
-  const filled = Math.round(normalized * BAR_WIDTH);
-  return '\u2588'.repeat(filled) + '\u2591'.repeat(BAR_WIDTH - filled);
-}
-
-function barColor(level: number): string {
-  const normalized = Math.min(level / MAX_RMS, 1);
-  if (normalized > 0.75) return 'red';
-  if (normalized > 0.4) return 'yellow';
-  return 'green';
-}
+import { Screen } from './screen.js';
+import { Select } from './select.js';
+import { SplitPanes } from './split-panes.js';
+import { MyActions, PeerActions, type PeerWindowAction } from './status-bar.js';
+import { Divider, Rule, Text } from './text.js';
 
 interface RoomViewProps {
   serverUrl: string;
   roomId: string;
-  username: string;
+  identity: Identity;
   version: string;
   deviceSelection: AudioDeviceSelection;
   videoEnabled?: boolean;
+  videoDisabledReason?: string;
   webcamEnabled?: boolean;
   videoDevice?: string;
   debug?: boolean;
@@ -46,13 +47,20 @@ type DevicePickerStep = null | 'loading' | 'input' | 'output' | 'test';
 
 const platformName = getPlatformSupport().name;
 
+/** A screen in the picker: the monitor's own name, its size, and which one is the main display. */
+function screenLabel(d: ScreenDevice): string {
+  const size = d.width && d.height ? ` ${d.width}x${d.height}` : '';
+  return `${d.name}${size}${d.primary ? ' · main' : ''}`;
+}
+
 export function RoomView({
   serverUrl,
   roomId,
-  username,
+  identity,
   version,
   deviceSelection,
   videoEnabled,
+  videoDisabledReason,
   webcamEnabled,
   videoDevice,
   debug = false,
@@ -61,10 +69,12 @@ export function RoomView({
   const room = useRoom({
     serverUrl,
     roomId,
-    username,
+    username: identity.name,
+    color: identity.color,
     deviceSelection,
     debug,
     videoEnabled,
+    videoDisabledReason,
     webcamEnabled,
     videoDevice,
   });
@@ -79,10 +89,22 @@ export function RoomView({
   const [micLevel, setMicLevel] = useState(0);
   const [selectedPeerIdx, setSelectedPeerIdx] = useState(0);
   const [screenPickerOpen, setScreenPickerOpen] = useState(false);
+  const [cameraList, setCameraList] = useState<VideoDevice[] | null>(null);
+  // Leaving takes two presses of `q`: one key should not end a call by accident. The home
+  // screen asks the same way before quitting.
+  const [leaveArmed, setLeaveArmed] = useState(false);
   const [screenDeviceList, setScreenDeviceList] = useState<ScreenDevice[]>([]);
   const [lastScreenDevice, setLastScreenDevice] = useState<ScreenDevice | null>(null);
   const testerRef = useRef<MicTester | null>(null);
-  const smoothedRef = useRef(0);
+  const chat = useMemo(() => mergeChat(room.chatMessages, room.roomEvents), [room.chatMessages, room.roomEvents]);
+
+  // The armed `q` forgets itself, so it cannot still be waiting when you come back from the
+  // chat minutes later.
+  useEffect(() => {
+    if (!leaveArmed) return;
+    const timer = setTimeout(() => setLeaveArmed(false), 2000);
+    return () => clearTimeout(timer);
+  }, [leaveArmed]);
 
   // Load devices when picker opens
   useEffect(() => {
@@ -103,7 +125,6 @@ export function RoomView({
     if (deviceStep !== 'test') {
       testerRef.current?.stop();
       testerRef.current = null;
-      smoothedRef.current = 0;
       setMicLevel(0);
       return;
     }
@@ -113,11 +134,11 @@ export function RoomView({
 
     let lastUpdate = 0;
     tester.setLevelCallback((rms) => {
-      smoothedRef.current = smoothedRef.current * 0.7 + rms * 0.3;
+      // Already smoothed by the engine's ballistics; just cap the renders.
       const now = Date.now();
       if (now - lastUpdate > 80) {
         lastUpdate = now;
-        setMicLevel(smoothedRef.current);
+        setMicLevel(rms);
       }
     });
 
@@ -139,13 +160,12 @@ export function RoomView({
   };
 
   useInput((input, key) => {
-    // Screen picker open — only Escape to cancel
+    // A modal is up: it answers its own keys (see `Modal`), the room answers none.
     if (screenPickerOpen) {
-      if (key.escape) {
-        setScreenPickerOpen(false);
-      }
+      if (key.escape) setScreenPickerOpen(false);
       return;
     }
+    if (cameraList) return;
 
     // Device picker open — handle its keybindings
     if (deviceStep && deviceStep !== 'loading') {
@@ -171,29 +191,39 @@ export function RoomView({
       return;
     }
 
-    if (key.escape) {
-      room.leave();
-      onBack();
-      return;
-    }
     if (key.tab) {
       setInputFocused((prev) => !prev);
       return;
     }
     if (!inputFocused) {
+      if (input === 'q') {
+        if (leaveArmed) {
+          room.leave();
+          onBack();
+        } else {
+          setLeaveArmed(true);
+        }
+        return;
+      }
+      // Any other key means you did not mean to leave after all.
+      if (leaveArmed) setLeaveArmed(false);
       if (input === 'm') {
         room.toggleMute();
       }
       if (input === 'v' && room.webcamEnabled) {
-        room.toggleVideo();
+        // On: turn it off. Off: ask which camera, the way `s` asks which screen. Nothing to
+        // release first — a camera that is off is not held (see `RoomEngine.setCamera`).
+        if (!room.isVideoMuted) room.toggleVideo();
+        else {
+          const cameras = listVideoDevices();
+          if (cameras.length > 1) setCameraList(cameras);
+          else room.toggleVideo();
+        }
       }
       if (input === 'd') {
         setDeviceStep('loading');
       }
-      if (input === 'o') {
-        room.toggleOverlay();
-      }
-      if (input === 's') {
+      if (input === 's' && room.videoEnabled) {
         if (room.isScreenSharing) {
           room.stopScreenSharing();
           setLastScreenDevice(null);
@@ -253,63 +283,29 @@ export function RoomView({
     }
   });
 
-  // Screen picker overlay
-  if (screenPickerOpen && screenDeviceList.length > 0) {
-    const screenItems = screenDeviceList.map((d) => ({
-      label: `${d.name}${d.width && d.height ? ` (${d.width}x${d.height})` : ''}`,
-      value: d.id,
-    }));
-    return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
-          Screen Share
-        </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
-        <Text bold>Select screen to share:</Text>
-        <SelectInput
-          items={screenItems}
-          onSelect={(item) => {
-            const device = screenDeviceList.find((d) => d.id === item.value);
-            if (device) {
-              setLastScreenDevice(device);
-              setScreenPickerOpen(false);
-              room.startScreenSharing(device);
-            }
-          }}
-        />
-        <Text />
-        <Text dimColor>[Esc] cancel</Text>
-      </Box>
-    );
-  }
-
   // Device picker overlay
   if (deviceStep && deviceStep !== 'loading') {
     if (deviceStep === 'test') {
       return (
-        <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-          <Text bold color="blue">
-            Audio Test
-          </Text>
-          <Box height={1} overflow="hidden">
-            <Text dimColor>{'─'.repeat(200)}</Text>
-          </Box>
+        <Screen
+          title="Audio Test"
+          hints={[
+            { key: 't', label: 'test tone' },
+            { key: 'enter', label: 'confirm' },
+            { key: 'esc', label: 're-select' },
+          ]}
+        >
           <Text>
             Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
           </Text>
           <Text>
             Output: <Text bold>{selectedOutput?.name ?? 'System Default'}</Text>
           </Text>
-          <Text />
           <Text bold>Mic level:</Text>
           <Text>
-            <Text color={barColor(micLevel)}>{renderBar(micLevel)}</Text>
+            <MicBar level={micLevel} />
           </Text>
-          <Text />
-          <Text dimColor>[t] play test tone [Enter] confirm [Esc] re-select</Text>
-        </Box>
+        </Screen>
       );
     }
 
@@ -324,15 +320,16 @@ export function RoomView({
 
     if (deviceStep === 'input') {
       return (
-        <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-          <Text bold color="blue">
-            Change Audio Device
-          </Text>
-          <Box height={1} overflow="hidden">
-            <Text dimColor>{'─'.repeat(200)}</Text>
-          </Box>
+        <Screen
+          title="Change Audio Device"
+          hints={[
+            { key: '↑↓', label: 'navigate' },
+            { key: 'enter', label: 'select' },
+            { key: 'esc', label: 'cancel' },
+          ]}
+        >
           <Text bold>Input (Microphone):</Text>
-          <SelectInput
+          <Select
             items={inputItems}
             onSelect={(item) => {
               const device = devices.inputs.find((d) => d.id === item.value);
@@ -345,26 +342,24 @@ export function RoomView({
               }
             }}
           />
-          <Text />
-          <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
-        </Box>
+        </Screen>
       );
     }
 
     return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1} paddingY={1}>
-        <Text bold color="blue">
-          Change Audio Device
-        </Text>
-        <Box height={1} overflow="hidden">
-          <Text dimColor>{'─'.repeat(200)}</Text>
-        </Box>
+      <Screen
+        title="Change Audio Device"
+        hints={[
+          { key: '↑↓', label: 'navigate' },
+          { key: 'enter', label: 'select' },
+          { key: 'esc', label: 'cancel' },
+        ]}
+      >
         <Text>
           Input: <Text bold>{selectedInput?.name ?? 'System Default'}</Text>
         </Text>
-        <Text />
         <Text bold>Output (Speakers):</Text>
-        <SelectInput
+        <Select
           items={outputItems}
           onSelect={(item) => {
             const device = devices.outputs.find((d) => d.id === item.value);
@@ -372,36 +367,67 @@ export function RoomView({
             setDeviceStep('test');
           }}
         />
-        <Text />
-        <Text dimColor>[↑↓] navigate [Enter] select [Esc] cancel</Text>
-      </Box>
+      </Screen>
     );
   }
+
+  // Each modal draws on its own condition; `overlay` only says that one of them is up, which
+  // is what the room behind stands down for. Sharing one flag between the two put an empty
+  // screen picker on top of the camera picker.
+  const screenPicker = screenPickerOpen && screenDeviceList.length > 0;
+  const overlay = screenPicker || cameraList !== null;
+
+  // What `w` and `e` would do to the selected peer right now. These duplicate the conditions
+  // in the key handlers above — deliberately, and they have to be kept in step: a button that
+  // is drawn must work, and a key that works should be advertised.
+  const windowAction = (open: boolean, canOpen: boolean): PeerWindowAction =>
+    open ? 'close' : canOpen ? 'watch' : null;
+  const selectedPeerId = room.videoEnabled ? room.participants[selectedPeerIdx]?.id : undefined;
+  const peerCamAction = selectedPeerId
+    ? windowAction(room.peerVideoOpen[selectedPeerId], room.remoteVideoMuteStates[selectedPeerId] === false)
+    : null;
+  const peerScreenAction =
+    selectedPeerId && room.remoteScreenShareStates[selectedPeerId]
+      ? windowAction(room.peerScreenOpen[selectedPeerId], true)
+      : null;
 
   return (
     <Box flexDirection="column" flexGrow={1}>
       {/* Header */}
       <Box paddingX={1} gap={1} justifyContent="space-between">
         <Box gap={1}>
-          <Text bold color="blue">
+          <Text bold color={theme.accent}>
             OpenMeet <Text dimColor>v{version}</Text> <Text dimColor>({platformName})</Text>
           </Text>
+          {/* `g` toggles the debug panel and is deliberately not drawn: it is for whoever is
+              debugging the app, not for whoever is in the call. */}
+          <KeyHints hints={[{ key: 'q', label: leaveArmed ? 'again to leave' : 'leave', disabled: inputFocused }]} />
           <Text dimColor>|</Text>
           <Text>
             Room: <Text bold>{roomId}</Text>
           </Text>
           <Text dimColor>|</Text>
           <Text>{room.participants.length + 1}p</Text>
+          {room.joinedAt && (
+            <>
+              <Text dimColor>|</Text>
+              <Elapsed since={room.joinedAt} />
+            </>
+          )}
         </Box>
         <Box gap={1}>
           {room.connectionStats ? (
             <>
-              <Text color="green">↑{room.connectionStats.sendBitrateKbps}k</Text>
-              <Text color="cyan">↓{room.connectionStats.recvBitrateKbps}k</Text>
+              <Text color={theme.ok}>↑{room.connectionStats.sendBitrateKbps}k</Text>
+              <Text color={theme.info}>↓{room.connectionStats.recvBitrateKbps}k</Text>
               <Text dimColor>|</Text>
               <Text
                 color={
-                  room.connectionStats.rttMs > 150 ? 'red' : room.connectionStats.rttMs > 80 ? 'yellow' : undefined
+                  room.connectionStats.rttMs > 150
+                    ? theme.danger
+                    : room.connectionStats.rttMs > 80
+                      ? theme.warn
+                      : theme.text
                 }
               >
                 RTT:{room.connectionStats.rttMs}ms
@@ -409,10 +435,10 @@ export function RoomView({
               <Text
                 color={
                   room.connectionStats.packetLossPercent > 5
-                    ? 'red'
+                    ? theme.danger
                     : room.connectionStats.packetLossPercent > 1
-                      ? 'yellow'
-                      : undefined
+                      ? theme.warn
+                      : theme.text
                 }
               >
                 Loss:{room.connectionStats.packetLossPercent}%
@@ -420,86 +446,111 @@ export function RoomView({
               <Text dimColor>|</Text>
             </>
           ) : null}
-          <Text color={room.connected ? 'green' : 'red'}>●</Text>
+          <Text color={room.connected ? theme.ok : theme.danger}>●</Text>
         </Box>
-      </Box>
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
       </Box>
 
       {deviceStep === 'loading' && (
         <Box paddingX={1}>
-          <Text color="yellow">Loading audio devices...</Text>
+          <Text color={theme.warn}>Loading audio devices...</Text>
         </Box>
       )}
 
-      {/* Participants */}
-      <ParticipantList
-        participants={room.participants}
-        myId={room.myId}
-        username={username}
-        isMuted={room.isMuted}
-        isVideoMuted={room.isVideoMuted}
-        videoEnabled={room.videoEnabled}
-        isScreenSharing={room.isScreenSharing}
-        remoteMuteStates={room.remoteMuteStates}
-        remoteVideoMuteStates={room.remoteVideoMuteStates}
-        remoteScreenShareStates={room.remoteScreenShareStates}
-        peerVideoOpen={room.peerVideoOpen}
-        peerScreenOpen={room.peerScreenOpen}
-        speakingStates={room.speakingStates}
-        audioLevels={room.audioLevels}
-        peerVolumes={room.peerVolumes}
-        selectedPeerIdx={selectedPeerIdx}
-        connectionStats={room.connectionStats}
-      />
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
-
-      {/* Chat + Room Log — split horizontally */}
-      <Box flexGrow={1} flexBasis={0} overflow="hidden">
-        <Box flexDirection="column" flexGrow={1} flexBasis="50%">
-          <ChatLog messages={room.chatMessages} />
-        </Box>
-        <Box
-          flexDirection="column"
-          flexGrow={1}
-          flexBasis="50%"
-          borderStyle="single"
-          borderRight={false}
-          borderTop={false}
-          borderBottom={false}
-          borderDimColor
-        >
-          <RoomLog events={room.roomEvents} joinedAt={room.joinedAt} />
-        </Box>
-      </Box>
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
-
-      {/* Input */}
-      <ChatInput focused={inputFocused} onSend={room.sendMessage} />
-      <Box height={1} overflow="hidden">
-        <Text dimColor>{'─'.repeat(200)}</Text>
-      </Box>
-
-      {/* Status */}
-      <StatusBar
-        isMuted={room.isMuted}
-        isVideoMuted={room.isVideoMuted}
-        videoEnabled={room.videoEnabled}
-        webcamEnabled={room.webcamEnabled}
-        isScreenSharing={room.isScreenSharing}
-        debugMode={room.debugMode}
+      <SplitPanes
+        chat={
+          <>
+            <ChatLog entries={chat} arrowsScroll={inputFocused} active={!overlay} />
+            <ChatInput focused={inputFocused} active={!overlay} onSend={room.sendMessage} />
+          </>
+        }
+        people={
+          <>
+            <ParticipantList
+              myActions={
+                <MyActions
+                  isMuted={room.isMuted}
+                  isVideoMuted={room.isVideoMuted}
+                  videoEnabled={room.videoEnabled}
+                  webcamEnabled={room.webcamEnabled}
+                  isScreenSharing={room.isScreenSharing}
+                  inputFocused={inputFocused}
+                />
+              }
+              participants={room.participants}
+              username={identity.name}
+              color={identity.color}
+              isMuted={room.isMuted}
+              isVideoMuted={room.isVideoMuted}
+              videoEnabled={room.videoEnabled}
+              isScreenSharing={room.isScreenSharing}
+              remoteMuteStates={room.remoteMuteStates}
+              remoteVideoMuteStates={room.remoteVideoMuteStates}
+              remoteScreenShareStates={room.remoteScreenShareStates}
+              peerVideoOpen={room.peerVideoOpen}
+              peerScreenOpen={room.peerScreenOpen}
+              speakingStates={room.speakingStates}
+              audioLevels={room.audioLevels}
+              peerVolumes={room.peerVolumes}
+              selectedPeerIdx={selectedPeerIdx}
+              connectionStats={room.connectionStats}
+            />
+            {room.debugMode && (
+              <>
+                <Rule />
+                <DebugLog events={room.roomEvents} />
+              </>
+            )}
+            {/* Pinned to the bottom of the pane: on a short terminal the list gives way first. */}
+            <Box flexGrow={1} />
+            <Box paddingX={1} flexDirection={'column'}>
+              <Divider />
+              <PeerActions
+                hasPeers={room.participants.length > 0}
+                videoEnabled={room.videoEnabled}
+                peerCam={peerCamAction}
+                peerScreen={peerScreenAction}
+                inputFocused={inputFocused}
+              />
+            </Box>
+          </>
+        }
       />
 
       {/* Error */}
       {room.error && (
         <Box paddingX={1}>
-          <Text color="red">Error: {room.error}</Text>
+          <Text color={theme.danger}>Error: {room.error}</Text>
         </Box>
+      )}
+
+      {cameraList && (
+        <CameraPicker
+          cameras={cameraList}
+          current={loadSettings().videoDeviceId}
+          cameraBusy={room.webcamCapturing}
+          onSelect={(device) => {
+            setCameraList(null);
+            room.shareCamera(device.id);
+          }}
+          onCancel={() => setCameraList(null)}
+        />
+      )}
+
+      {/* Over the room, not instead of it: the conversation stays visible behind the choice. */}
+      {screenPicker && (
+        <Modal title="Share a screen" hints={[{ key: 'esc', label: 'cancel' }]}>
+          <Select
+            items={screenDeviceList.map((d) => ({ label: screenLabel(d), value: d.id }))}
+            onSelect={(item) => {
+              const device = screenDeviceList.find((d) => d.id === item.value);
+              if (device) {
+                setLastScreenDevice(device);
+                setScreenPickerOpen(false);
+                room.startScreenSharing(device);
+              }
+            }}
+          />
+        </Modal>
       )}
     </Box>
   );

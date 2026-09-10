@@ -239,18 +239,10 @@ function drawText(buf: Buffer, bufW: number, bufH: number, text: string, startX:
  * Render a semi-transparent dark bar with white text at the bottom of an I420 frame.
  * Shows peer name, stream type, and source resolution.
  */
-export function renderOverlay(
-  buf: Buffer,
-  w: number,
-  h: number,
-  peerName: string,
-  streamType: string,
-  srcW: number,
-  srcH: number,
-): void {
+export function renderOverlay(buf: Buffer, w: number, h: number, peerName: string, streamType: string): void {
   // Build text — filter to ASCII-renderable chars (emoji usernames become "peer")
   const name = peerName.replace(/[^\x20-\x7E]/g, '').trim() || 'peer';
-  const text = `${name} | ${streamType} | ${srcW}x${srcH}`;
+  const text = `${name} | ${streamType} | ${w}x${h}`;
 
   const barY = h - BAR_H;
 

@@ -1,62 +1,57 @@
-import type { Room } from '@openmeet/shared';
-import { Box, useApp } from 'ink';
-import { useEffect, useState } from 'react';
+import { Box, useApp, useWindowSize } from 'ink';
+import { useCallback, useEffect, useState } from 'react';
 import { DevicePicker } from './components/device-picker.js';
 import { HomeScreen } from './components/home-screen.js';
+import { ProfileSetup } from './components/profile-setup.js';
 import { RoomView } from './components/room-view.js';
 import { SettingsView } from './components/settings-view.js';
 import { type AudioDevice, type AudioDeviceSelection, listAudioDevices } from './engine/client.js';
-import { loadSettings, saveSettings } from './lib/settings.js';
+import { resolveBroadcastDefault } from './lib/audio/nvidia-broadcast.js';
+import type { Identity } from './lib/identity.js';
+import { loadIdentity, loadSettings, saveSettings } from './lib/settings.js';
+import { framedBorder, theme } from './lib/theme.js';
 
 interface AppProps {
   serverUrl: string;
-  emoji: string;
   version: string;
   initialRoom?: string;
   inputDevice?: string;
   outputDevice?: string;
   videoEnabled?: boolean;
+  /** Shown in the room log when `videoEnabled` is false, so the missing buttons explain themselves. */
+  videoDisabledReason?: string;
   webcamEnabled?: boolean;
   videoDevice?: string;
   debug?: boolean;
 }
 
-type Screen = 'home' | 'settings' | 'devices' | 'room';
+/** `profile` comes first, once: nothing else makes sense without a name to join as. */
+type Screen = 'profile' | 'home' | 'settings' | 'devices' | 'room';
 
-function wsToHttpUrl(wsUrl: string): string {
-  const url = new URL(wsUrl);
-  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-  url.pathname = '';
-  return url.origin;
-}
-
+/**
+ * The window frame, sized to the terminal.
+ *
+ * Only the height is tracked: Ink already lays the root out to the terminal width, so a Box
+ * with no `width` stretches to it, while a Box is only as tall as its content and the frame
+ * has to reach the bottom for the painted background to cover. Never pass a `width` derived
+ * from our own resize handling — see gotcha 30e for what that cost.
+ *
+ * Clipping is vertical only. Ink clips an `overflow="hidden"` box at its border, and the
+ * section rules need to reach *over* the border to draw their `├` and `┤` on it (see `Rule`);
+ * nothing else is ever wider than the frame, while content taller than the terminal must not
+ * scroll the alternate screen.
+ */
 function FullScreen({ children }: { children: React.ReactNode }) {
-  const [size, setSize] = useState({
-    columns: process.stdout.columns || 80,
-    rows: process.stdout.rows || 24,
-  });
-
-  useEffect(() => {
-    const onResize = () => {
-      setSize({
-        columns: process.stdout.columns || 80,
-        rows: process.stdout.rows || 24,
-      });
-    };
-    process.stdout.on('resize', onResize);
-    return () => {
-      process.stdout.off('resize', onResize);
-    };
-  }, []);
+  const { rows } = useWindowSize();
 
   return (
     <Box
-      width={size.columns}
-      height={size.rows}
+      height={rows}
       borderStyle="round"
-      borderColor="blue"
+      backgroundColor={theme.bg}
+      {...framedBorder}
       flexDirection="column"
-      overflow="hidden"
+      overflowY="hidden"
     >
       {children}
     </Box>
@@ -65,18 +60,20 @@ function FullScreen({ children }: { children: React.ReactNode }) {
 
 export function App({
   serverUrl,
-  emoji,
   version,
   initialRoom,
   inputDevice,
   outputDevice,
   videoEnabled,
+  videoDisabledReason,
   webcamEnabled,
   videoDevice,
   debug = false,
 }: AppProps) {
   const { exit } = useApp();
-  const [screen, setScreen] = useState<Screen>(initialRoom ? 'devices' : 'home');
+  const [identity, setIdentity] = useState<Identity | null>(() => loadIdentity());
+  const afterProfile: Screen = initialRoom ? 'devices' : 'home';
+  const [screen, setScreen] = useState<Screen>(identity ? afterProfile : 'profile');
   const [roomId, setRoomId] = useState(initialRoom ?? '');
   const [devices, setDevices] = useState<{ inputs: AudioDevice[]; outputs: AudioDevice[] }>({
     inputs: [],
@@ -84,8 +81,6 @@ export function App({
   });
   const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [deviceSelection, setDeviceSelection] = useState<AudioDeviceSelection>({});
-  const [creating, setCreating] = useState(false);
-  const [homeError, setHomeError] = useState<string | null>(null);
 
   // Load audio devices
   useEffect(() => {
@@ -94,6 +89,19 @@ export function App({
       setDevicesLoaded(true);
     });
   }, []);
+
+  /**
+   * The one way into the room. The saved ids stay exactly what was chosen ("System Default"
+   * included); only the live selection is resolved, so the engine can see when the system
+   * default is really the Broadcast mic.
+   */
+  const enterRoom = useCallback(
+    (input: AudioDevice | undefined, output: AudioDevice | undefined) => {
+      setDeviceSelection({ input: resolveBroadcastDefault(input, devices.inputs), output });
+      setScreen('room');
+    },
+    [devices.inputs],
+  );
 
   // Resolve device selection from saved settings when transitioning to devices screen
   useEffect(() => {
@@ -105,8 +113,7 @@ export function App({
     if (inputDevice && outputDevice) {
       const input = devices.inputs.find((d) => d.name === inputDevice);
       const output = devices.outputs.find((d) => d.name === outputDevice);
-      setDeviceSelection({ input, output });
-      setScreen('room');
+      enterRoom(input, output);
       return;
     }
 
@@ -119,35 +126,10 @@ export function App({
         const output = settings.audioOutputId
           ? devices.outputs.find((d) => d.id === settings.audioOutputId)
           : undefined;
-        setDeviceSelection({ input, output });
-        setScreen('room');
+        enterRoom(input, output);
       }
     }
-  }, [screen, inputDevice, outputDevice, devices, devicesLoaded]);
-
-  const handleCreateRoom = async () => {
-    setCreating(true);
-    setHomeError(null);
-    try {
-      const httpUrl = wsToHttpUrl(serverUrl);
-      const res = await fetch(`${httpUrl}/api/rooms`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Room' }),
-      });
-      if (res.ok) {
-        const room: Room = await res.json();
-        setRoomId(room.id);
-        setScreen('devices');
-      } else {
-        setHomeError('Failed to create room');
-      }
-    } catch {
-      setHomeError('Cannot reach server');
-    } finally {
-      setCreating(false);
-    }
-  };
+  }, [screen, inputDevice, outputDevice, devices, devicesLoaded, enterRoom]);
 
   const handleJoinRoom = (id: string) => {
     setRoomId(id);
@@ -156,19 +138,32 @@ export function App({
 
   return (
     <FullScreen>
-      {screen === 'home' && (
+      {screen === 'profile' && (
+        <ProfileSetup
+          onDone={(next) => {
+            saveSettings({ name: next.name, color: next.color });
+            setIdentity(next);
+            setScreen(afterProfile);
+          }}
+        />
+      )}
+      {screen === 'home' && identity && (
         <HomeScreen
-          emoji={emoji}
+          identity={identity}
           version={version}
-          loading={creating}
-          error={homeError}
-          onCreateRoom={handleCreateRoom}
           onJoinRoom={handleJoinRoom}
           onSettings={() => setScreen('settings')}
           onQuit={() => exit()}
         />
       )}
-      {screen === 'settings' && <SettingsView onBack={() => setScreen('home')} />}
+      {screen === 'settings' && (
+        <SettingsView
+          onBack={() => {
+            setIdentity(loadIdentity());
+            setScreen('home');
+          }}
+        />
+      )}
       {screen === 'devices' && (
         <DevicePicker
           inputs={devices.inputs}
@@ -182,19 +177,19 @@ export function App({
               audioOutputId: output?.id ?? null,
               devicesConfigured: true,
             });
-            setDeviceSelection({ input, output });
-            setScreen('room');
+            enterRoom(input, output);
           }}
         />
       )}
-      {screen === 'room' && (
+      {screen === 'room' && identity && (
         <RoomView
           serverUrl={serverUrl}
           roomId={roomId}
-          username={emoji}
+          identity={identity}
           version={version}
           deviceSelection={deviceSelection}
           videoEnabled={videoEnabled}
+          videoDisabledReason={videoDisabledReason}
           webcamEnabled={webcamEnabled}
           videoDevice={videoDevice}
           debug={debug}

@@ -2,7 +2,15 @@ import wrtc from '@roamhq/wrtc';
 import type { AudioBackend, AudioDeviceSelection } from './backend.js';
 import { createAudioBackend } from './backend.js';
 import { type InputChannelPolicy, InputConditioner } from './channels.js';
-import { CHANNELS, computeRMS, FRAME_SAMPLES, FRAME_SIZE, SAMPLE_RATE, SPEAKING_RMS_THRESHOLD } from './constants.js';
+import {
+  CHANNELS,
+  computeRMS,
+  FRAME_SAMPLES,
+  FRAME_SIZE,
+  followLevel,
+  SAMPLE_RATE,
+  SPEAKING_RMS_THRESHOLD,
+} from './constants.js';
 import { FrameMixer, PeerPlayoutBuffer } from './mixer.js';
 import { PcmDump } from './pcm-dump.js';
 import { type CaptureProcessor, CaptureProcessorChain } from './processors.js';
@@ -209,7 +217,7 @@ export class AudioManager {
 
     const rms = computeRMS(samples);
     this.updateSpeaking(LOCAL_ID, rms);
-    this.audioLevels.set(LOCAL_ID, rms);
+    this.audioLevels.set(LOCAL_ID, followLevel(this.audioLevels.get(LOCAL_ID) ?? 0, rms));
 
     const frame = this._isMuted ? this.silence : this.processors.isEmpty ? samples : this.processors.process(samples);
 
@@ -272,7 +280,7 @@ export class AudioManager {
         const samples: Int16Array = data.samples;
         const rms = computeRMS(samples);
         this.updateSpeaking(peerId, rms);
-        this.audioLevels.set(peerId, rms);
+        this.audioLevels.set(peerId, followLevel(this.audioLevels.get(peerId) ?? 0, rms));
         // The addon may reuse the underlying buffer; the ring copies on push.
         peer.buffer.push(samples, data.numberOfFrames);
         peer.dump?.write(samples);
@@ -313,6 +321,7 @@ export class AudioManager {
 
   // ─── Levels / speaking ───────────────────────────────────────────────
 
+  /** The meter levels: per-frame RMS with the meter's ballistics applied (`followLevel`), not the raw RMS. */
   getAllAudioLevels(): Record<string, number> {
     const levels: Record<string, number> = {};
     for (const [peerId, level] of this.audioLevels) levels[peerId] = level;

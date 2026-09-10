@@ -14,6 +14,7 @@ export function handleChatMessage(
       ...message,
       id: nanoid(),
       username: sender.username,
+      color: sender.color,
       timestamp: Date.now(),
     },
   };

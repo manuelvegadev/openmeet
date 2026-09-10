@@ -49,6 +49,7 @@ export function setupSignaling(server: Server): void {
               participantId,
               roomId: message.roomId,
               username: message.username,
+              color: message.color,
             };
 
             const participant = addParticipant(message.roomId, message.username, client);
@@ -73,7 +74,12 @@ export function setupSignaling(server: Server): void {
             // Broadcast participant-joined to others
             const joinMsg = JSON.stringify({
               type: 'participant-joined',
-              participant: { id: participant.id, username: message.username, joinedAt: participant.joinedAt },
+              participant: {
+                id: participant.id,
+                username: message.username,
+                color: message.color,
+                joinedAt: participant.joinedAt,
+              },
             });
             for (const [id, c] of room.clients) {
               if (id !== participantId && c.ws.readyState === WebSocket.OPEN) {
