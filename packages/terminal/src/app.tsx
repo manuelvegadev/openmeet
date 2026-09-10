@@ -36,18 +36,24 @@ type Screen = 'profile' | 'home' | 'settings' | 'devices' | 'room';
  * has to reach the bottom for the painted background to cover. Never pass a `width` derived
  * from our own resize handling — see gotcha 30e for what that cost.
  *
+ * `closeBottom` is how the room draws its own last line: a screen whose bottom edge carries a
+ * junction (the chat/participants divider meets it) has to draw that edge itself, because a
+ * child cannot bleed downwards onto the border the way `Rule` bleeds sideways onto it — the
+ * clip below is the whole point. Everything else lets the frame close itself.
+ *
  * Clipping is vertical only. Ink clips an `overflow="hidden"` box at its border, and the
  * section rules need to reach *over* the border to draw their `├` and `┤` on it (see `Rule`);
  * nothing else is ever wider than the frame, while content taller than the terminal must not
  * scroll the alternate screen.
  */
-function FullScreen({ children }: { children: React.ReactNode }) {
+function FullScreen({ children, closeBottom = true }: { children: React.ReactNode; closeBottom?: boolean }) {
   const { rows } = useWindowSize();
 
   return (
     <Box
       height={rows}
       borderStyle="round"
+      borderBottom={closeBottom}
       backgroundColor={theme.bg}
       {...framedBorder}
       flexDirection="column"
@@ -137,7 +143,7 @@ export function App({
   };
 
   return (
-    <FullScreen>
+    <FullScreen closeBottom={screen !== 'room'}>
       {screen === 'profile' && (
         <ProfileSetup
           onDone={(next) => {

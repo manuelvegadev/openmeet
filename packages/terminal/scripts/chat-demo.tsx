@@ -186,19 +186,21 @@ function Demo() {
             }}
           />
         }
+        footer={
+          <Box paddingX={1}>
+            <KeyHints
+              hints={[
+                { key: 'q', label: 'quit' },
+                { key: 'tab', label: focused ? 'controls' : 'chat' },
+                { key: '↑↓', label: 'scroll', disabled: !focused },
+                { key: 'pgup/dn', label: 'scroll ×10' },
+                { key: 'space', label: paused ? 'resume' : 'pause' },
+                { key: 'r', label: 'restart' },
+              ]}
+            />
+          </Box>
+        }
       />
-      <Box paddingX={1}>
-        <KeyHints
-          hints={[
-            { key: 'q', label: 'quit' },
-            { key: 'tab', label: focused ? 'controls' : 'chat' },
-            { key: '↑↓', label: 'scroll', disabled: !focused },
-            { key: 'pgup/dn', label: 'scroll ×10' },
-            { key: 'space', label: paused ? 'resume' : 'pause' },
-            { key: 'r', label: 'restart' },
-          ]}
-        />
-      </Box>
     </Box>
   );
 }

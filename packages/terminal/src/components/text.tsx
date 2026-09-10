@@ -63,18 +63,22 @@ export function Line({ start, end, ...box }: { start?: string; end?: string } & 
  * therefore belongs directly in an unpadded column — `Screen` and `SplitPanes` place it so;
  * inside a padded box it would stop short of the frame.
  *
+ * `start` and `end` are those junctions; a rule that *is* the frame's bottom edge passes the
+ * frame's own corners (`╰` and `╯`) instead, which is how the room closes without stacking a
+ * second line under its last one.
+ *
  * The middle is `children` when given — runs of `Line` that mirror a split below or above,
  * so a `┬` or `┴` lands exactly on the divider's column because both rows are laid out by
  * Yoga from the same flex props — and one plain run otherwise.
  */
-export function Rule({ children }: { children?: ReactNode }) {
+export function Rule({ children, start = '├', end = '┤' }: { children?: ReactNode; start?: string; end?: string }) {
   // `flexShrink={0}`: when a screen's content is taller than the terminal, Yoga shrinks the
   // children that let it, and a rule shrunk to no rows leaves the content drawn over its line.
   return (
     <Box height={1} flexShrink={0} marginLeft={-1} marginRight={-1}>
-      <Line start="├" width={1} />
+      <Line start={start} width={1} />
       <Box flexGrow={1}>{children ?? <Line flexGrow={1} />}</Box>
-      <Line end="┤" width={1} />
+      <Line end={end} width={1} />
     </Box>
   );
 }
