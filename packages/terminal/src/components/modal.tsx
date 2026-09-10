@@ -1,4 +1,4 @@
-import { Box } from 'ink';
+import { Box, type Key, useInput } from 'ink';
 import type { ReactNode } from 'react';
 import { framedBorder, theme } from '../lib/theme.js';
 import { type KeyHint, KeyHints } from './key-hints.js';
@@ -8,6 +8,11 @@ interface ModalProps {
   title: string;
   /** The footer buttons, inside the panel. */
   hints?: KeyHint[];
+  /**
+   * Keys the panel answers itself. The room stands down while a modal is up, so this is where
+   * Escape and anything else the panel offers is handled.
+   */
+  onKey?: (input: string, key: Key) => void;
   children?: ReactNode;
 }
 
@@ -24,7 +29,9 @@ interface ModalProps {
  * Rendered by the room *alongside* its own tree, never in place of it, and while it is up the
  * room ignores every key but the ones the modal offers.
  */
-export function Modal({ title, hints, children }: ModalProps) {
+export function Modal({ title, hints, onKey, children }: ModalProps) {
+  useInput((input, key) => onKey?.(input, key), { isActive: !!onKey });
+
   return (
     <Box position="absolute" width="100%" height="100%" justifyContent="center" alignItems="center">
       <Box

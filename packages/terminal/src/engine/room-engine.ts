@@ -494,6 +494,20 @@ export class RoomEngine {
     this.broadcastStates();
   }
 
+  /**
+   * Point the capture at a camera, or release it with `null`. The camera picker releases
+   * before previewing one and sets the choice when you pick, so the device is never held by
+   * the capture and a preview at the same time.
+   */
+  setVideoDevice(device: string | null): void {
+    const vm = this.videoManager;
+    if (!vm || !this.videoSource) return;
+    vm.stopCapture();
+    if (device === null) return;
+    saveSettings({ videoDeviceId: device });
+    vm.startCapture(this.videoSource, device);
+  }
+
   toggleOverlay(): void {
     if (!this.videoManager) return;
     this.videoManager.overlayEnabled = !this.videoManager.overlayEnabled;

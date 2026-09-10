@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { parseArgs } from 'node:util';
 import { render } from 'ink';
@@ -27,9 +27,10 @@ import {
 import { listScreenDevices } from './lib/devices.js';
 import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
 import { getPlatformSupport } from './lib/platform.js';
+import { startPreview } from './lib/preview.js';
 import { AUDIO_KBPS_MAX, AUDIO_KBPS_MIN, parseKbpsFlag, SCREEN_KBPS_MAX, SCREEN_KBPS_MIN } from './lib/sdp.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
-import { ffmpegBin, ffplayBin, findTool } from './lib/tool-path.js';
+import { findTool } from './lib/tool-path.js';
 import {
   createFocusFilteredStdin,
   parsePausePolicyFlag,
@@ -49,28 +50,12 @@ function missingVideoTools(): string[] {
   return ['ffmpeg', 'ffplay'].filter((tool) => findTool(tool) === null);
 }
 
-/** ffmpeg → ffplay preview for the --test-* modes; exits with either process. */
-/** `candidates` is walked the same way a real capture walks it: on to the next if one yields nothing. */
+/**
+ * The `--test-*` modes: one preview window, walking the candidate grabbers the way a real
+ * capture does — on to the next if one yields nothing — and exiting with the window.
+ */
 function runPreview(candidates: string[][], playerArgs: string[], index = 0): void {
-  const capture: ChildProcess = spawn(ffmpegBin(), candidates[index], { stdio: ['ignore', 'pipe', 'inherit'] });
-  const player: ChildProcess = spawn(ffplayBin(), playerArgs, { stdio: ['pipe', 'ignore', 'ignore'] });
-  let sawFrames = false;
-  capture.stdout?.once('data', () => {
-    sawFrames = true;
-  });
-  capture.stdout?.pipe(player.stdin!);
-  // Closing the ffplay window breaks the pipe before 'close' fires; not an error worth a stack trace.
-  player.stdin?.on('error', () => {});
-  const stop = () => {
-    capture.kill();
-    player.kill();
-  };
-  player.on('close', () => {
-    capture.kill();
-    process.exit(0);
-  });
-  capture.on('close', () => {
-    player.kill();
+  const stop = startPreview(candidates[index], playerArgs, (sawFrames) => {
     if (!sawFrames && index + 1 < candidates.length) {
       process.stderr.write('That grabber produced no frames; trying the next one.\n');
       runPreview(candidates, playerArgs, index + 1);

@@ -135,6 +135,11 @@ export type EngineCommand =
   | { type: 'send-chat'; content: string }
   | { type: 'toggle-mute' }
   | { type: 'toggle-video' }
+  /**
+   * Which camera to capture, or `null` to let go of it — the picker releases the device so it
+   * can preview one (a camera opens once on macOS) and hands it back when you choose.
+   */
+  | { type: 'set-video-device'; device: string | null }
   | { type: 'toggle-overlay' }
   | { type: 'start-screen-share'; device: ScreenDevice }
   | { type: 'stop-screen-share' }
