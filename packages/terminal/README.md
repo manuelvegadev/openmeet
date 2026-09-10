@@ -4,23 +4,21 @@ A terminal-based client for [OpenMeet](https://openmeet.mvega.pro) — join vide
 
 No browser needed. Just your terminal, a mic, and speakers.
 
-<p align="center">
-  <img width="1142" height="714" alt="image" src="https://github.com/user-attachments/assets/2649e633-1f9b-434e-b1f8-ff8a04dca388" />
-</p>
+![OpenMeet running in a terminal: the conversation on the left, the participants with their state tags and VU meters on the right](https://raw.githubusercontent.com/manuelvegadev/openmeet/main/docs/screenshot.png)
 
 ## Features
 
 - **Real-time audio chat** — full-duplex stereo audio via WebRTC, Opus at a configurable ceiling (128 kbps each way by default) with RED redundancy and optional noise suppression, on the CPU (RNNoise) or on the GPU (NVIDIA Broadcast, Windows + RTX)
-- **Video support** — send and receive webcam video (1080p) via ffmpeg/ffplay
+- **Video support** — send and receive webcam video via ffmpeg/ffplay, in the camera's own aspect ratio at up to 720 px tall (a 4K camera goes out as 1280x720, a 16:9 one is not letterboxed into 4:3)
 - **Screen sharing** — share your screen at 30 fps in its own aspect ratio, 1080 px tall (an ultrawide goes out at 2580x1080, not letterboxed into 16:9), under a configurable bandwidth ceiling that follows the room; view remote screen shares
-- **Text messaging** — send and receive chat messages alongside audio
+- **Text messaging** — one conversation: messages and what happens in the room (joins, mutes, shares) folded into a single stream by time
 - **Device selection** — pick your mic, speakers, camera, and screen capture device
 - **Per-participant volume** — adjust volume for each remote peer independently
 - **Speaking indicators** — see who's talking with live VU meters
 - **Connection stats** — real-time bitrate, RTT, packet loss, and estimated per-peer latency display
 - **Connection recovery** — automatic retry with exponential backoff on connection failure
 - **Room management** — create new rooms or join existing ones by room code
-- **Emoji identities** — auto-assigned persistent emoji username (e.g., 🐶, 🦊, 🐸)
+- **A name and a colour** — chosen once on first run, up to 8 characters, editable in Settings; everyone sees you as `[name]` in your colour, in the participant list and in every message
 - **Debug logging** — optional file-based debug log at `~/.config/openmeet/debug.log`
 - **Cross-platform** — macOS and Windows (audio + chat), Linux (best effort)
 
@@ -119,7 +117,7 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--screen-receive-kbps <n>` | Screen-share ceiling you ask each peer to respect towards you (saved; also in Settings) | `2500` |
 | `--noise-suppression` | RNNoise on the microphone; `--no-noise-suppression` turns it off (saved; also in Settings). Ignored when the input is the NVIDIA Broadcast mic, which already does it on the GPU | off |
 | `--pause-rendering <p>` | Pause TUI rendering (audio keeps running) when the window is `minimized`, when it is `unfocused`, or `never` (saved; also in Settings) | `minimized` |
-| `--no-video` | Disable video (audio-only mode; always off on Windows) | |
+| `--no-video` | Disable video (audio-only mode; the webcam is macOS/Linux only either way) | |
 | `--video-device <id>` | Video capture device (e.g., `"0"`) | |
 | `--no-overlay` | Disable video overlay | |
 | `--test-camera` | Test camera capture (opens ffplay preview) | |
@@ -129,22 +127,25 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 
 ### Keyboard shortcuts
 
-Once inside a room:
+Once inside a room, `Tab` decides who gets the keys — the chat, or the room's controls. The keys below act when the controls have them; while you are typing, the letters go into the message.
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Toggle focus between participant list and chat input |
-| `m` | Toggle mute (when participant list is focused) |
-| `v` | Toggle camera on/off (requires `--video-device` or video enabled) |
-| `s` | Toggle screen sharing (shows screen picker on first use) |
-| `w` | Open/close selected peer's webcam (only when peer has camera on) |
-| `e` | Open/close selected peer's screen share (only when peer is sharing) |
-| `o` | Toggle video overlay (name, resolution info on video windows) |
-| `d` | Open device picker |
-| `Up` / `Down` | Select participant |
-| `[` / `]` or `-` / `+` | Adjust selected peer's volume |
-| `Enter` | Send chat message (when chat input is focused) |
-| `Esc` | Leave room |
+| `Tab` | Hand the keyboard between the chat and the room's controls |
+| `q` `q` | Leave the room — twice, so one key cannot end a call by accident |
+| `m` | Mute / unmute |
+| `v` | Camera on / off. With more than one camera it asks which, and `t` looks through one before you share it |
+| `s` | Screen share on / off. With more than one screen it asks which, by the monitor's own name |
+| `d` | Change microphone and speakers without leaving the room |
+| `w` | Open / close the selected peer's camera window (when their camera is on) |
+| `e` | Open / close the selected peer's screen window (when they are sharing) |
+| `↑` `↓` | Select a participant |
+| `[` `]` or `-` `+` | The selected peer's volume |
+| `Enter` | Send the message (chat focused) |
+| `Esc` `Esc` | Throw the draft away (chat focused) |
+| `↑` `↓`, `PgUp` `PgDn` | Scroll the conversation |
+
+State is shown as single letters beside each participant — `m` muted, `c` camera, `s` screen — lower case while they are sending it, upper case while you have their window open.
 
 ## How it works
 
@@ -162,8 +163,8 @@ Terminal ◀────────── WebSocket ─────────
 0. **Two processes**: the TUI forks an audio/network engine (`openmeet --engine`). Rendering the terminal never delays audio; the interface just paints the latest state it received.
 1. **Audio capture**: the engine opens the microphone in-process (RtAudio → CoreAudio/WASAPI) at the device's own sample rate and channel count — 16 kHz Bluetooth headsets, 44.1 kHz USB mixers, 96 kHz interfaces, mono laptop mics all work — and converts to the pipeline's 48 kHz stereo with an in-process polyphase resampler (≈90 dB SNR), so the driver never resamples and your interface's clock setting is left alone. Interfaces with more than two inputs show one entry per channel pair. A channel policy (`auto` by default) notices a mono mic on one input of a stereo pair and sends it to both ears; `--input-gain` trims quiet or hot mics. The sound card clocks 10 ms frames straight into a WebRTC audio track (stereo Opus, 128 kbps by default in each direction, with RED redundancy so one lost packet does not become a gap). A capture-processor chain sits between the mic and WebRTC; optional RNNoise noise suppression plugs in there — unless the selected input is the NVIDIA Broadcast microphone, in which case the GPU has already done that work and the chain stays empty.
 2. **Audio playback**: each remote peer's decoded audio lands in a small playout buffer; the output callback mixes all peers (with per-peer volume) into one stereo stream. `--audio-backend sox` keeps the old `rec`/`play` subprocess pipeline on macOS/Linux.
-3. **Video capture**: `ffmpeg` captures webcam (1080p) or screen (the screen's own shape, short side capped at 1080 and long side at 3840, 30 fps) and feeds raw I420 frames into WebRTC video tracks
-4. **Video display**: `ffplay` opens separate windows for remote webcam and screen share streams, with aspect-ratio-preserving letterboxing
+3. **Video capture**: `ffmpeg` captures webcam (the camera's own aspect ratio, at most 1280x720) or screen (the screen's own shape, short side capped at 1080 and long side at 3840, 30 fps) and feeds raw I420 frames into WebRTC video tracks
+4. **Video display**: `ffplay` opens separate windows for remote webcam and screen share streams. Nothing is rescaled on the way in — the player is started at whatever resolution the sender is using, and restarted if it changes — and only the *window* is capped, at 1280x720, so a 1080p share does not open edge to edge on a 1080p monitor
 5. **Signaling**: WebSocket connection to the OpenMeet server handles SDP/ICE exchange, chat messages, and room state
 6. **WebRTC**: peer-to-peer connections using `@roamhq/wrtc` (native WebRTC bindings for Node.js) with 3 transceivers per connection (audio, webcam, screen)
 
@@ -205,7 +206,7 @@ openmeet --server ws://localhost:3001/ws
 
 ### "sox is required but not found"
 
-Only shown with `--audio-backend sox` (the default on macOS/Linux). Either install sox with your package manager or run with `--audio-backend rtaudio` to use the native backend.
+Only shown with `--audio-backend sox`, which is the default on Linux and nowhere else — macOS and Windows use the native backend. Either install sox with your package manager or run with `--audio-backend rtaudio`.
 
 ### No audio devices found (Windows)
 

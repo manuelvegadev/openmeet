@@ -7,6 +7,8 @@
 
 Lightweight, self-hosted audio/video conferencing from the terminal. Create or join a room, talk over stereo Opus audio, share your webcam or screen, and chat — all peer-to-peer with no account required.
 
+![OpenMeet running in a terminal: the conversation on the left, the participants with their state tags and VU meters on the right](docs/screenshot.png)
+
 The project has two parts:
 
 - **Server** — a small Express + WebSocket signaling server (no database, no auth)
@@ -14,8 +16,8 @@ The project has two parts:
 
 ## Features
 
-- **Audio calls** — WebRTC peer-to-peer mesh (up to 6 participants), stereo Opus at 256kbps
-- **Webcam and screen sharing** — 1080p video sent via ffmpeg, received in native ffplay windows
+- **Audio calls** — WebRTC peer-to-peer mesh (up to 6 participants), stereo Opus at 128 kbps in each direction by default, RED-protected, with optional noise suppression
+- **Webcam and screen sharing** — sent via ffmpeg, received in native ffplay windows: the camera in its own aspect ratio up to 720 px tall, the screen in its own up to 1080 px on the short side (an ultrawide goes out as 2580x1080, not letterboxed)
 - **Chat** — text messages alongside the call
 - **Per-peer volume, VU meters and latency estimates** — see who is talking and how far away they are
 - **Pick a name and a colour, once** — no sign-up; you show up as `[name]` in your colour for everyone
@@ -43,7 +45,7 @@ See [docs/websocket-webrtc-architecture.md](docs/websocket-webrtc-architecture.m
 | Layer | Technology |
 |-------|-----------|
 | Server | Express 5, ws (WebSocket), Node.js 22 |
-| Terminal client | Ink 5 (React for terminals), @roamhq/wrtc, sox, ffmpeg |
+| Terminal client | Ink 7 (React for terminals), @roamhq/wrtc, audify (RtAudio), ffmpeg |
 | Shared types | TypeScript |
 | Monorepo | pnpm workspaces |
 | Lint/format | Biome |
@@ -68,7 +70,7 @@ openmeet/
 
 - Node.js >= 22
 - pnpm (`corepack enable`)
-- sox (audio) and ffmpeg (video, optional) for the terminal client
+- ffmpeg, for the terminal client's screen sharing and webcam (optional; audio needs nothing — it talks to CoreAudio/WASAPI through a bundled native module)
 
 ### Setup
 
