@@ -1,5 +1,10 @@
 # OpenMeet
 
+[![npm](https://img.shields.io/npm/v/openmeet-terminal?logo=npm&color=cb3837)](https://www.npmjs.com/package/openmeet-terminal)
+[![CI](https://github.com/manuelvegadev/openmeet/actions/workflows/ci.yml/badge.svg)](https://github.com/manuelvegadev/openmeet/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/openmeet-terminal?logo=node.js&logoColor=white&color=5FA04E)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/openmeet-terminal?color=blue)](#license)
+
 Lightweight, self-hosted audio/video conferencing from the terminal. Create or join a room, talk over stereo Opus audio, share your webcam or screen, and chat — all peer-to-peer with no account required.
 
 The project has two parts:
@@ -20,7 +25,7 @@ The project has two parts:
 
 ```
 Client A <──WebRTC P2P──> Client B
-   ↑                        ↑
+   ↑                         ↑
    │   WebSocket (signaling) │
    └──────> Server <─────────┘
               │
