@@ -11,6 +11,12 @@ interface CameraPickerProps {
   cameras: VideoDevice[];
   /** The one to start on, if it is still there. */
   current?: string | null;
+  /**
+   * The room still has the camera open. A preview cannot have it at the same time (macOS
+   * opens a camera once), so `t` waits for the grabber to exit rather than failing with
+   * `Input/output error` — which is what it did before this flag existed.
+   */
+  cameraBusy?: boolean;
   /** Chosen: the room points the capture at it and turns the camera on. */
   onSelect: (device: VideoDevice) => void;
   onCancel: () => void;
@@ -24,7 +30,20 @@ interface CameraPickerProps {
  * and a capture cannot both hold it. Only one preview runs at a time, and it is closed on the
  * way out however you leave.
  */
-export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPickerProps) {
+/**
+ * What to tell someone whose preview showed nothing. macOS says `Input/output error` for the
+ * common case by far — another app already has the camera, since most cameras open once — and
+ * that message sends people looking for a fault that is not there.
+ */
+function explain(closedBy: 'capture' | 'player', error?: string): string {
+  if (closedBy === 'capture' && error && /input\/output error/i.test(error)) {
+    return 'Another app has this camera (OBS, Zoom, a browser tab…). Close it and try again.';
+  }
+  if (error) return error;
+  return closedBy === 'player' ? 'The preview window closed without a picture.' : 'The camera sent no picture.';
+}
+
+export function CameraPicker({ cameras, current, cameraBusy = false, onSelect, onCancel }: CameraPickerProps) {
   const [highlighted, setHighlighted] = useState<VideoDevice>(cameras.find((c) => c.id === current) ?? cameras[0]);
   const [previewing, setPreviewing] = useState<string | null>(null);
   /** Why the last preview showed nothing, if it did not: what ffmpeg or ffplay actually said. */
@@ -56,8 +75,7 @@ export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPic
         // Closing the window is how a preview is meant to end; anything else with no picture
         // is a failure, and the message says which side failed and what it said.
         if (sawFrames) return;
-        const side = closedBy === 'player' ? 'the player' : 'the camera';
-        setFailure({ id: device.id, reason: error ?? `${side} closed without a picture` });
+        setFailure({ id: device.id, reason: explain(closedBy, error) });
       },
     );
   };
@@ -75,7 +93,7 @@ export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPic
     <Modal
       title="Share a camera"
       hints={[
-        { key: 't', label: previewing ? 'close preview' : 'try it' },
+        { key: 't', label: previewing ? 'close preview' : 'try it', disabled: cameraBusy },
         { key: 'enter', label: 'share' },
         { key: 'esc', label: 'cancel' },
       ]}
@@ -85,7 +103,7 @@ export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPic
           onCancel();
           return;
         }
-        if (input === 't' && highlighted) {
+        if (input === 't' && highlighted && !cameraBusy) {
           if (previewing === highlighted.id) close();
           else preview(highlighted);
         }
@@ -105,7 +123,9 @@ export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPic
           onSelect(device);
         }}
       />
-      {failure ? (
+      {cameraBusy ? (
+        <Text dimColor>Letting go of the camera…</Text>
+      ) : failure ? (
         <Text color={theme.danger}>{failure.reason}</Text>
       ) : (
         <Text dimColor>The camera turns on when you pick one.</Text>

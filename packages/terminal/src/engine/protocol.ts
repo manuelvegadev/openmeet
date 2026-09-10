@@ -55,6 +55,8 @@ export interface RoomState {
   joinedAt: number | null;
   isMuted: boolean;
   isVideoMuted: boolean;
+  /** The camera is open. False once the grabber has exited, so the picker knows it may preview. */
+  webcamCapturing: boolean;
   videoEnabled: boolean;
   /** Webcam capture available (video pipeline present and implemented on this OS). */
   webcamEnabled: boolean;
@@ -82,6 +84,7 @@ export function initialRoomState(): RoomState {
     joinedAt: null,
     isMuted: false,
     isVideoMuted: true,
+    webcamCapturing: false,
     videoEnabled: false,
     webcamEnabled: false,
     overlayEnabled: false,

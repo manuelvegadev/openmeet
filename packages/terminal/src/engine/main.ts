@@ -150,7 +150,7 @@ export function runEngine(): Promise<never> {
         room.toggleVideo();
         break;
       case 'set-video-device':
-        room.setVideoDevice(cmd.device);
+        void room.setVideoDevice(cmd.device);
         break;
       case 'toggle-overlay':
         room.toggleOverlay();

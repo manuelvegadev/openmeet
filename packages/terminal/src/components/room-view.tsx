@@ -532,6 +532,7 @@ export function RoomView({
         <CameraPicker
           cameras={cameraList}
           current={loadSettings().videoDeviceId}
+          cameraBusy={room.webcamCapturing}
           onSelect={(device) => {
             setCameraList(null);
             room.setVideoDevice(device.id);

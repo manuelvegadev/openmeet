@@ -353,6 +353,7 @@ export class RoomEngine {
         if (videoManager && this.videoSource && options.webcamEnabled) {
           const device = options.videoDevice ?? loadSettings().videoDeviceId ?? undefined;
           videoManager.startCapture(this.videoSource, device);
+          this.patch({ webcamCapturing: videoManager.isCapturing });
         }
 
         // Wait for the first captured frame so the offer carries a live audio track;
@@ -490,7 +491,7 @@ export class RoomEngine {
   toggleVideo(): void {
     if (!this.videoManager) return;
     const isVideoMuted = this.videoManager.toggleMute();
-    this.patch({ isVideoMuted });
+    this.patch({ isVideoMuted, webcamCapturing: this.videoManager.isCapturing });
     this.broadcastStates();
   }
 
@@ -499,13 +500,17 @@ export class RoomEngine {
    * before previewing one and sets the choice when you pick, so the device is never held by
    * the capture and a preview at the same time.
    */
-  setVideoDevice(device: string | null): void {
+  async setVideoDevice(device: string | null): Promise<void> {
     const vm = this.videoManager;
     if (!vm || !this.videoSource) return;
-    vm.stopCapture();
+    // Await the grabber's exit before saying the camera is free: the picker previews on that
+    // flag, and a camera is held until the process holding it is gone.
+    await vm.stopCapture();
+    this.patch({ webcamCapturing: false });
     if (device === null) return;
     saveSettings({ videoDeviceId: device });
     vm.startCapture(this.videoSource, device);
+    this.patch({ webcamCapturing: vm.isCapturing });
   }
 
   toggleOverlay(): void {

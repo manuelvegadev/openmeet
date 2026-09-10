@@ -90,16 +90,27 @@ class FrameAssembler {
 const SCREEN_SILENCE_MS = 8000;
 
 /**
- * SIGTERM, then SIGKILL two seconds later if it is still there. An avfoundation ffmpeg
- * wedged inside ScreenCaptureKit ignores SIGTERM, and every one left behind keeps a capture
- * stream open — three of them were found alive at once on 2026-09-09.
+ * SIGTERM, then SIGKILL if it is still there, resolving when it is really gone. An
+ * avfoundation ffmpeg wedged inside ScreenCaptureKit ignores SIGTERM, and every one left
+ * behind keeps its capture stream open — three of them were found alive at once on
+ * 2026-09-09. The promise matters because a camera is not free until the process holding it
+ * has exited: whoever wants the device next has to wait for this, not for a timer.
  */
-function killHard(proc: ChildProcess): void {
-  proc.kill();
-  const timer = setTimeout(() => {
-    if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
-  }, 2000);
-  proc.once('close', () => clearTimeout(timer));
+function killHard(proc: ChildProcess, graceMs = 2000): Promise<void> {
+  return new Promise((resolve) => {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+    }, graceMs);
+    proc.once('close', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    proc.kill();
+  });
 }
 
 export function createVideoSource(options?: { isScreencast?: boolean }): { source: any; track: any } {
@@ -336,14 +347,17 @@ export class VideoManager {
     this.onDebug?.(`Video capture started (${WEBCAM_WIDTH}x${WEBCAM_HEIGHT}@${WEBCAM_FPS}fps)`);
   }
 
-  stopCapture(): void {
-    if (this.captureProcess) {
-      // `killHard`, not `kill`: an avfoundation ffmpeg can ignore SIGTERM, and one that
-      // survives keeps the camera — which is exactly what the picker is trying to preview.
-      killHard(this.captureProcess);
-      this.captureProcess = null;
-    }
+  /**
+   * Stop capturing and let go of the camera. Resolves when the grabber has exited, because
+   * the device is held until then — the picker's preview is the next thing to want it, and
+   * "we asked it to stop" is not the same as "it stopped". The grace before SIGKILL is short
+   * for the same reason: there is nothing to flush at the end of a pipe of raw frames.
+   */
+  async stopCapture(): Promise<void> {
+    const proc = this.captureProcess;
+    this.captureProcess = null;
     this.capturing = false;
+    if (proc) await killHard(proc, 300);
   }
 
   get isCapturing(): boolean {
@@ -516,7 +530,7 @@ export class VideoManager {
   // ─── Cleanup ───────────────────────────────────────────────────────
 
   shutdown(): void {
-    this.stopCapture();
+    void this.stopCapture();
     this.stopScreenCapture();
     for (const [, peer] of this.peers) {
       this.cleanupPeer(peer);
