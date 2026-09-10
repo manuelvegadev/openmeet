@@ -56,7 +56,12 @@ const RAW_OUTPUT = ['-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-loglevel', 'warni
  */
 export function webcamCaptureArgs(device?: string): string[] | null {
   const rate = ['-framerate', String(WEBCAM_FPS)];
-  const fit = ['-vf', fitTo(WEBCAM_WIDTH, WEBCAM_HEIGHT)];
+  // `fps` before the scaling, not just `-framerate` on the input: asking the camera for 30 is
+  // a request it need not honour, and when its timestamps do not match, ffmpeg duplicates
+  // frames to fill the gap — measured at ~119,000 fps out of an Insta360 Link, which freezes
+  // a player and would bury the engine's event loop. The filter paces the output whatever the
+  // camera does. (The screen path must *not* have this: gotcha 28.)
+  const fit = ['-vf', `fps=${WEBCAM_FPS},${fitTo(WEBCAM_WIDTH, WEBCAM_HEIGHT)}`];
   switch (platform()) {
     case 'darwin':
       return ['-f', 'avfoundation', ...rate, '-i', `${device ?? '0'}:none`, ...fit, ...RAW_OUTPUT];
