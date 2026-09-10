@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { killChild, spawnChild } from './children.js';
 import { ffmpegBin, ffplayBin } from './tool-path.js';
 
 /** How a preview ended, which is all a caller needs to say something useful about it. */
@@ -35,8 +35,15 @@ export function startPreview(
   playerArgs: string[],
   onClosed?: (result: PreviewResult) => void,
 ): () => void {
-  const capture: ChildProcess = spawn(ffmpegBin(), captureArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-  const player: ChildProcess = spawn(ffplayBin(), playerArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
+  // The window counts as a `player`, not a second `preview`: charging both to one budget made
+  // every third preview in ten seconds trip a cooldown that nothing forgives.
+  const capture = spawnChild('preview', ffmpegBin(), captureArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const player = capture ? spawnChild('player', ffplayBin(), playerArgs, { stdio: ['pipe', 'ignore', 'pipe'] }) : null;
+  if (!capture || !player) {
+    if (capture) void killChild(capture, 300);
+    onClosed?.({ sawFrames: false, closedBy: 'capture', error: 'too many child processes; try again in a moment' });
+    return () => {};
+  }
   let sawFrames = false;
   let done = false;
   let captureErr = '';
@@ -57,8 +64,8 @@ export function startPreview(
   const finish = (closedBy: 'capture' | 'player') => {
     if (done) return;
     done = true;
-    capture.kill();
-    player.kill();
+    void killChild(capture, 300);
+    void killChild(player, 300);
     onClosed?.({
       sawFrames,
       closedBy,
@@ -74,7 +81,7 @@ export function startPreview(
   return () => {
     if (done) return;
     done = true;
-    capture.kill();
-    player.kill();
+    void killChild(capture, 300);
+    void killChild(player, 300);
   };
 }
