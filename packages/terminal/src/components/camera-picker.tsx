@@ -26,6 +26,8 @@ interface CameraPickerProps {
 export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPickerProps) {
   const [highlighted, setHighlighted] = useState<VideoDevice>(cameras.find((c) => c.id === current) ?? cameras[0]);
   const [previewing, setPreviewing] = useState<string | null>(null);
+  /** A camera that opened but sent nothing: a capture card with no signal answers that way. */
+  const [silent, setSilent] = useState<string | null>(null);
   const stopPreview = useRef<(() => void) | null>(null);
 
   const close = () => {
@@ -43,17 +45,22 @@ export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPic
     const args = webcamCaptureArgs(device.id);
     if (!args) return;
     setPreviewing(device.id);
+    setSilent(null);
     stopPreview.current = startPreview(
       args,
       rawVideoPlayerArgs(WEBCAM_WIDTH, WEBCAM_HEIGHT, WEBCAM_FPS, `Preview: ${device.name}`),
-      () => {
+      (sawFrames) => {
         stopPreview.current = null;
         setPreviewing(null);
+        // The window closing is how you end a preview, so only silence is worth reporting.
+        if (!sawFrames) setSilent(device.id);
       },
     );
   };
 
-  const items = cameras.map((c) => ({ label: `${c.name}${previewing === c.id ? ' · previewing' : ''}`, value: c.id }));
+  const mark = (c: VideoDevice) =>
+    previewing === c.id ? ' · previewing' : silent === c.id ? ' · sent no picture' : '';
+  const items = cameras.map((c) => ({ label: `${c.name}${mark(c)}`, value: c.id }));
   const initialIndex = Math.max(
     0,
     cameras.findIndex((c) => c.id === highlighted?.id),

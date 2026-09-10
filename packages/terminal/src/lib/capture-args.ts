@@ -43,16 +43,25 @@ export function screenOutputSize(device: Pick<ScreenDevice, 'width' | 'height'>)
 const RAW_OUTPUT = ['-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-loglevel', 'warning', 'pipe:1'];
 
 /**
- * ffmpeg arguments that capture the webcam at WEBCAM_WIDTH x WEBCAM_HEIGHT @ WEBCAM_FPS.
- * `null` where no webcam pipeline exists (Windows; see `platform.ts` `webcam`).
+ * ffmpeg arguments that deliver the webcam at exactly WEBCAM_WIDTH x WEBCAM_HEIGHT @
+ * WEBCAM_FPS. `null` where no webcam pipeline exists (Windows; see `platform.ts` `webcam`).
+ *
+ * The size is a filter, not a request: asking avfoundation for `-video_size 640x480` fails
+ * outright on a camera that has no such mode — an Insta360 Link answers `Input/output error`
+ * and ffmpeg exits before a frame — and the caller cannot know a device's modes without
+ * probing it. So the camera opens at whatever it likes and the frames are scaled and
+ * letterboxed here, which is what the screen path already does. The frame rate *is* asked
+ * for: without `-framerate` avfoundation fails the same way (verified on this Mac, both
+ * ways round).
  */
 export function webcamCaptureArgs(device?: string): string[] | null {
-  const size = ['-framerate', String(WEBCAM_FPS), '-video_size', `${WEBCAM_WIDTH}x${WEBCAM_HEIGHT}`];
+  const rate = ['-framerate', String(WEBCAM_FPS)];
+  const fit = ['-vf', fitTo(WEBCAM_WIDTH, WEBCAM_HEIGHT)];
   switch (platform()) {
     case 'darwin':
-      return ['-f', 'avfoundation', ...size, '-i', `${device ?? '0'}:none`, ...RAW_OUTPUT];
+      return ['-f', 'avfoundation', ...rate, '-i', `${device ?? '0'}:none`, ...fit, ...RAW_OUTPUT];
     case 'linux':
-      return ['-f', 'v4l2', ...size, '-i', device ?? '/dev/video0', ...RAW_OUTPUT];
+      return ['-f', 'v4l2', ...rate, '-i', device ?? '/dev/video0', ...fit, ...RAW_OUTPUT];
     default:
       return null;
   }
