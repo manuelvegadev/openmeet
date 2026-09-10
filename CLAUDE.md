@@ -302,7 +302,8 @@ Automates npm publishing of `openmeet-terminal` via GitHub Actions.
 
 - **Trigger**: Push tags matching `terminal-v*` (e.g. `terminal-v0.1.0`)
 - **Steps**: checkout → pnpm + Node 22 setup → install → build shared → build terminal → publish to npm → create GitHub Release
-- **Secret**: `NPM_TOKEN` (npm automation token, stored in GitHub repo secrets)
+- **Auth**: none stored. npm **trusted publishing** — the job's OIDC token (`id-token: write`) is exchanged for publish rights against a trusted publisher configured on npmjs.com for this repository and this workflow's filename. Renaming the file or moving the repo breaks the publish until that is updated to match. The tarball is published `--provenance`, so npm shows which commit and which run built it
+- **npm version**: the job installs `npm@latest` first. Trusted publishing needs npm ≥ 11.5.1 and `setup-node` ships whatever npm came with the Node release; `pnpm publish` rewrites the `workspace:` protocol and then delegates to the npm on PATH, so that is the one doing the exchange
 
 ### How to publish a new version
 
@@ -351,7 +352,7 @@ git push && git push --tags
 4. **STUN servers**: Uses Google public STUN servers. TURN server needed for restrictive NATs.
 5. **Transceiver ordering**: Both sides must end up with 3 transceivers in identical order (audio, webcam, screen) after SDP exchange. Do not reorder or skip.
 6. **Screen share state re-broadcast**: Must re-broadcast on `participants.length` change so newcomers learn the current screen share state.
-7. **Terminal npm publish**: Requires `NPM_TOKEN` secret in GitHub repo settings. Tags must match `terminal-v*` pattern to trigger the workflow.
+7. **Terminal npm publish**: no token. Publishing is npm trusted publishing over OIDC, so a release only happens from `publish-terminal.yml` in this repository — `npm publish` from a laptop is refused, which is the point. Tags must match `terminal-v*` to trigger it. Two traps this replaced: a stored `NPM_TOKEN` expires (npm's classic automation tokens were revoked in favour of granular ones capped at 90 days) and the failure reads as `404 Not Found - PUT …/openmeet-terminal`, which looks like the package does not exist rather than like an auth problem; and provenance is per version, so anything published by hand stays unsigned for ever.
 8. **Terminal sox dependency**: only for `--audio-backend sox` (default on Linux; macOS and Windows default to RtAudio). The CLI checks for `rec`/`play` on startup only in that case.
 9. **Terminal esbuild bundle**: `@openmeet/shared` is aliased and inlined; all npm dependencies are kept external (`packages: 'external'`). The output is a single ESM file with a `#!/usr/bin/env node` shebang. `__APP_VERSION__` is injected via esbuild `define`; `src/version.ts` provides a runtime fallback for `tsx` dev mode.
 10. **Terminal alt screen + Ink clearTerminal**: Ink writes `\x1b[2J\x1b[3J\x1b[H` when output fills the screen. The `\x1b[3J` (clear scrollback) leaks through the alternate screen buffer on macOS, wiping terminal history. `index.tsx` patches `process.stdout.write` to strip `\x1b[3J` (Ink now owns the alt screen via `alternateScreen: true`).
