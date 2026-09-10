@@ -1,0 +1,172 @@
+@use 'tokens' as *;
+
+// The room, as docs/screenshot.png shows it: a macOS window, the gold frame, the chat on the
+// left with its composer as the pane's last row, the participants on the right with their
+// keys pinned at the foot.
+
+.tui-section {
+  padding-bottom: 96px;
+}
+
+.tui-window {
+  background: #2a2a2a;
+  border-radius: 10px;
+  padding: 0 6px 6px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+
+  &__bar {
+    display: flex;
+    gap: 8px;
+    padding: 12px 8px;
+
+    i {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ff5f57;
+
+      &:nth-child(2) {
+        background: #febc2e;
+      }
+      &:nth-child(3) {
+        background: #28c840;
+      }
+    }
+  }
+}
+
+.tui {
+  // The one curve: the app draws its frame with ╭╮╰╯.
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 20px;
+  overflow: hidden;
+
+  // The numbers that do not fit on a phone, each a named thing so the breakpoint drops them
+  // by name rather than by counting spans.
+  &__elapsed,
+  &__stats {
+    display: contents;
+  }
+
+  &__head {
+    display: flex;
+    gap: 8px;
+    padding: 6px 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    align-items: center;
+    border-bottom: 1px solid var(--accent);
+  }
+
+  &__body {
+    display: flex;
+  }
+
+  &__chat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--accent);
+    min-width: 0;
+  }
+
+  &__log {
+    flex: 1;
+    padding: 8px 12px;
+  }
+
+  &__input {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 12px;
+    border-top: 1px solid var(--accent);
+    white-space: nowrap;
+  }
+
+  &__ln {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  &__icon {
+    &--msg {
+      color: var(--accent);
+    }
+    &--join {
+      color: var(--ok);
+    }
+    &--screen {
+      color: var(--info);
+    }
+    &--mute {
+      color: var(--warn);
+    }
+  }
+
+  &__people {
+    width: $people-width;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__keys {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 8px 0;
+  }
+
+  // The section break between you and everyone else, frame edge to frame edge.
+  &__rule {
+    border-top: 1px solid var(--accent);
+    margin: 6px -12px 10px;
+  }
+
+  // The chat lines appear one by one on load.
+  &--reveal &__ln {
+    opacity: 0;
+    animation: appear 0.05s forwards;
+    animation-delay: calc(0.2s + var(--i) * 0.45s);
+
+    @include reduced-motion {
+      opacity: 1;
+      animation: none;
+    }
+  }
+
+  @include below($bp-phone) {
+    font-size: 11px;
+    line-height: 17px;
+
+    // Participants above the chat, the composer still the chat's last row.
+    &__body {
+      flex-direction: column-reverse;
+    }
+
+    &__chat {
+      border-right: none;
+      border-top: 1px solid var(--accent);
+    }
+
+    &__people {
+      width: auto;
+    }
+
+    // The header keeps the name, the key and the room; the numbers go.
+    &__elapsed,
+    &__stats {
+      display: none;
+    }
+  }
+}
+
+@keyframes appear {
+  to {
+    opacity: 1;
+  }
+}

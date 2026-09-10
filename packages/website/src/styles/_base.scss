@@ -1,0 +1,135 @@
+@use 'tokens' as *;
+
+// The app's palette, copied by hand: the chrome and state colours from
+// packages/terminal/src/lib/theme.ts, the name colours (--yellow/--blue/--purple/--fuchsia)
+// from its NAME_PALETTE in lib/identity.ts, plus the greys this page needs and the app does
+// not. Copied rather than imported because the website must not depend on openmeet-terminal —
+// that would drag @roamhq/wrtc and audify into every deploy, which is exactly what the
+// `--filter @openmeet/website...` install exists to avoid. Keep them in step by hand.
+:root {
+  --bg: #0b0b0b;
+  --text: #e8e8e8;
+  --muted: #8a8a8a;
+  --accent: #e8b900;
+  --on-accent: #0b0b0b;
+  --surface: #222222;
+  --ok: #4ade80;
+  --warn: #fb923c;
+  --danger: #f87171;
+  --info: #7dd3fc;
+  --purple: #c084fc;
+  --yellow: #facc15;
+  --blue: #60a5fa;
+  --fuchsia: #e879f9;
+
+  --text-2: #b5b5b5;
+  --text-3: #cfcfcf;
+  --panel: #0e0e0e;
+  --panel-2: #111111;
+  --line: #1e1e1e;
+  --line-strong: #2a2a2a;
+
+  --mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --display: 'IBM Plex Sans Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+  scroll-behavior: smooth;
+
+  @include reduced-motion {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+
+  @include below($bp-phone) {
+    font-size: 14px;
+  }
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+
+  &:hover {
+    color: var(--accent);
+  }
+}
+
+p {
+  margin: 0 0 14px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 400;
+}
+
+code {
+  font-family: inherit;
+}
+
+.display {
+  font-family: var(--display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+.wrap {
+  max-width: $wrap;
+  margin: 0 auto;
+  padding-inline: $gutter;
+}
+
+.muted {
+  color: var(--muted);
+}
+.accent {
+  color: var(--accent);
+}
+.ok {
+  color: var(--ok);
+}
+.warn {
+  color: var(--warn);
+}
+.danger {
+  color: var(--danger);
+}
+.info {
+  color: var(--info);
+}
+.grow {
+  flex: 1;
+}
+
+.grid-bg {
+  background-image: radial-gradient(circle, var(--line) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}

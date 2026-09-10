@@ -1,0 +1,275 @@
+@use 'tokens' as *;
+
+// Pillars, the scroll stories with their panes, and the bands (platforms, self-host, FAQ).
+
+.pillars {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 48px;
+  padding-bottom: 96px;
+
+  @include below($bp-phone) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+    padding-bottom: 64px;
+  }
+}
+
+.pillar {
+  &__title {
+    font-size: 26px;
+    margin-bottom: 10px;
+  }
+
+  p {
+    color: var(--text-2);
+    font-size: 14px;
+    margin: 0;
+  }
+}
+
+.story {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 64px;
+  align-items: start;
+  padding: 72px 0;
+  border-top: 1px solid var(--line);
+
+  &__title {
+    font-size: 34px;
+    margin-bottom: 20px;
+  }
+
+  &__prose p {
+    color: var(--text-3);
+    font-size: 14px;
+  }
+
+  &__note {
+    font-size: 13px;
+  }
+
+  @include below($bp-tablet) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+    padding: 56px 0;
+
+    // Read first, then look.
+    &__prose {
+      order: -1;
+    }
+  }
+
+  @include below($bp-phone) {
+    &__title {
+      font-size: 28px;
+    }
+  }
+}
+
+.pane {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  min-width: 0;
+
+  // Header and footer are a matched pair: same strip, same size, same colour. Only the
+  // letter-spaced uppercase says which one names the pane.
+  &__title,
+  &__caption {
+    padding: 7px 12px;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  &__title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--line-strong);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  &__body {
+    padding: 16px;
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  &__caption {
+    border-top: 1px solid var(--line-strong);
+  }
+
+  &__label {
+    margin-bottom: 8px;
+  }
+
+  &__k {
+    display: inline-block;
+    min-width: 17ch;
+  }
+
+  &__bars,
+  &__facts {
+    margin-top: 14px;
+    border-top: 1px solid var(--line-strong);
+    padding-top: 12px;
+  }
+
+  &__facts {
+    font-size: 12px;
+  }
+
+  &__keys {
+    margin-top: 14px;
+  }
+}
+
+.legend {
+  margin-top: 16px;
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0;
+  font-size: 13px;
+
+  &__label {
+    width: 120px;
+    color: var(--muted);
+    flex: none;
+  }
+
+  &__track {
+    flex: 1;
+    height: 14px;
+    background: var(--surface);
+    position: relative;
+
+    i {
+      position: absolute;
+      inset: 0 auto 0 0;
+    }
+  }
+
+  &__value {
+    width: 110px;
+    text-align: right;
+    color: var(--muted);
+    flex: none;
+  }
+}
+
+.band {
+  border-top: 1px solid var(--line);
+  padding: 80px 0;
+
+  @include below($bp-phone) {
+    padding: 56px 0;
+  }
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 64px;
+  align-items: start;
+
+  @include below($bp-tablet) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 48px;
+  }
+}
+
+.section {
+  &__title {
+    font-size: 34px;
+    margin-bottom: 24px;
+
+    @include below($bp-phone) {
+      font-size: 28px;
+    }
+  }
+
+  &__text {
+    color: var(--text-2);
+    font-size: 14px;
+    margin-bottom: 18px;
+  }
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+td,
+th {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.roadmap {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  li {
+    display: grid;
+    grid-template-columns: 14px 9ch 1fr;
+    gap: 8px;
+  }
+}
+
+.faq {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 64px;
+
+  &__item {
+    border-top: 1px solid var(--line);
+    padding: 18px 0;
+  }
+
+  dt {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 17px;
+    margin-bottom: 6px;
+  }
+
+  dd {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  @include below($bp-tablet) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

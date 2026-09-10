@@ -1,0 +1,197 @@
+@use 'tokens' as *;
+
+// The app's vocabulary: keys, chips, names, tags, the meter, commands.
+
+// A key on a gold keycap followed by what it does on a grey pill. Square: they are terminal
+// cells. `--disabled` is the app's greyed key, both halves on the surface grey.
+.key {
+  display: inline-flex;
+  white-space: nowrap;
+
+  kbd {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 12px;
+    line-height: 20px;
+    padding: 0 6px;
+  }
+
+  &--disabled kbd,
+  &--disabled .pill {
+    background: var(--surface);
+    color: var(--muted);
+    font-weight: 400;
+  }
+}
+
+.pill {
+  display: inline-block;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 20px;
+  padding: 0 8px;
+}
+
+.chip {
+  display: inline-block;
+  border: 1px solid #2e2e2e;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+// `[name]` in that person's colour; the four demo people have fixed ones.
+.name {
+  white-space: nowrap;
+
+  &[data-who='mvega'] {
+    color: var(--yellow);
+  }
+  &[data-who='sofia'] {
+    color: var(--blue);
+  }
+  &[data-who='diego'] {
+    color: var(--ok);
+  }
+  &[data-who='amara'] {
+    color: var(--fuchsia);
+  }
+}
+
+.tag {
+  &--s {
+    color: var(--info);
+  }
+  &--c {
+    color: var(--purple);
+  }
+  &--m {
+    color: var(--warn);
+  }
+}
+
+.meter {
+  display: inline-block;
+  width: 90px;
+  height: 14px;
+  background: var(--surface);
+  vertical-align: middle;
+  position: relative;
+  flex: none;
+
+  &--short {
+    width: 63px;
+  }
+
+  i {
+    position: absolute;
+    inset: 0 auto 0 0;
+  }
+
+  @include below($bp-phone) {
+    width: 50px;
+  }
+}
+
+.prow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+
+.cursor {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: var(--text);
+  vertical-align: -3px;
+  animation: blink 1.06s steps(1) infinite;
+
+  @include reduced-motion {
+    animation: none;
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.ln {
+  white-space: pre-wrap;
+}
+
+// A shell line: `$`, the command, an optional note, the copy button.
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  padding: 14px 18px;
+  font-size: 15px;
+  min-width: 0;
+
+  code {
+    overflow-wrap: anywhere;
+  }
+
+  &__dollar {
+    color: var(--accent);
+  }
+
+  &__note {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+
+    @include below($bp-phone) {
+      display: none;
+    }
+  }
+
+  &--input {
+    padding: 6px 10px;
+    margin-bottom: 18px;
+    width: 280px;
+    max-width: 100%;
+  }
+
+  &--block {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    font-size: 13px;
+  }
+}
+
+.copy {
+  margin-left: auto;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: 1px solid #333;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+}

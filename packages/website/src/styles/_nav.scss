@@ -1,0 +1,38 @@
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+  font-size: 13px;
+  flex-wrap: wrap;
+  padding-block: 8px;
+
+  &__brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__links {
+    display: flex;
+    gap: 22px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 12px;
+    flex-wrap: wrap;
+  }
+
+  &__lang {
+    color: var(--muted);
+  }
+}
+
+.logo {
+  font-weight: 700;
+
+  &__bracket {
+    color: var(--accent);
+    font-weight: 400;
+  }
+}

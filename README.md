@@ -58,7 +58,8 @@ openmeet/
 ├── packages/
 │   ├── shared/          # TypeScript types (WebSocket messages, Room, Participant)
 │   ├── server/          # Express + WebSocket signaling + chat
-│   └── terminal/        # openmeet-terminal TUI client (npm package)
+│   ├── terminal/        # openmeet-terminal TUI client (npm package)
+│   └── website/         # openmeet.manuelvega.dev, static landing page (English and Spanish)
 ├── Dockerfile
 ├── docker-compose.yml
 └── pnpm-workspace.yaml

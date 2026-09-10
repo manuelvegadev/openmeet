@@ -54,13 +54,31 @@ openmeet/
 ├── docker-compose.yml        # Single service, port 3001
 ├── docs/                     # Architecture docs
 ├── .github/workflows/        # CI/CD workflows
-│   ├── ci.yml                # lint/build/type-check + native-module smoke on ubuntu/macos/windows
-│   └── publish-terminal.yml  # npm publish on terminal-v* tags
+│   ├── ci.yml                # lint/build/type-check + native-module smoke on ubuntu/macos/windows, website build
+│   ├── publish-terminal.yml  # npm publish on terminal-v* tags
+│   └── deploy-website.yml    # GitHub Pages deploy of packages/website on push to main
 └── packages/
     ├── shared/               # @openmeet/shared - WS message types
     ├── server/               # @openmeet/server - Express + ws + in-memory Maps
-    └── terminal/             # openmeet-terminal - TUI client (npm package)
+    ├── terminal/             # openmeet-terminal - TUI client (npm package)
+    └── website/              # @openmeet/website - openmeet.manuelvega.dev, static, en + es
 ```
+
+## Package: website (`packages/website`)
+
+The landing page at **openmeet.manuelvega.dev**, private package, never published to npm. Vite 8 (Rolldown + Oxc) with `@vitejs/plugin-react` 6 (no Babel), React 19, TypeScript 7, SCSS (`sass-embedded`, compiled by Vite; `src/styles/site.scss` pulls one partial per area, `_tokens.scss` holds breakpoints and mixins) with the app's palette as CSS custom properties, self-hosted fonts (`@fontsource-variable` IBM Plex Sans for headlines, JetBrains Mono for everything else). Lint and format are the repo's Biome.
+
+**React is a build-time template.** `pnpm --filter @openmeet/website build` runs the client build (CSS, fonts), the SSR build (`src/entry-server.tsx`) and `prerender.mjs`, which writes one complete HTML document per language — `dist/index.html` (en) and `dist/es/index.html` (es) — plus `404.html` and `sitemap.xml`. It finds the stylesheet and the JS to delete in Vite's own `dist/.vite/manifest.json`, so nothing here parses the bundler's HTML. The published page ships no framework: one stylesheet, two woff2 and the page's single inline script. `src/entry-client.tsx` exists for the dev server only (`pnpm --filter @openmeet/website dev`, `/` and `/es/`). `pnpm --filter @openmeet/website check:dist` asserts what came out, reading the page list from the generated sitemap so a new language is covered without editing it.
+
+**The one script is written once.** `src/lib/copy.ts` is the copy buttons' behaviour as a real, type-checked function; `document.tsx` emits it into every page with `` `(${installCopyHandler})()` `` and the dev server calls it directly, so there is no hand-minified twin to drift. Keep that function self-contained — it is serialized with `toString()`.
+
+**Fonts are latin-only.** `src/styles/_fonts.scss` declares the two faces by hand against the `@fontsource-variable` files. Importing the packages whole shipped eleven woff2 (157 KB never fetched) and eleven `@font-face` rules; English and Spanish need one subset each.
+
+**Content and languages.** `src/content/types.ts` is the shape, `en.ts` and `es.ts` the strings, and `src/content/demo.ts` everything that is the same in every language — the demo room's cast and script, the measured install sizes, the chips, the stack. Components read the words through `useCopy()` (`lib/i18n.tsx`) and the rest straight from `demo.ts`, so the two pages cannot drift into showing different demos. English lives at `/` and is the `x-default`; Spanish at `/es/`. Adding a language is a `Copy` file plus an entry in `LANGS`/`PATHS`: `langFromPath` and the header's language links derive from that table rather than naming `es`.
+
+**SEO.** `src/document.tsx` renders the whole `<head>`: title/description per language, canonical, `hreflang` alternates, Open Graph (`public/og.jpg`, 1200×630 from `docs/screenshot.png`) and Twitter cards, and a JSON-LD graph (`SoftwareApplication` with the version read from `packages/terminal/package.json` at build time, `FAQPage` mirroring the visible FAQ, `WebSite`). `public/robots.txt` allows everything including the AI crawlers by name; `public/llms.txt` is the plain-text summary for answer engines. The performance pane quotes measured figures only — install sizes (78 MB against Discord's 479 MB and Chrome's 1.4 GB) and the engine's flat 65 MB — never a total-memory number, for the reason recorded in `docs/performance.md` under "Footprint, measured for the website".
+
+**Deploy.** `deploy-website.yml` runs on pushes to `main` touching `packages/website/**`, then `upload-pages-artifact` → `deploy-pages`. It and `ci.yml`'s `website` job (pull requests only, so a push to `main` does not build the same thing twice) share `.github/actions/build-website`: filtered install (no native modules), type-check, build, `check:dist`. GitHub Pages must be set to source "GitHub Actions"; `public/CNAME` carries the domain, and DNS needs `CNAME openmeet → manuelvegadev.github.io` (the `manuelvega.dev` zone is on Cloudflare with a wildcard, so the record must be explicit, and DNS-only until GitHub has issued the certificate).
 
 ## Package: shared (`packages/shared`)
 

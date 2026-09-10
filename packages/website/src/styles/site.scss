@@ -1,0 +1,10 @@
+// The page's stylesheet. Each partial owns one area; `tokens` holds the breakpoints and the
+// mixins, `base` the palette (as custom properties) and the element defaults. `fonts` declares the two faces, latin only.
+@use 'fonts';
+@use 'base';
+@use 'ui';
+@use 'nav';
+@use 'footer';
+@use 'hero';
+@use 'tui';
+@use 'sections';

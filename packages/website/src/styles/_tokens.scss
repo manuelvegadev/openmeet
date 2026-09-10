@@ -1,0 +1,21 @@
+// Build-time values: breakpoints and the page's measurements. Colours are NOT here — they are
+// CSS custom properties in _base.scss, so the palette is one thing at runtime and any element
+// can read it.
+$bp-tablet: 960px;
+$bp-phone: 760px;
+
+$wrap: 1120px;
+$gutter: 24px;
+$people-width: 372px;
+
+@mixin below($width) {
+  @media (max-width: $width) {
+    @content;
+  }
+}
+
+@mixin reduced-motion {
+  @media (prefers-reduced-motion: reduce) {
+    @content;
+  }
+}
