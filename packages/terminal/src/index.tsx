@@ -55,7 +55,8 @@ function missingVideoTools(): string[] {
  * capture does — on to the next if one yields nothing — and exiting with the window.
  */
 function runPreview(candidates: string[][], playerArgs: string[], index = 0): void {
-  const stop = startPreview(candidates[index], playerArgs, (sawFrames) => {
+  const stop = startPreview(candidates[index], playerArgs, ({ sawFrames, error }) => {
+    if (error) process.stderr.write(`${error}\n`);
     if (!sawFrames && index + 1 < candidates.length) {
       process.stderr.write('That grabber produced no frames; trying the next one.\n');
       runPreview(candidates, playerArgs, index + 1);

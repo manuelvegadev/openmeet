@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { rawVideoPlayerArgs, WEBCAM_FPS, WEBCAM_HEIGHT, WEBCAM_WIDTH, webcamCaptureArgs } from '../lib/capture-args.js';
 import type { VideoDevice } from '../lib/devices.js';
 import { startPreview } from '../lib/preview.js';
+import { theme } from '../lib/theme.js';
 import { Modal } from './modal.js';
 import { Select } from './select.js';
 import { Text } from './text.js';
@@ -26,8 +27,8 @@ interface CameraPickerProps {
 export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPickerProps) {
   const [highlighted, setHighlighted] = useState<VideoDevice>(cameras.find((c) => c.id === current) ?? cameras[0]);
   const [previewing, setPreviewing] = useState<string | null>(null);
-  /** A camera that opened but sent nothing: a capture card with no signal answers that way. */
-  const [silent, setSilent] = useState<string | null>(null);
+  /** Why the last preview showed nothing, if it did not: what ffmpeg or ffplay actually said. */
+  const [failure, setFailure] = useState<{ id: string; reason: string } | null>(null);
   const stopPreview = useRef<(() => void) | null>(null);
 
   const close = () => {
@@ -45,22 +46,26 @@ export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPic
     const args = webcamCaptureArgs(device.id);
     if (!args) return;
     setPreviewing(device.id);
-    setSilent(null);
+    setFailure(null);
     stopPreview.current = startPreview(
       args,
       rawVideoPlayerArgs(WEBCAM_WIDTH, WEBCAM_HEIGHT, WEBCAM_FPS, `Preview: ${device.name}`),
-      (sawFrames) => {
+      ({ sawFrames, closedBy, error }) => {
         stopPreview.current = null;
         setPreviewing(null);
-        // The window closing is how you end a preview, so only silence is worth reporting.
-        if (!sawFrames) setSilent(device.id);
+        // Closing the window is how a preview is meant to end; anything else with no picture
+        // is a failure, and the message says which side failed and what it said.
+        if (sawFrames) return;
+        const side = closedBy === 'player' ? 'the player' : 'the camera';
+        setFailure({ id: device.id, reason: error ?? `${side} closed without a picture` });
       },
     );
   };
 
-  const mark = (c: VideoDevice) =>
-    previewing === c.id ? ' · previewing' : silent === c.id ? ' · sent no picture' : '';
-  const items = cameras.map((c) => ({ label: `${c.name}${mark(c)}`, value: c.id }));
+  const items = cameras.map((c) => ({
+    label: `${c.name}${previewing === c.id ? ' · previewing' : ''}`,
+    value: c.id,
+  }));
   const initialIndex = Math.max(
     0,
     cameras.findIndex((c) => c.id === highlighted?.id),
@@ -100,7 +105,11 @@ export function CameraPicker({ cameras, current, onSelect, onCancel }: CameraPic
           onSelect(device);
         }}
       />
-      <Text dimColor>The camera turns on when you pick one.</Text>
+      {failure ? (
+        <Text color={theme.danger}>{failure.reason}</Text>
+      ) : (
+        <Text dimColor>The camera turns on when you pick one.</Text>
+      )}
     </Modal>
   );
 }

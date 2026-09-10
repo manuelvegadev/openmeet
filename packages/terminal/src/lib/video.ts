@@ -338,7 +338,9 @@ export class VideoManager {
 
   stopCapture(): void {
     if (this.captureProcess) {
-      this.captureProcess.kill();
+      // `killHard`, not `kill`: an avfoundation ffmpeg can ignore SIGTERM, and one that
+      // survives keeps the camera — which is exactly what the picker is trying to preview.
+      killHard(this.captureProcess);
       this.captureProcess = null;
     }
     this.capturing = false;

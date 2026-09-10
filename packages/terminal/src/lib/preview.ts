@@ -1,24 +1,52 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { ffmpegBin, ffplayBin } from './tool-path.js';
 
+/** How a preview ended, which is all a caller needs to say something useful about it. */
+export interface PreviewResult {
+  /** Anything came through at all. */
+  sawFrames: boolean;
+  /** Which side went first: the window being closed is how a preview is meant to end. */
+  closedBy: 'capture' | 'player';
+  /** The last line either process complained about, when there is one. */
+  error?: string;
+}
+
+/** ffmpeg is chatty about formats; only the lines that read like a failure are worth keeping. */
+function lastComplaint(text: string): string | undefined {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /error|unable|failed|denied|not found|no such|invalid|permission/i.test(l));
+  return lines.at(-1)?.slice(0, 120);
+}
+
 /**
  * A capture piped into a player window: what `--test-camera` and `--test-screen` show, and
  * what the camera picker previews. Returns the function that closes it — the caller owns the
  * lifetime, because a preview holds the device and on macOS a camera opens once (a capture
  * and its preview cannot both have it).
  *
- * `onClosed` fires when the window is closed or the capture ends by itself; `sawFrames` says
- * whether anything ever came through, which is how a caller walks to the next grabber.
+ * Both processes' stderr is kept rather than dropped. A preview that shows nothing is the
+ * failure people actually hit, and "no picture" is a useless thing to be told when ffmpeg or
+ * ffplay said exactly what was wrong — and which of the two it was.
  */
 export function startPreview(
   captureArgs: string[],
   playerArgs: string[],
-  onClosed?: (sawFrames: boolean) => void,
+  onClosed?: (result: PreviewResult) => void,
 ): () => void {
-  const capture: ChildProcess = spawn(ffmpegBin(), captureArgs, { stdio: ['ignore', 'pipe', 'ignore'] });
-  const player: ChildProcess = spawn(ffplayBin(), playerArgs, { stdio: ['pipe', 'ignore', 'ignore'] });
+  const capture: ChildProcess = spawn(ffmpegBin(), captureArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const player: ChildProcess = spawn(ffplayBin(), playerArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
   let sawFrames = false;
   let done = false;
+  let captureErr = '';
+  let playerErr = '';
+  capture.stderr?.on('data', (d) => {
+    captureErr += d.toString();
+  });
+  player.stderr?.on('data', (d) => {
+    playerErr += d.toString();
+  });
   capture.stdout?.once('data', () => {
     sawFrames = true;
   });
@@ -26,15 +54,22 @@ export function startPreview(
   // Closing the window breaks the pipe before 'close' fires; not an error worth a stack trace.
   player.stdin?.on('error', () => {});
 
-  const finish = () => {
+  const finish = (closedBy: 'capture' | 'player') => {
     if (done) return;
     done = true;
     capture.kill();
     player.kill();
-    onClosed?.(sawFrames);
+    onClosed?.({
+      sawFrames,
+      closedBy,
+      error:
+        closedBy === 'capture' ? lastComplaint(captureErr) : (lastComplaint(playerErr) ?? lastComplaint(captureErr)),
+    });
   };
-  player.on('close', finish);
-  capture.on('close', finish);
+  player.on('close', () => finish('player'));
+  capture.on('close', () => finish('capture'));
+  capture.on('error', () => finish('capture'));
+  player.on('error', () => finish('player'));
 
   return () => {
     if (done) return;
