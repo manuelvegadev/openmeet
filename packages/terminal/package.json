@@ -27,6 +27,13 @@
     "openmeet"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manuelvegadev/openmeet.git",
+    "directory": "packages/terminal"
+  },
+  "homepage": "https://github.com/manuelvegadev/openmeet#readme",
+  "bugs": "https://github.com/manuelvegadev/openmeet/issues",
   "engines": {
     "node": ">=22"
   },
