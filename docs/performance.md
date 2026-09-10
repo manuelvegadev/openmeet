@@ -137,3 +137,36 @@ Capture paths, measured on the Windows box at 1080p with ffmpeg's own `-benchmar
 
 GPU scaling is unavailable on this ffmpeg build by every route tested, so any path that
 needs I420 in system memory pays the colour conversion on the CPU.
+
+## Footprint, measured for the website (2026-09-10)
+
+The numbers the landing page quotes come from one afternoon on this Mac — Apple M4 Pro,
+24 GB, macOS 15.7.9, Node 26.7 — with a real two-person call: the signaling server on
+localhost and two clients joined to the same room, audio flowing both ways at 259 kbps with
+a ~40 ms estimated latency. `phys_footprint` (what Activity Monitor calls Memory), summed
+across an app's processes.
+
+| what | state | footprint |
+|---|---|---|
+| **engine** (`--engine` child) | two-person call, 35 minutes | **65–68 MB, flat** |
+| TUI process | same call, first minutes | 180–260 MB |
+| TUI process | same call, 20 minutes | ~620 MB |
+| TUI process | same call, 35 minutes | 862 MB |
+| TUI process | `--max-old-space-size=192` | 168–250 MB, same call, no complaints |
+| Discord 0.0.411 | signed in, idle, **no call** | 649 MB over 7 processes |
+| Google Meet in Chrome 152 | in a call, camera off | **+433 MB** on top of the running browser |
+
+On disk: `npm install -g openmeet-terminal` costs **78 MB** (`@roamhq/wrtc` 24 MB, `audify`
+19 MB, `es-toolkit` 18 MB); `Discord.app` is 479 MB and `Google Chrome.app` 1.4 GB.
+
+**The TUI's heap is the finding here.** The engine never moves — 65 MB for the whole call,
+which is the number that matters, since it is the process with the 10 ms deadline. The TUI
+climbs: not a leak that ends in an OOM (it plateaus, and a capped heap runs the identical
+call in a third of the space) but V8 growing into free RAM because ~10 renders a second of
+VU meters produce garbage and nothing pushes back. On a 24 GB machine the result is a
+terminal UI showing 862 MB in Activity Monitor after half an hour, which is not a good look
+for a client that sells itself as light. Worth deciding before 1.0 whether the launcher
+should cap the TUI's old space; the engine needs no such thing.
+
+Because of that the website compares **install sizes**, which are unambiguous, and quotes
+the engine's flat 65 MB — never a total-memory figure.
