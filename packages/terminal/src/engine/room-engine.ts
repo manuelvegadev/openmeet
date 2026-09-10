@@ -6,7 +6,9 @@ import { VU_LEVEL_STEPS, VU_MAX_RMS } from '../lib/audio/constants.js';
 import { type AudioDeviceSelection, AudioManager } from '../lib/audio/index.js';
 import { createNoiseSuppressor } from '../lib/audio/noise-suppression.js';
 import { isBroadcastDevice } from '../lib/audio/nvidia-broadcast.js';
+import { forgiveChildKind } from '../lib/children.js';
 import type { ScreenDevice } from '../lib/devices.js';
+import { forgetCameraModes } from '../lib/devices.js';
 import { diagnosticsEnabled, fileLoggingEnabled, startLoopDelayMonitor } from '../lib/diagnostics.js';
 import { finishName } from '../lib/identity.js';
 import { CONFIG_DIR, loadSettings, saveSettings } from '../lib/settings.js';
@@ -22,6 +24,9 @@ import {
   type RoomEvent,
   type RoomState,
 } from './protocol.js';
+
+/** How many times a camera that stopped on its own is reopened before we leave it alone. */
+const MAX_CAMERA_RETRIES = 1;
 
 /** Levels are quantized to the VU meter's resolution so snapshots only change per visible step. */
 const LEVEL_STEP = VU_MAX_RMS / VU_LEVEL_STEPS;
@@ -58,6 +63,10 @@ export class RoomEngine {
   private audioManager: AudioManager | null = null;
   private videoManager: VideoManager | null = null;
   private videoSource: any = null;
+  /** Reopen attempts since the camera was last started on purpose (see `recoverCamera`). */
+  private cameraRetries = 0;
+  /** Camera changes run one at a time; see `setCamera`. */
+  private cameraChange: Promise<void> = Promise.resolve();
   private screenSource: { source: any; track: any } | null = null;
   private readonly screenTracks = new Map<string, any>();
   private readonly webcamTracks = new Map<string, any>();
@@ -236,6 +245,9 @@ export class RoomEngine {
           this.patch({ peerVideoOpen: { ...this.state.peerVideoOpen, [peerId]: false } });
         }
       };
+      videoManager.onWebcamCaptureEnded = (reason) => {
+        void this.recoverCamera(reason);
+      };
       videoManager.onScreenCaptureEnded = (reason) => {
         // Our own stopScreenShare() clears the flag before killing ffmpeg; anything else is a failure.
         if (!this.state.isScreenSharing) return;
@@ -350,11 +362,9 @@ export class RoomEngine {
         for (const p of participants) this.addEvent('is in the room', 'join', p);
 
         void audioManager.start();
-        if (videoManager && this.videoSource && options.webcamEnabled) {
-          const device = options.videoDevice ?? loadSettings().videoDeviceId ?? undefined;
-          videoManager.startCapture(this.videoSource, device);
-          this.patch({ webcamCapturing: videoManager.isCapturing });
-        }
+        // The camera is not opened here. It starts muted, and holding a camera nobody is
+        // sharing burns its light for the whole call, keeps it from other apps, and — when it
+        // cannot be opened at all — used to leave the watchdog reopening it forever.
 
         // Wait for the first captured frame so the offer carries a live audio track;
         // 2 s cap so a slow device doesn't block connections.
@@ -488,29 +498,100 @@ export class RoomEngine {
     this.broadcastStates();
   }
 
-  toggleVideo(): void {
-    if (!this.videoManager) return;
-    const isVideoMuted = this.videoManager.toggleMute();
-    this.patch({ isVideoMuted, webcamCapturing: this.videoManager.isCapturing });
-    this.broadcastStates();
+  /** Which camera the capture uses: the flag, then the setting, then avfoundation's first. */
+  private get videoDevice(): string {
+    return this.options?.videoDevice ?? loadSettings().videoDeviceId ?? '0';
   }
 
   /**
-   * Point the capture at a camera, or release it with `null`. The camera picker releases
-   * before previewing one and sets the choice when you pick, so the device is never held by
-   * the capture and a preview at the same time.
+   * The one place the camera is opened and closed.
+   *
+   * `on` says whether it should be sending; `device` names which camera when a person picked
+   * one. Off lets go of the device — a black frame goes out first, so peers see it go dark
+   * rather than freeze — because a camera nobody is watching should not be held: its light
+   * stays on and no other app can open it.
+   *
+   * Serialized behind `cameraChange`, because the picker used to send "use this camera" and
+   * "turn it on" as two commands and the second could open the *previous* camera while the
+   * first was still stopping the old grabber.
    */
-  async setVideoDevice(device: string | null): Promise<void> {
+  private async setCamera(on: boolean, device?: string): Promise<void> {
+    this.cameraChange = this.cameraChange.then(() => this.applyCamera(on, device)).catch(() => {});
+    return this.cameraChange;
+  }
+
+  private async applyCamera(on: boolean, device?: string): Promise<void> {
     const vm = this.videoManager;
     if (!vm || !this.videoSource) return;
-    // Await the grabber's exit before saying the camera is free: the picker previews on that
-    // flag, and a camera is held until the process holding it is gone.
-    await vm.stopCapture();
-    this.patch({ webcamCapturing: false });
-    if (device === null) return;
-    saveSettings({ videoDeviceId: device });
-    vm.startCapture(this.videoSource, device);
-    this.patch({ webcamCapturing: vm.isCapturing });
+
+    if (device && device !== loadSettings().videoDeviceId) saveSettings({ videoDeviceId: device });
+
+    if (!on) {
+      if (!this.state.isVideoMuted) {
+        vm.toggleMute();
+        this.patch({ isVideoMuted: true });
+        this.broadcastStates();
+        // Let one black frame reach the peers before the grabber goes.
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      await vm.stopCapture();
+      this.patch({ webcamCapturing: false });
+      return;
+    }
+
+    // A person asked for the camera, so the retry budget and the spawn budget start fresh.
+    this.cameraRetries = 0;
+    forgiveChildKind('webcam');
+    if (device && vm.isCapturing) await vm.stopCapture();
+    if (!vm.isCapturing) await vm.startCapture(this.videoSource, this.videoDevice);
+    if (!vm.isCapturing) {
+      this.addEvent('the camera could not be opened', 'info', this.self);
+      this.patch({ webcamCapturing: false });
+      return;
+    }
+    if (this.state.isVideoMuted) vm.toggleMute();
+    this.patch({ isVideoMuted: false, webcamCapturing: true });
+    this.broadcastStates();
+  }
+
+  /** `v`: on becomes off and off becomes on, keeping whatever camera is already chosen. */
+  toggleVideo(): Promise<void> {
+    return this.setCamera(this.state.isVideoMuted);
+  }
+
+  /** The camera picker chose one: use it and turn the camera on, in that order, once. */
+  shareCamera(device: string): Promise<void> {
+    return this.setCamera(true, device);
+  }
+
+  /**
+   * The camera stopped on its own: reconfigured from its own control app, unplugged, or taken
+   * by something else. Its declared modes are stale after any of those, so they are forgotten
+   * and it is opened again once. If that fails too, the camera is marked off — peers see it go
+   * dark instead of holding the last frame it sent.
+   */
+  private async recoverCamera(reason: string): Promise<void> {
+    const vm = this.videoManager;
+    // Nothing to recover unless the camera is actually being shared: a capture that dies while
+    // the camera is off is not a problem, and reopening it would be noise.
+    if (!vm || !this.videoSource || !this.options?.webcamEnabled || this.state.isVideoMuted) return;
+    if (this.cameraRetries >= MAX_CAMERA_RETRIES) return;
+    this.cameraRetries++;
+
+    forgetCameraModes(this.videoDevice);
+    this.addEvent(`camera stopped: ${reason} — reopening`, 'info', this.self);
+    await vm.startCapture(this.videoSource, this.videoDevice);
+    if (vm.isCapturing) {
+      this.patch({ webcamCapturing: true });
+      return;
+    }
+    // One try is the limit: a camera that will not open again is usually held by something
+    // else, and retrying forever fills the room log without ever fixing it. The state is set
+    // here rather than through `setCamera`, which is for what a person asked for.
+    this.addEvent('camera could not be reopened; press v to try again', 'info', this.self);
+    vm.toggleMute();
+    this.patch({ isVideoMuted: true, webcamCapturing: false });
+    this.broadcastStates();
   }
 
   toggleOverlay(): void {
@@ -521,6 +602,8 @@ export class RoomEngine {
   }
 
   startScreenShare(device: ScreenDevice): void {
+    // Same reasoning as the camera: a person asked for this, so the spawn budget starts fresh.
+    forgiveChildKind('screen');
     const { videoManager, peerManager } = this;
     if (!videoManager || !peerManager) return;
     if (!this.screenSource) this.screenSource = createVideoSource({ isScreencast: true });

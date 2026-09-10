@@ -211,18 +211,13 @@ export function RoomView({
         room.toggleMute();
       }
       if (input === 'v' && room.webcamEnabled) {
-        // On: turn it off. Off: ask which camera, the way `s` asks which screen — and let go
-        // of the device first, so the picker can preview one (a camera opens once on macOS).
-        if (!room.isVideoMuted) {
-          room.toggleVideo();
-        } else {
+        // On: turn it off. Off: ask which camera, the way `s` asks which screen. Nothing to
+        // release first — a camera that is off is not held (see `RoomEngine.setCamera`).
+        if (!room.isVideoMuted) room.toggleVideo();
+        else {
           const cameras = listVideoDevices();
-          if (cameras.length > 1) {
-            room.setVideoDevice(null);
-            setCameraList(cameras);
-          } else {
-            room.toggleVideo();
-          }
+          if (cameras.length > 1) setCameraList(cameras);
+          else room.toggleVideo();
         }
       }
       if (input === 'd') {
@@ -535,14 +530,9 @@ export function RoomView({
           cameraBusy={room.webcamCapturing}
           onSelect={(device) => {
             setCameraList(null);
-            room.setVideoDevice(device.id);
-            room.toggleVideo();
+            room.shareCamera(device.id);
           }}
-          onCancel={() => {
-            setCameraList(null);
-            // Hand the camera back to the capture, still off, exactly as it was.
-            room.setVideoDevice(loadSettings().videoDeviceId);
-          }}
+          onCancel={() => setCameraList(null)}
         />
       )}
 

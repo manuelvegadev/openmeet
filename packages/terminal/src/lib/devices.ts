@@ -1,5 +1,6 @@
-import { execSync, spawnSync } from 'node:child_process';
+import { execFile, execSync, spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
+import { type CameraMode, pickWebcamMode, type Size, webcamCaptureArgs, webcamOutputSize } from './capture-args.js';
 import { POWERSHELL, powershellArgs, runPowerShell } from './powershell.js';
 import { ffmpegBin } from './tool-path.js';
 
@@ -41,6 +42,71 @@ export function listVideoDevices(): VideoDevice[] {
   }
 
   return [];
+}
+
+/**
+ * The capture modes a camera declares — its resolutions and frame rates.
+ *
+ * Asked for by demanding a size no camera has: avfoundation refuses and prints the list it
+ * does have, which is the only way to get it (`-list_devices` gives names only). It fails
+ * before opening a stream, so it is cheap and does not hold the device — unlike opening the
+ * camera for a frame, which is what this used to do.
+ *
+ * macOS only: the reply is avfoundation's, and v4l2 prints nothing of the sort. Elsewhere the
+ * shape is unknown and the caller falls back to the caps, which is also what happens when the
+ * camera cannot be opened at all — another app has it, or a capture card has no signal.
+ *
+ * Cached per device *including* the empty answer: an unopenable camera is exactly the case
+ * that would otherwise re-probe, and wait out the timeout, on every attempt to start it.
+ * `forgetCameraModes` is how a camera that has been reconfigured is looked at again. Async
+ * because the engine calls this next to the audio cadence (gotcha 25).
+ */
+const cameraModes = new Map<string, CameraMode[]>();
+
+/** Forget what a camera declared: it may have been reconfigured, which is why its stream died. */
+export function forgetCameraModes(device: string): void {
+  cameraModes.delete(device);
+}
+
+export async function probeCameraModes(device: string): Promise<CameraMode[]> {
+  const cached = cameraModes.get(device);
+  if (cached) return cached;
+  if (platform() !== 'darwin') return [];
+  const modes = await new Promise<CameraMode[]>((resolve) => {
+    execFile(
+      ffmpegBin(),
+      ['-f', 'avfoundation', '-video_size', '1x1', '-framerate', '30', '-i', `${device}:none`],
+      { timeout: 5000 },
+      (_err, _stdout, stderr) => {
+        // "  1280x720@[30.000030 30.000030]fps" — the second rate is the highest it offers.
+        const found: CameraMode[] = [];
+        for (const line of (stderr ?? '').split('\n')) {
+          const m = /(\d+)x(\d+)@\[[\d.]+\s+([\d.]+)\]fps/.exec(line);
+          if (m) found.push({ width: Number(m[1]), height: Number(m[2]), fps: Math.round(Number(m[3])) });
+        }
+        resolve(found);
+      },
+    );
+  });
+  cameraModes.set(device, modes);
+  return modes;
+}
+
+/**
+ * Everything needed to capture a camera: the ffmpeg arguments and the frame size they will
+ * produce. The two must agree — the pipe carries raw frames with no header and the reader
+ * slices them by length — so they are decided together, here, rather than by each of the three
+ * callers (the room's capture, the picker's preview, `--test-camera`) in its own words.
+ *
+ * `null` where this platform has no webcam pipeline at all.
+ */
+export async function webcamCapturePlan(device?: string): Promise<{ args: string[]; size: Size } | null> {
+  // Nothing to probe where there is no pipeline: asked first, so Windows never spawns a doomed
+  // ffmpeg only to be told afterwards that it has no webcam.
+  if (!webcamCaptureArgs(device, webcamOutputSize())) return null;
+  const size = webcamOutputSize(pickWebcamMode(await probeCameraModes(device ?? '0')));
+  const args = webcamCaptureArgs(device, size);
+  return args ? { args, size } : null;
 }
 
 // ─── Screen devices ──────────────────────────────────────────────────

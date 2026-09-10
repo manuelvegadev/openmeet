@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { platform } from 'node:os';
 import wrtc from '@roamhq/wrtc';
 import {
@@ -8,12 +8,9 @@ import {
   screenCaptureCandidates,
   screenOutputSize,
   WEBCAM_FPS,
-  WEBCAM_FRAME_BYTES,
-  WEBCAM_HEIGHT,
-  WEBCAM_WIDTH,
-  webcamCaptureArgs,
 } from './capture-args.js';
-import type { ScreenDevice } from './devices.js';
+import { killChild, spawnChild } from './children.js';
+import { type ScreenDevice, webcamCapturePlan } from './devices.js';
 import { renderOverlay } from './overlay.js';
 import { ffmpegBin, ffplayBin } from './tool-path.js';
 
@@ -88,30 +85,13 @@ class FrameAssembler {
 
 /** How long a screen grabber may stay silent before it counts as failed. */
 const SCREEN_SILENCE_MS = 8000;
-
 /**
- * SIGTERM, then SIGKILL if it is still there, resolving when it is really gone. An
- * avfoundation ffmpeg wedged inside ScreenCaptureKit ignores SIGTERM, and every one left
- * behind keeps its capture stream open — three of them were found alive at once on
- * 2026-09-09. The promise matters because a camera is not free until the process holding it
- * has exited: whoever wants the device next has to wait for this, not for a timer.
+ * The same for a camera, and shorter: a screen may legitimately be still, a camera never is.
+ * A camera reconfigured from its own control app (an Insta360 Link switching resolution) is
+ * the case this catches — the stream stops without the process necessarily dying, and peers
+ * would otherwise keep the last frame forever.
  */
-function killHard(proc: ChildProcess, graceMs = 2000): Promise<void> {
-  return new Promise((resolve) => {
-    if (proc.exitCode !== null || proc.signalCode !== null) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
-    }, graceMs);
-    proc.once('close', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    proc.kill();
-  });
-}
+const WEBCAM_SILENCE_MS = 5000;
 
 export function createVideoSource(options?: { isScreencast?: boolean }): { source: any; track: any } {
   const source = new RTCVideoSource(options?.isScreencast ? { isScreencast: true } : undefined);
@@ -133,6 +113,8 @@ interface PeerVideoPlayback {
   /** Rotated so a buffer is never rewritten while its `write()` is still queued. */
   ring: Buffer[];
   ringIndex: number;
+  /** A short frame has already been reported; the log should say it once, not per frame. */
+  warnedShortFrame: boolean;
 }
 
 export class VideoManager {
@@ -142,12 +124,15 @@ export class VideoManager {
   private _isVideoMuted = true; // starts muted — no camera by default
   private capturing = false;
   private screenCaptureProcess: ChildProcess | null = null;
+  private webcamSilenceTimer: ReturnType<typeof setInterval> | null = null;
   private screenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   overlayEnabled = true;
   onDebug?: (msg: string) => void;
   onWindowClosed?: (peerId: string, streamType: 'webcam' | 'screen') => void;
   /** The screen capture stopped without us asking; `reason` is what the room log should say. */
   onScreenCaptureEnded?: (reason: string) => void;
+  /** The camera stopped without us asking — died, or went silent. Same contract. */
+  onWebcamCaptureEnded?: (reason: string) => void;
 
   constructor(options?: { onDebug?: (msg: string) => void }) {
     this.onDebug = options?.onDebug;
@@ -173,6 +158,7 @@ export class VideoManager {
         height: 0,
         ring: [],
         ringIndex: 0,
+        warnedShortFrame: false,
       };
       this.peers.set(key, peer);
       this.wireSink(peer);
@@ -221,9 +207,17 @@ export class VideoManager {
    */
   private spawnFfplay(peer: PeerVideoPlayback, width: number, height: number): void {
     const title = `${peer.peerName} (${peer.streamType})`;
-    const proc = spawn(ffplayBin(), rawVideoPlayerArgs(width, height, 30, title), {
+    const proc = spawnChild('player', ffplayBin(), rawVideoPlayerArgs(width, height, 30, title), {
       stdio: ['pipe', 'ignore', 'ignore'],
     });
+    if (!proc) {
+      // Latched, not retried: `wireSink` runs per decoded frame, so retrying here would ask
+      // the gate — and write to the debug log — thirty times a second for as long as the peer
+      // keeps sending. Pressing `w`/`e` again is what reopens it.
+      peer.windowClosed = true;
+      this.onDebug?.(`No window for ${peer.peerName} (${peer.streamType}): too many child processes just now`);
+      return;
+    }
     peer.ffplayProcess = proc;
     peer.width = width;
     peer.height = height;
@@ -257,6 +251,20 @@ export class VideoManager {
       const { width, height, data } = frame;
       if (peer.windowClosed) return;
 
+      // Before anything is spent on this frame: a short one is a header that has moved on
+      // ahead of its data (gotcha 32b), and it is not evidence of a new resolution — acting on
+      // it would restart the window and reallocate its buffers for a frame we then drop.
+      if (data.byteLength < i420FrameBytes(width, height)) {
+        if (!peer.warnedShortFrame) {
+          peer.warnedShortFrame = true;
+          this.onDebug?.(
+            `${peer.peerName} (${peer.streamType}): frame says ${width}x${height} but carries ${data.byteLength} of ${i420FrameBytes(width, height)} bytes; skipping until they agree`,
+          );
+        }
+        return;
+      }
+      peer.warnedShortFrame = false;
+
       if (!peer.ffplayProcess || peer.width !== width || peer.height !== height) {
         if (peer.ffplayProcess) {
           this.onDebug?.(`${peer.peerName} (${peer.streamType}) now ${width}x${height}, restarting window`);
@@ -288,34 +296,66 @@ export class VideoManager {
 
   // ─── Send ──────────────────────────────────────────────────────────
 
-  startCapture(videoSource: any, device?: string): void {
+  /**
+   * Open the camera and push its frames into the WebRTC source.
+   *
+   * Async because the mode comes first: the camera's declared modes are probed
+   * (`probeCameraModes`, cached), the smallest one covering the target height is asked for,
+   * and the output keeps that shape under the caps — so a 16:9 camera is not letterboxed into
+   * a 4:3 frame, and a 4K camera is not opened at 4K to be scaled down every frame. The pipe
+   * carries raw frames with no header, so the reader has to know their size before the first
+   * byte arrives, which is why none of this can be decided from the stream itself.
+   */
+  async startCapture(videoSource: any, device?: string): Promise<void> {
     if (this.capturing) return;
-    const args = webcamCaptureArgs(device);
-    if (!args) {
-      this.onDebug?.('Webcam capture is not available on this platform');
-      return;
-    }
     this.capturing = true;
     this.videoSource = videoSource;
 
-    this.captureProcess = spawn(ffmpegBin(), args, {
+    const plan = await webcamCapturePlan(device);
+    if (!plan) {
+      this.capturing = false;
+      this.onDebug?.('Webcam capture is not available on this platform');
+      return;
+    }
+    const { args, size } = plan;
+    // Stopped while the probe was running.
+    if (!this.capturing) return;
+
+    this.captureProcess = spawnChild('webcam', ffmpegBin(), args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    if (!this.captureProcess) {
+      this.capturing = false;
+      this.onDebug?.('Camera not started: too many child processes, or too many attempts just now');
+      return;
+    }
 
-    const assembler = new FrameAssembler(WEBCAM_FRAME_BYTES);
+    const frameBytes = i420FrameBytes(size.width, size.height);
+    const assembler = new FrameAssembler(frameBytes);
 
     // Pre-allocate black frame for muted state (Y=0, U=128, V=128)
-    const blackFrame = new Uint8ClampedArray(WEBCAM_FRAME_BYTES);
-    const ySize = WEBCAM_WIDTH * WEBCAM_HEIGHT;
-    // Y plane: all zeros (already)
-    // U and V planes: fill with 128
-    blackFrame.fill(128, ySize);
+    const blackFrame = new Uint8ClampedArray(frameBytes);
+    blackFrame.fill(128, size.width * size.height);
+
+    // A camera that goes quiet without its process dying leaves peers on a frozen frame, so
+    // the frames are watched, not just the process.
+    let lastFrame = Date.now();
+    this.webcamSilenceTimer = setInterval(() => {
+      if (!this.capturing || Date.now() - lastFrame < WEBCAM_SILENCE_MS) return;
+      this.stopWebcamWatchdog();
+      const proc = this.captureProcess;
+      this.captureProcess = null;
+      this.capturing = false;
+      if (proc) void killChild(proc, 300);
+      this.onWebcamCaptureEnded?.(`no frames in ${WEBCAM_SILENCE_MS / 1000} s`);
+    }, 1000);
 
     this.captureProcess.stdout?.on('data', (chunk: Buffer) => {
+      lastFrame = Date.now();
       const dropped = assembler.push(chunk, (frame) => {
         this.videoSource.onFrame({
-          width: WEBCAM_WIDTH,
-          height: WEBCAM_HEIGHT,
+          width: size.width,
+          height: size.height,
           data: this._isVideoMuted ? blackFrame : frame,
         });
       });
@@ -335,16 +375,23 @@ export class VideoManager {
     });
 
     this.captureProcess.on('error', () => {
+      this.stopWebcamWatchdog();
       this.capturing = false;
       this.onDebug?.('Video capture failed to start');
+      this.onWebcamCaptureEnded?.('the camera could not be opened');
     });
 
     this.captureProcess.on('close', () => {
+      const unexpected = this.capturing;
+      this.stopWebcamWatchdog();
       this.capturing = false;
       this.onDebug?.('Video capture stopped');
+      // `stopCapture()` clears the flag before killing, so anything still capturing here ended
+      // on its own — the camera was unplugged, taken by another app, or reconfigured under us.
+      if (unexpected) this.onWebcamCaptureEnded?.('the camera stopped sending');
     });
 
-    this.onDebug?.(`Video capture started (${WEBCAM_WIDTH}x${WEBCAM_HEIGHT}@${WEBCAM_FPS}fps)`);
+    this.onDebug?.(`Video capture started (${size.width}x${size.height}@${WEBCAM_FPS}fps)`);
   }
 
   /**
@@ -353,11 +400,17 @@ export class VideoManager {
    * "we asked it to stop" is not the same as "it stopped". The grace before SIGKILL is short
    * for the same reason: there is nothing to flush at the end of a pipe of raw frames.
    */
+  private stopWebcamWatchdog(): void {
+    if (this.webcamSilenceTimer) clearInterval(this.webcamSilenceTimer);
+    this.webcamSilenceTimer = null;
+  }
+
   async stopCapture(): Promise<void> {
+    this.stopWebcamWatchdog();
     const proc = this.captureProcess;
     this.captureProcess = null;
     this.capturing = false;
-    if (proc) await killHard(proc, 300);
+    if (proc) await killChild(proc, 300);
   }
 
   get isCapturing(): boolean {
@@ -404,9 +457,13 @@ export class VideoManager {
     this.onDebug?.(`Screen ffmpeg args: ffmpeg ${args.join(' ')}`);
     this.onDebug?.(`Screen expected frame size: ${frameBytes} bytes (${width}x${height} I420)`);
 
-    this.screenCaptureProcess = spawn(ffmpegBin(), args, {
+    this.screenCaptureProcess = spawnChild('screen', ffmpegBin(), args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    if (!this.screenCaptureProcess) {
+      this.onScreenCaptureEnded?.('too many child processes, or too many attempts just now');
+      return;
+    }
     const proc = this.screenCaptureProcess;
 
     const assembler = new FrameAssembler(frameBytes);
@@ -442,7 +499,7 @@ export class VideoManager {
       if (this.screenCaptureProcess !== proc) return;
       silentFailure = true;
       this.onDebug?.(`Screen capture produced no data in ${SCREEN_SILENCE_MS / 1000} s; giving up on this grabber`);
-      killHard(proc);
+      killChild(proc);
     }, SCREEN_SILENCE_MS);
 
     this.screenCaptureProcess.stdout?.on('data', (chunk: Buffer) => {
@@ -524,7 +581,7 @@ export class VideoManager {
     const proc = this.screenCaptureProcess;
     if (!proc) return;
     this.screenCaptureProcess = null;
-    killHard(proc);
+    killChild(proc);
   }
 
   // ─── Cleanup ───────────────────────────────────────────────────────

@@ -37,8 +37,8 @@ interface UseRoomReturn extends RoomState {
   sendMessage: (content: string) => void;
   toggleMute: () => void;
   toggleVideo: () => void;
-  /** Point the capture at a camera, or `null` to release it (see `EngineCommand`). */
-  setVideoDevice: (device: string | null) => void;
+  /** The camera picker chose one: use it and turn the camera on (see `EngineCommand`). */
+  shareCamera: (device: string) => void;
   toggleOverlay: () => void;
   startScreenSharing: (device: ScreenDevice) => void;
   stopScreenSharing: () => void;
@@ -189,10 +189,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
   const sendMessage = useCallback((content: string) => engine.send({ type: 'send-chat', content }), [engine]);
   const toggleMute = useCallback(() => engine.send({ type: 'toggle-mute' }), [engine]);
   const toggleVideo = useCallback(() => engine.send({ type: 'toggle-video' }), [engine]);
-  const setVideoDevice = useCallback(
-    (device: string | null) => engine.send({ type: 'set-video-device', device }),
-    [engine],
-  );
+  const shareCamera = useCallback((device: string) => engine.send({ type: 'share-camera', device }), [engine]);
   const toggleOverlay = useCallback(() => engine.send({ type: 'toggle-overlay' }), [engine]);
   const startScreenSharing = useCallback(
     (device: ScreenDevice) => engine.send({ type: 'start-screen-share', device }),
@@ -228,7 +225,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
     sendMessage,
     toggleMute,
     toggleVideo,
-    setVideoDevice,
+    shareCamera,
     toggleOverlay,
     startScreenSharing,
     stopScreenSharing,

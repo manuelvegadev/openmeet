@@ -20,11 +20,8 @@ import {
   screenCaptureCandidates,
   screenOutputSize,
   WEBCAM_FPS,
-  WEBCAM_HEIGHT,
-  WEBCAM_WIDTH,
-  webcamCaptureArgs,
 } from './lib/capture-args.js';
-import { listScreenDevices } from './lib/devices.js';
+import { listScreenDevices, webcamCapturePlan } from './lib/devices.js';
 import { diagnosticsEnabled, recordRender } from './lib/diagnostics.js';
 import { getPlatformSupport } from './lib/platform.js';
 import { startPreview } from './lib/preview.js';
@@ -166,16 +163,16 @@ Usage: openmeet [options]
 
 if (values['test-camera']) {
   const device = values['video-device'] ?? loadSettings().videoDeviceId ?? '0';
-  const captureArgs = webcamCaptureArgs(device);
-  if (!captureArgs) {
+  const plan = await webcamCapturePlan(device);
+  if (!plan) {
     process.stderr.write(`Webcam capture is not available on ${getPlatformSupport().name}.\n`);
     process.exit(1);
   }
-  process.stdout.write(`Testing camera (device: ${device})... Press q or Esc in the ffplay window to close.\n`);
-  runPreview(
-    [captureArgs],
-    rawVideoPlayerArgs(WEBCAM_WIDTH, WEBCAM_HEIGHT, WEBCAM_FPS, `Camera Test (device ${device})`),
+  const { args: captureArgs, size } = plan;
+  process.stdout.write(
+    `Testing camera (device: ${device}, ${size.width}x${size.height})... Press q or Esc in the ffplay window to close.\n`,
   );
+  runPreview([captureArgs], rawVideoPlayerArgs(size.width, size.height, WEBCAM_FPS, `Camera Test (device ${device})`));
 } else if (values['test-screen']) {
   const screens = listScreenDevices();
   if (screens.length === 0) {

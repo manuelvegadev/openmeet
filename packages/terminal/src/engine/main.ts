@@ -14,6 +14,7 @@ import {
   createAudioBackend,
 } from '../lib/audio/index.js';
 import { ToneGenerator } from '../lib/audio/tone.js';
+import { killAllChildren, setChildLogger } from '../lib/children.js';
 import type { EngineCommand, EngineEvent, InputOptions } from './protocol.js';
 import { RoomEngine } from './room-engine.js';
 
@@ -39,6 +40,7 @@ export function runEngine(): Promise<never> {
   };
 
   const room = new RoomEngine(send);
+  setChildLogger((message) => room.log(message));
   let micTest: AudioBackend | null = null;
 
   const stopMicTest = () => {
@@ -49,6 +51,8 @@ export function runEngine(): Promise<never> {
   const exit = (code: number) => {
     stopMicTest();
     room.shutdown();
+    // Nothing of ours outlives us holding a camera or a screen.
+    killAllChildren();
     // audify keeps its thread-safe callbacks registered until the object is collected,
     // which would keep this loop alive forever: exit explicitly.
     setTimeout(() => process.exit(code), 50);
@@ -147,10 +151,10 @@ export function runEngine(): Promise<never> {
         room.toggleMute();
         break;
       case 'toggle-video':
-        room.toggleVideo();
+        void room.toggleVideo();
         break;
-      case 'set-video-device':
-        void room.setVideoDevice(cmd.device);
+      case 'share-camera':
+        void room.shareCamera(cmd.device);
         break;
       case 'toggle-overlay':
         room.toggleOverlay();

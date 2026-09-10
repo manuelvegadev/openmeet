@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { rawVideoPlayerArgs, WEBCAM_FPS, WEBCAM_HEIGHT, WEBCAM_WIDTH, webcamCaptureArgs } from '../lib/capture-args.js';
-import type { VideoDevice } from '../lib/devices.js';
+import { rawVideoPlayerArgs, WEBCAM_FPS } from '../lib/capture-args.js';
+import { type VideoDevice, webcamCapturePlan } from '../lib/devices.js';
 import { startPreview } from '../lib/preview.js';
 import { theme } from '../lib/theme.js';
 import { Modal } from './modal.js';
@@ -12,9 +12,10 @@ interface CameraPickerProps {
   /** The one to start on, if it is still there. */
   current?: string | null;
   /**
-   * The room still has the camera open. A preview cannot have it at the same time (macOS
-   * opens a camera once), so `t` waits for the grabber to exit rather than failing with
-   * `Input/output error` — which is what it did before this flag existed.
+   * The room still has the camera open. It should not: this opens only while the camera is
+   * off, and a camera that is off is not held. It is a guard rather than a normal state — a
+   * preview cannot share a camera with a capture (macOS opens one once), so `t` waits instead
+   * of failing with `Input/output error`.
    */
   cameraBusy?: boolean;
   /** Chosen: the room points the capture at it and turns the camera on. */
@@ -26,9 +27,9 @@ interface CameraPickerProps {
  * Which camera to share, over the room, the way screens are chosen — with `t` to look through
  * one first, since a list of names says little about which lens is which.
  *
- * The room releases the capture before this opens: on macOS a camera opens once, so a preview
- * and a capture cannot both hold it. Only one preview runs at a time, and it is closed on the
- * way out however you leave.
+ * Only one preview runs at a time, and it is closed on the way out however you leave — a
+ * preview holds the camera, and on macOS a camera opens once, so leaving one behind would stop
+ * the call from opening the camera you just chose.
  */
 /**
  * What to tell someone whose preview showed nothing. macOS says `Input/output error` for the
@@ -60,15 +61,20 @@ export function CameraPicker({ cameras, current, cameraBusy = false, onSelect, o
   // biome-ignore lint/correctness/useExhaustiveDependencies: unmount only; `close` reads refs
   useEffect(() => close, []);
 
-  const preview = (device: VideoDevice) => {
+  const preview = async (device: VideoDevice) => {
     close();
-    const args = webcamCaptureArgs(device.id);
-    if (!args) return;
     setPreviewing(device.id);
     setFailure(null);
+    // Exactly what a call would run, probed once and cached.
+    const plan = await webcamCapturePlan(device.id);
+    if (!plan) {
+      setPreviewing(null);
+      return;
+    }
+    const { args, size } = plan;
     stopPreview.current = startPreview(
       args,
-      rawVideoPlayerArgs(WEBCAM_WIDTH, WEBCAM_HEIGHT, WEBCAM_FPS, `Preview: ${device.name}`),
+      rawVideoPlayerArgs(size.width, size.height, WEBCAM_FPS, `Preview: ${device.name}`),
       ({ sawFrames, closedBy, error }) => {
         stopPreview.current = null;
         setPreviewing(null);
@@ -105,7 +111,7 @@ export function CameraPicker({ cameras, current, cameraBusy = false, onSelect, o
         }
         if (input === 't' && highlighted && !cameraBusy) {
           if (previewing === highlighted.id) close();
-          else preview(highlighted);
+          else void preview(highlighted);
         }
       }}
     >
