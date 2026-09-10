@@ -376,8 +376,11 @@ export function RoomView({
     );
   }
 
-  // A modal is up: the room stays drawn behind it, but nothing in it may take a key.
-  const overlay = (screenPickerOpen && screenDeviceList.length > 0) || cameraList !== null;
+  // Each modal draws on its own condition; `overlay` only says that one of them is up, which
+  // is what the room behind stands down for. Sharing one flag between the two put an empty
+  // screen picker on top of the camera picker.
+  const screenPicker = screenPickerOpen && screenDeviceList.length > 0;
+  const overlay = screenPicker || cameraList !== null;
 
   // What `w` and `e` would do to the selected peer right now. These duplicate the conditions
   // in the key handlers above — deliberately, and they have to be kept in step: a button that
@@ -543,7 +546,7 @@ export function RoomView({
       )}
 
       {/* Over the room, not instead of it: the conversation stays visible behind the choice. */}
-      {overlay && (
+      {screenPicker && (
         <Modal title="Share a screen" hints={[{ key: 'esc', label: 'cancel' }]}>
           <Select
             items={screenDeviceList.map((d) => ({ label: screenLabel(d), value: d.id }))}
