@@ -1,0 +1,30 @@
+name: Build the website
+description: Install only what packages/website needs, type-check it, prerender it and check what came out.
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+
+    # The filter keeps the terminal package's native modules (wrtc, audify) out of the job:
+    # the site needs nothing that compiles.
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile --filter @openmeet/website...
+
+    - name: Type-check
+      shell: bash
+      run: pnpm --filter @openmeet/website typecheck
+
+    - name: Build and prerender
+      shell: bash
+      run: pnpm --filter @openmeet/website build
+
+    - name: Check what was prerendered
+      shell: bash
+      run: pnpm --filter @openmeet/website check:dist

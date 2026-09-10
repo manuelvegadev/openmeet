@@ -82,3 +82,14 @@ jobs:
             console.log('audify api:', rt.getApi(), 'devices:', rt.getDevices().length);
             process.exit(0);
           "
+
+  # The landing page (packages/website) is static HTML prerendered from React. Pull requests
+  # only: a push to main is followed by deploy-website.yml, which runs the same build before it
+  # publishes, so building here as well would be the same minute of runner time twice.
+  website:
+    name: website
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-website
