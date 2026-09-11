@@ -6,17 +6,17 @@ export const en: Copy = {
   meta: {
     title: 'OpenMeet — voice, screen and chat from the terminal, no account',
     description:
-      'Open-source, peer-to-peer meetings from a terminal: stereo Opus audio up to 256 kbps, screen and webcam sharing, chat. No account, no browser, self-hostable. macOS and Windows.',
+      'Open-source, peer-to-peer meetings from a terminal: Opus audio, screen and webcam sharing as hardware H.264, chat. One 12 MB binary, no account, no browser, self-hostable. macOS and Windows.',
     ogAlt:
-      'OpenMeet running in a terminal: the conversation on the left, the participants with their meters on the right',
+      'OpenMeet running in a terminal: the conversation on the left, the participants with their state tags on the right',
     summary:
-      'OpenMeet is an open-source terminal app for audio calls, screen and webcam sharing and chat. Media travels peer to peer over WebRTC; the server only relays the handshake. No account is needed and the server can be self-hosted.',
+      'OpenMeet is an open-source terminal app for audio calls, screen and webcam sharing and chat, in one 12 MB binary. Media travels peer to peer over WebRTC; the server only relays the handshake. No account is needed and the server can be self-hosted.',
     features: [
-      'Stereo Opus audio at 48 kHz, up to 256 kbps each way, RED-protected',
+      'Opus audio at 48 kHz with in-band FEC, encoded once for the whole room',
       'Screen sharing in the screen’s own aspect ratio, up to 1080 px tall at 30 fps',
-      'Webcam sharing up to 720 px, on its own track beside the screen',
+      'Webcam sharing up to 720 px, on its own track beside the screen, both as hardware H.264',
       'Text chat with room events in one stream',
-      'Per-peer volume, VU meters and latency estimates',
+      'Per-peer volume, speaking indicators and latency estimates',
       'No account: a name and a colour, chosen once',
       'Peer-to-peer WebRTC mesh, up to six participants',
       'Self-hostable signaling server with no database',
@@ -25,7 +25,7 @@ export const en: Copy = {
   nav: {
     docs: 'Docs',
     github: 'GitHub',
-    npm: 'npm',
+    download: 'Download',
     selfHost: 'Self-host',
     switchLabel: 'English',
     switchTitle: 'Read this page in English',
@@ -33,9 +33,11 @@ export const en: Copy = {
   hero: {
     titlePlain: 'No account. No browser. Just a terminal, a room ',
     titleAccent: 'and your voice.',
-    lead: 'Stereo Opus calls, screen and webcam sharing and chat, peer to peer, from a terminal. Open source, self-hostable, and light enough to forget it is running.',
+    lead: 'Opus calls, screen and webcam sharing and chat, peer to peer, from a terminal. Open source, self-hostable, one 12 MB binary, and light enough to forget it is running.',
+    mac: 'macOS',
+    windows: 'Windows',
     thatIsIt: 'that is the whole setup',
-    note: 'Node 22 or later. ffmpeg only if you want to share a screen or a camera.',
+    note: 'Nothing else to install. ffmpeg only if you want to share a screen or a camera.',
   },
   copy: { label: 'copy', done: 'copied' },
   tui: {
@@ -44,7 +46,7 @@ export const en: Copy = {
     room: 'Room',
     messages: {
       '00:25': 'morning — did the Windows build ever finish?',
-      '00:26': 'yeah, four minutes on the i7. rebuilding wrtc is most of it',
+      '00:26': 'yeah, under a minute — it cross-builds from the mac now',
       '00:28': 'hey. audio is clean on my end this time, no robot voice',
       '00:30': 'good. the dropouts are gone on my side too',
       '00:31': 'let me put the trace up',
@@ -84,8 +86,8 @@ export const en: Copy = {
     },
     {
       eyebrow: '03 · Performance',
-      title: 'A native audio loop, not a browser tab.',
-      text: 'Audio runs in its own process on a 10 ms cadence, straight against CoreAudio and WASAPI. No Electron, no Chromium, no web page pretending to be an app.',
+      title: 'One binary, not a browser tab.',
+      text: 'The audio callbacks run in C, straight against CoreAudio and WASAPI, and the microphone is encoded once for the whole room. No Electron, no Chromium, no runtime to install, no web page pretending to be an app.',
     },
   ],
   stories: {
@@ -107,25 +109,24 @@ export const en: Copy = {
     },
     audio: {
       eyebrow: 'Audio',
-      title: 'You can hear the difference.',
+      title: 'Built for voices.',
       paragraphs: [
-        'Stereo Opus at 48 kHz, up to 256 kbps in each direction. Most meeting apps hand you mono at a fraction of that; this one lets a stereo mic, an interface or a game sound like it does on your side.',
-        'Devices open at their native rate and are resampled in-process at about 90 dB SNR. Noise suppression is optional, on the CPU or, on Windows with an RTX card, through NVIDIA Broadcast.',
+        'Opus at 48 kHz, encoded once and sent to everyone in the room, with in-band FEC so a lost packet is not a lost syllable. A voice gate keeps the line silent while you are, which is most of a call.',
+        'Devices open at their native rate and follow the system when it changes one: Bluetooth headphones that switch profile mid-call are reopened, not left robotic. On macOS, Apple’s own Voice Isolation and echo cancellation are on by default; Wave Link and NVIDIA Broadcast are recognised and offered first.',
       ],
-      note: 'Per-peer volume, VU meters and a latency estimate next to every name.',
+      note: 'Per-peer volume, a speaking dot and a latency estimate next to every name.',
       pane: {
         title: 'settings · audio',
         rows: [
-          { k: 'Send bitrate', v: '' },
-          { k: 'Receive bitrate', v: '' },
-          { k: 'Channels', v: 'stereo', tone: 'ok', note: '· mono · left · right' },
-          { k: 'Noise suppression', v: 'on', tone: 'ok', note: '(RNNoise, 0.22 ms per frame)' },
-          { k: 'Redundancy', v: 'RED', tone: 'ok', note: '— a lost packet is not a lost syllable' },
+          { k: 'Codec', v: 'Opus 48 kHz', tone: 'ok', note: '· 64 kbps, one encoder for the room' },
+          { k: 'Loss', v: 'in-band FEC', tone: 'ok', note: '+ concealment — a lost packet is not a lost syllable' },
+          { k: 'Voice gate', v: 'on', tone: 'ok', note: '— silence costs nothing' },
+          { k: 'Processing', v: 'Apple', tone: 'ok', note: '(Voice Isolation, echo cancellation) · off' },
         ],
         bars: [
           { k: 'Sample rate', v: '48 kHz' },
-          { k: 'Frame', v: '10 ms' },
-          { k: 'Ceiling', v: '256 kbps' },
+          { k: 'Frame', v: '20 ms' },
+          { k: 'Encoders', v: '1 per room' },
         ],
         caption: 'Every value is a setting or a flag:',
       },
@@ -135,9 +136,9 @@ export const en: Copy = {
       title: 'Share a screen. Or a camera. Both.',
       paragraphs: [
         'Screen share keeps the screen’s own shape, up to 1080 px tall and 30 fps: an ultrawide goes out as 2580×1080, not letterboxed. The webcam goes out at up to 720 px in the camera’s own aspect ratio.',
-        'Both travel on their own WebRTC tracks, so a share does not interrupt the camera, and the bitrate ceiling follows the size of the room.',
+        'Both travel on their own WebRTC tracks as H.264 from the GPU’s encoder — VideoToolbox on the Mac, NVENC on Windows — encoded once and sent to everyone, so a share does not interrupt the camera or the audio, and the bitrate follows the size of the room.',
       ],
-      note: 'Webcam is macOS and Linux for now. Windows gets it before 1.0.',
+      note: 'Webcam is macOS for now. Windows gets it before 1.0.',
       pane: {
         title: 'room · participants',
         legend: [
@@ -153,16 +154,16 @@ export const en: Copy = {
       eyebrow: 'Performance',
       title: 'No browser in the loop.',
       paragraphs: [
-        'The audio engine is a process of its own that only ever sees audio callbacks, signaling and a stats poll. In a two-person call it holds at 65 MB and does not move for the length of the call, so the interface can stall for a second and nobody hears it.',
-        'Nothing here ships a browser. Opus, VP8 and the mixer run native, the terminal draws text, and the whole client installs in 78 MB — against 479 MB for Discord’s app and 1.4 GB for Chrome’s, before either has opened a window.',
+        'One process, one binary. The audio callbacks stay in C and a single Opus encoder feeds every peer, so a call costs the same with two people as with six: about 4% of one core and 35 MB with the interface included, and the interface itself draws only the cells that changed.',
+        'Nothing here ships a browser. Opus runs native, video is encoded on the GPU, the terminal draws text, and the whole client is a 12 MB binary — against 479 MB for Discord’s app and 1.4 GB for Chrome’s, before either has opened a window.',
       ],
       pane: {
         title: 'installed, on one Mac',
         facts: [
-          'two processes: the interface and the audio engine',
-          'the audio engine: 65 MB, flat for the whole call',
-          'no Electron, no Chromium, no GPU compositor',
-          'an idle desktop share costs ~3% of a core (Windows, DDA)',
+          'one process: interface, audio and network',
+          'in a call: ~4% of a core, 35 MB, whatever the room size',
+          'no Electron, no Chromium, no runtime to install',
+          'a screen share: hardware H.264, 1.3% of a core in the app',
         ],
         caption:
           'Measured, not estimated: Apple M4 Pro, macOS 15, against Discord 0.0.411 and Chrome 152 as they ship.',
@@ -207,7 +208,7 @@ export const en: Copy = {
       },
       {
         q: 'Do I need ffmpeg?',
-        a: 'Only to share a screen or a camera. Audio talks to CoreAudio and WASAPI through a bundled native module, so a call needs nothing but Node 22.',
+        a: 'Only to share a screen or a camera. The binary talks to CoreAudio and WASAPI itself, so a call needs nothing else.',
       },
       {
         q: 'Is it free?',
@@ -219,9 +220,9 @@ export const en: Copy = {
       },
       {
         q: 'How good is the audio?',
-        a: 'Stereo Opus at 48 kHz, up to 256 kbps in each direction, with RED redundancy against packet loss. Noise suppression is optional.',
+        a: 'Opus at 48 kHz with in-band FEC and concealment against packet loss, a voice gate so silence costs nothing, and on macOS Apple’s Voice Isolation and echo cancellation by default. The bitrate is a flag.',
       },
     ],
   },
-  footer: { madeBy: 'made by', changelog: 'Changelog' },
+  footer: { madeBy: 'made by', changelog: 'Changelog', download: 'Download' },
 };

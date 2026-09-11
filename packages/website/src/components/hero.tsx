@@ -1,6 +1,6 @@
 import { HERO_CHIPS } from '../content/demo';
 import { useCopy } from '../lib/i18n';
-import { INSTALL, RUN } from '../lib/site';
+import { INSTALL_MAC, INSTALL_WIN, RUN } from '../lib/site';
 import { Chip, Cmd } from './ui';
 
 export function Hero() {
@@ -19,7 +19,8 @@ export function Hero() {
         </h1>
         <p className="hero__lead">{c.hero.lead}</p>
         <div className="hero__install">
-          <Cmd cmd={INSTALL} />
+          <Cmd cmd={INSTALL_MAC} note={c.hero.mac} />
+          <Cmd cmd={INSTALL_WIN} note={c.hero.windows} prompt=">" />
           <Cmd cmd={RUN} note={c.hero.thatIsIt} copy={false} />
         </div>
         <p className="muted hero__note">{c.hero.note}</p>

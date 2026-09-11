@@ -106,10 +106,21 @@ export function CopyButton({ text }: { text: string }) {
 }
 
 /** A shell line: `$` then the command, with a copy button on the right. */
-export function Cmd({ cmd, note, copy = true }: { cmd: string; note?: string; copy?: boolean }) {
+/** `prompt` is `$` for a shell and `>` for PowerShell, where `$` would read as a variable. */
+export function Cmd({
+  cmd,
+  note,
+  copy = true,
+  prompt = '$',
+}: {
+  cmd: string;
+  note?: string;
+  copy?: boolean;
+  prompt?: string;
+}) {
   return (
     <div className="cmd">
-      <span className="cmd__dollar">$</span>
+      <span className="cmd__dollar">{prompt}</span>
       <code>{cmd}</code>
       {note ? <span className="cmd__note">{note}</span> : null}
       {copy ? <CopyButton text={cmd} /> : null}

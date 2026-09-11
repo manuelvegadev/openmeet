@@ -1,4 +1,4 @@
-import { AUDIO_KBPS_STEPS, INSTALL_SIZES, PEERS, STACK } from '../content/demo';
+import { AUDIO_KBPS_FLAG, INSTALL_SIZES, PEERS, STACK } from '../content/demo';
 import type { Lang, PaneRow, Story } from '../content/types';
 import { useCopy } from '../lib/i18n';
 import { SELF_HOST_CMDS } from '../lib/site';
@@ -56,29 +56,17 @@ function Bar({ label, value, width, dim }: { label: string; value: string; width
   );
 }
 
-/** A settings line. An empty `v` means the row is the Opus ladder, which is data, not copy. */
+/** A settings line: the key, its value in its tone, and a note after it. */
 function SettingRow({ row }: { row: PaneRow }) {
   return (
     <div className="ln">
-      <span className="muted pane__k">{row.k}</span>{' '}
-      {row.v ? <span className={row.tone ?? 'muted'}>{row.v}</span> : <Ladder />}{' '}
+      <span className="muted pane__k">{row.k}</span> <span className={row.tone ?? 'muted'}>{row.v}</span>{' '}
       {row.note ? <span className="muted">{row.note}</span> : null}
     </div>
   );
 }
 
-/** `64 · 96 · 128 · 192 · [256 kbps]` — the last step is the one the page claims. */
-function Ladder() {
-  const chosen = AUDIO_KBPS_STEPS.at(-1);
-  return (
-    <>
-      <span className="muted">{AUDIO_KBPS_STEPS.slice(0, -1).join(' · ')} ·</span>{' '}
-      <span className="accent">[{chosen} kbps]</span>
-    </>
-  );
-}
-
-/** `78 MB`, `1.4 GB` — one measurement, written the way the reader's language writes numbers. */
+/** `12 MB`, `1.4 GB` — one measurement, written the way the reader's language writes numbers. */
 function formatSize(mb: number, lang: Lang): string {
   if (mb < 1024) return `${mb} MB`;
   return `${new Intl.NumberFormat(lang, { maximumFractionDigits: 1 }).format(mb / 1024)} GB`;
@@ -115,7 +103,7 @@ export function Stories() {
           title={audio.pane.title}
           caption={
             <>
-              {audio.pane.caption} <span className="accent">--audio-send-kbps {AUDIO_KBPS_STEPS.at(-1)}</span>
+              {audio.pane.caption} <span className="accent">{AUDIO_KBPS_FLAG}</span>
             </>
           }
         >

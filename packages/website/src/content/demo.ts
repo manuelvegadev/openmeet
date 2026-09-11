@@ -52,28 +52,31 @@ export const PEERS: PeerRow[] = [
   { who: 'amara', tag: 'm', rate: '↓128k', latencyMs: 155, volume: '70%' },
 ];
 
-/** Measured 2026-09-10 on an Apple M4 Pro; see docs/performance.md. */
+/**
+ * Discord and Chrome measured 2026-09-10 on an Apple M4 Pro (docs/performance.md); openmeet is the
+ * arm64 binary of 2026-09-11 — the whole install, there is nothing else.
+ */
 export const INSTALL_SIZES: { label: string; mb: number; us?: boolean }[] = [
-  { label: 'openmeet', mb: 78, us: true },
+  { label: 'openmeet', mb: 12, us: true },
   { label: 'Discord', mb: 479 },
   { label: 'Google Chrome', mb: 1434 },
 ];
 
-export const HERO_CHIPS = ['macOS 15+', 'Windows 11', 'MIT', 'P2P'];
+export const HERO_CHIPS = ['macOS 15+', 'Windows 11', 'MIT', 'P2P', '12 MB'];
 
 export const STACK = [
-  'Node.js 22',
-  'TypeScript',
-  'WebRTC · libwebrtc',
-  'Opus + RED',
-  'VP8 / VP9',
-  'Ink · React for terminals',
-  'RtAudio · CoreAudio / WASAPI',
+  'Go',
+  'pion · WebRTC',
+  'Opus · libopus',
+  'H.264 · VideoToolbox / NVENC',
+  'miniaudio · CoreAudio / WASAPI',
+  'Bubble Tea',
   'ffmpeg',
-  'RNNoise',
   'Express 5 + ws',
+  'TypeScript',
   'Docker',
 ];
 
-/** The Opus ladder the settings screen cycles (`AUDIO_KBPS_STEPS` in the terminal's sdp.ts). */
-export const AUDIO_KBPS_STEPS = [64, 96, 128, 192, 256];
+/** The one encoder's default, and the flag that moves it (`--audio-kbps` in packages/go). */
+export const AUDIO_KBPS_DEFAULT = 64;
+export const AUDIO_KBPS_FLAG = `--audio-kbps ${AUDIO_KBPS_DEFAULT}`;

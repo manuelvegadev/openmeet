@@ -1,8 +1,8 @@
 # OpenMeet
 
-> Open-source, peer-to-peer audio calls, screen and webcam sharing and chat from a terminal. No account, no browser. Stereo Opus audio up to 256 kbps each way, WebRTC mesh of up to six people, self-hostable signaling server. macOS 15+ and Windows 11; Linux best effort. MIT licence.
+> Open-source, peer-to-peer audio calls, screen and webcam sharing and chat from a terminal, in one 12 MB binary. No account, no browser. Opus audio at 48 kHz encoded once for the room, screen and camera as hardware H.264, WebRTC mesh of up to six people, self-hostable signaling server. macOS 15+ and Windows 11. MIT licence.
 
-Install with `npm i -g openmeet-terminal`, then run `openmeet`. Node.js 22 or later; ffmpeg only for screen or camera sharing. The first start asks for a name and a colour; rooms are names, typing one creates it.
+Install with `curl -fsSL https://github.com/manuelvegadev/openmeet/releases/latest/download/install.sh | bash` on macOS or `irm https://github.com/manuelvegadev/openmeet/releases/latest/download/install.ps1 | iex` on Windows, then run `openmeet`; the app keeps itself current from GitHub Releases. Nothing else to install; ffmpeg only for screen or camera sharing. The first start asks for a name and a colour; rooms are names, typing one creates it.
 
 Media never passes through the server: WebRTC carries audio and video directly between participants and the server only relays the signaling handshake, keeps rooms in memory and forgets them when the last person leaves.
 
@@ -13,12 +13,12 @@ Media never passes through the server: WebRTC carries audio and video directly b
 
 ## Documentation
 
-- [Terminal client README](https://github.com/manuelvegadev/openmeet/blob/main/packages/terminal/README.md): features, platform support, CLI flags, settings
+- [Client README](https://github.com/manuelvegadev/openmeet/blob/main/packages/go/README.md): build, flags, releasing and updates, what it costs
 - [Project README](https://github.com/manuelvegadev/openmeet/blob/main/README.md): architecture, development, self-hosting with Docker
 - [Signaling and WebRTC architecture](https://github.com/manuelvegadev/openmeet/blob/main/docs/websocket-webrtc-architecture.md)
 - [Performance notes and benchmarks](https://github.com/manuelvegadev/openmeet/blob/main/docs/performance.md)
 
 ## Distribution
 
-- [npm: openmeet-terminal](https://www.npmjs.com/package/openmeet-terminal)
+- [GitHub Releases: one binary per platform](https://github.com/manuelvegadev/openmeet/releases)
 - [Source on GitHub](https://github.com/manuelvegadev/openmeet)

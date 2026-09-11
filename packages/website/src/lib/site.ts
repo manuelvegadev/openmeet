@@ -2,8 +2,8 @@ import type { Lang } from '../content/types';
 
 export const SITE_URL = 'https://openmeet.manuelvega.dev';
 export const GITHUB_URL = 'https://github.com/manuelvegadev/openmeet';
-export const NPM_URL = 'https://www.npmjs.com/package/openmeet-terminal';
-export const DOCS_URL = `${GITHUB_URL}/blob/main/packages/terminal/README.md`;
+export const RELEASES_URL = `${GITHUB_URL}/releases`;
+export const DOCS_URL = `${GITHUB_URL}/blob/main/packages/go/README.md`;
 export const SELF_HOST_URL = `${GITHUB_URL}#deployment`;
 export const CHANGELOG_URL = `${GITHUB_URL}/releases`;
 export const AUTHOR = { name: 'Manuel Vega', url: 'https://manuelvega.dev' };
@@ -14,7 +14,9 @@ export const APP_VERSION: string = __APP_VERSION__;
 /** Where each language lives. English is the root, so it is also the `x-default`. */
 export const PATHS: Record<Lang, string> = { en: '/', es: '/es/' };
 
-export const INSTALL = 'npm i -g openmeet-terminal';
+/** One binary per OS, from the latest GitHub Release; the app keeps itself current after that. */
+export const INSTALL_MAC = `curl -fsSL ${GITHUB_URL}/releases/latest/download/install.sh | bash`;
+export const INSTALL_WIN = `irm ${GITHUB_URL}/releases/latest/download/install.ps1 | iex`;
 export const RUN = 'openmeet';
 export const SELF_HOST_CMDS = [
   `git clone ${GITHUB_URL}`,

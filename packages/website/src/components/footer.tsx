@@ -1,5 +1,5 @@
 import { COPY, otherLangs, useCopy } from '../lib/i18n';
-import { AUTHOR, CHANGELOG_URL, DOCS_URL, GITHUB_URL, NPM_URL, PATHS } from '../lib/site';
+import { AUTHOR, CHANGELOG_URL, DOCS_URL, GITHUB_URL, PATHS, RELEASES_URL } from '../lib/site';
 import { Logo } from './nav';
 
 export function Footer() {
@@ -12,7 +12,7 @@ export function Footer() {
         </div>
         <nav className="footer__links" aria-label="Footer">
           <a href={GITHUB_URL}>GitHub</a>
-          <a href={NPM_URL}>npm</a>
+          <a href={RELEASES_URL}>{c.footer.download}</a>
           <a href={DOCS_URL}>{c.nav.docs}</a>
           <a href={CHANGELOG_URL}>{c.footer.changelog}</a>
           {otherLangs(c.lang).map((l) => (

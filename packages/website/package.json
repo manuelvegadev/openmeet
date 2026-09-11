@@ -2,7 +2,7 @@
   "name": "@openmeet/website",
   "version": "0.0.0",
   "private": true,
-  "description": "openmeet.manuelvega.dev: the landing page for openmeet-terminal, prerendered to static HTML in English and Spanish",
+  "description": "openmeet.manuelvega.dev: the landing page for OpenMeet, prerendered to static HTML in English and Spanish",
   "type": "module",
   "scripts": {
     "dev": "vite",

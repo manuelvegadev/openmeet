@@ -6,16 +6,17 @@ export const es: Copy = {
   meta: {
     title: 'OpenMeet — voz, pantalla y chat desde la terminal, sin cuenta',
     description:
-      'Reuniones de código abierto y entre pares desde la terminal: audio Opus estéreo hasta 256 kbps, pantalla y cámara compartidas, chat. Sin cuenta, sin navegador, con servidor propio si quieres. macOS y Windows.',
-    ogAlt: 'OpenMeet en una terminal: la conversación a la izquierda, los participantes con sus medidores a la derecha',
+      'Reuniones de código abierto y entre pares desde la terminal: audio Opus, pantalla y cámara compartidas en H.264 por hardware, chat. Un solo binario de 12 MB, sin cuenta, sin navegador, con servidor propio si quieres. macOS y Windows.',
+    ogAlt:
+      'OpenMeet en una terminal: la conversación a la izquierda, los participantes con sus etiquetas de estado a la derecha',
     summary:
-      'OpenMeet es una aplicación de terminal de código abierto para llamadas de audio, pantalla y cámara compartidas y chat. El audio y el vídeo viajan de par a par por WebRTC; el servidor solo transmite la negociación. No hace falta cuenta y el servidor se puede alojar en casa.',
+      'OpenMeet es una aplicación de terminal de código abierto para llamadas de audio, pantalla y cámara compartidas y chat, en un solo binario de 12 MB. El audio y el vídeo viajan de par a par por WebRTC; el servidor solo transmite la negociación. No hace falta cuenta y el servidor se puede alojar en casa.',
     features: [
-      'Audio Opus estéreo a 48 kHz, hasta 256 kbps en cada sentido, protegido con RED',
+      'Audio Opus a 48 kHz con FEC en banda, codificado una sola vez para toda la sala',
       'Pantalla compartida en su propia proporción, hasta 1080 px de alto a 30 fps',
-      'Cámara compartida hasta 720 px, en su propia pista junto a la pantalla',
+      'Cámara compartida hasta 720 px, en su propia pista junto a la pantalla, ambas en H.264 por hardware',
       'Chat de texto con los eventos de la sala en un solo hilo',
-      'Volumen por participante, medidores VU y latencia estimada',
+      'Volumen por participante, indicador de voz y latencia estimada',
       'Sin cuenta: un nombre y un color, elegidos una vez',
       'Malla WebRTC entre pares, hasta seis participantes',
       'Servidor de señalización sin base de datos, alojable en casa',
@@ -24,7 +25,7 @@ export const es: Copy = {
   nav: {
     docs: 'Docs',
     github: 'GitHub',
-    npm: 'npm',
+    download: 'Descargar',
     selfHost: 'Servidor propio',
     switchLabel: 'Español',
     switchTitle: 'Leer esta página en español',
@@ -32,9 +33,11 @@ export const es: Copy = {
   hero: {
     titlePlain: 'Sin cuenta. Sin navegador. Solo una terminal, una sala ',
     titleAccent: 'y tu voz.',
-    lead: 'Llamadas Opus estéreo, pantalla y cámara compartidas y chat, de par a par, desde una terminal. Código abierto, con servidor propio si quieres, y tan ligera que olvidas que está abierta.',
+    lead: 'Llamadas Opus, pantalla y cámara compartidas y chat, de par a par, desde una terminal. Código abierto, con servidor propio si quieres, un solo binario de 12 MB, y tan ligera que olvidas que está abierta.',
+    mac: 'macOS',
+    windows: 'Windows',
     thatIsIt: 'eso es toda la instalación',
-    note: 'Node 22 o superior. ffmpeg solo si quieres compartir pantalla o cámara.',
+    note: 'Nada más que instalar. ffmpeg solo si quieres compartir pantalla o cámara.',
   },
   copy: { label: 'copiar', done: 'copiado' },
   tui: {
@@ -43,7 +46,7 @@ export const es: Copy = {
     room: 'Sala',
     messages: {
       '00:25': 'buenas — ¿terminó la build de Windows?',
-      '00:26': 'sí, cuatro minutos en el i7. casi todo es recompilar wrtc',
+      '00:26': 'sí, menos de un minuto — ahora se compila cruzado desde el mac',
       '00:28': 'hola. esta vez el audio llega limpio, nada de voz de robot',
       '00:30': 'bien. por aquí también desaparecieron los cortes',
       '00:31': 'os enseño la traza',
@@ -83,8 +86,8 @@ export const es: Copy = {
     },
     {
       eyebrow: '03 · Rendimiento',
-      title: 'Un bucle de audio nativo, no una pestaña del navegador.',
-      text: 'El audio corre en su propio proceso, con una cadencia de 10 ms, directo contra CoreAudio y WASAPI. Sin Electron, sin Chromium, sin una página web haciéndose pasar por aplicación.',
+      title: 'Un binario, no una pestaña del navegador.',
+      text: 'Las llamadas del audio corren en C, directo contra CoreAudio y WASAPI, y el micrófono se codifica una sola vez para toda la sala. Sin Electron, sin Chromium, sin runtime que instalar, sin una página web haciéndose pasar por aplicación.',
     },
   ],
   stories: {
@@ -106,25 +109,29 @@ export const es: Copy = {
     },
     audio: {
       eyebrow: 'Audio',
-      title: 'Se nota al oído.',
+      title: 'Hecho para voces.',
       paragraphs: [
-        'Opus estéreo a 48 kHz, hasta 256 kbps en cada sentido. La mayoría de aplicaciones de reuniones te dan mono a una fracción de eso; esta deja que un micro estéreo, una interfaz o un juego suenen como suenan de tu lado.',
-        'Los dispositivos se abren a su frecuencia nativa y se remuestrean en el propio proceso a unos 90 dB de SNR. La supresión de ruido es opcional, en la CPU o, en Windows con una RTX, mediante NVIDIA Broadcast.',
+        'Opus a 48 kHz, codificado una sola vez y enviado a todos los de la sala, con FEC en banda para que un paquete perdido no sea una sílaba perdida. Una puerta de voz mantiene la línea en silencio mientras tú lo estás, que es la mayor parte de una llamada.',
+        'Los dispositivos se abren a su frecuencia nativa y siguen al sistema cuando la cambia: unos auriculares Bluetooth que cambian de perfil a mitad de llamada se reabren, no se quedan robóticos. En macOS, el aislamiento de voz y la cancelación de eco de Apple vienen activados; Wave Link y NVIDIA Broadcast se reconocen y se ofrecen primero.',
       ],
-      note: 'Volumen por participante, medidores VU y una latencia estimada junto a cada nombre.',
+      note: 'Volumen por participante, un punto de voz y una latencia estimada junto a cada nombre.',
       pane: {
         title: 'ajustes · audio',
         rows: [
-          { k: 'Bitrate de envío', v: '' },
-          { k: 'Bitrate de recepción', v: '' },
-          { k: 'Canales', v: 'estéreo', tone: 'ok', note: '· mono · izq · der' },
-          { k: 'Supresión de ruido', v: 'sí', tone: 'ok', note: '(RNNoise, 0,22 ms por trama)' },
-          { k: 'Redundancia', v: 'RED', tone: 'ok', note: '— un paquete perdido no es una sílaba perdida' },
+          { k: 'Códec', v: 'Opus 48 kHz', tone: 'ok', note: '· 64 kbps, un codificador para la sala' },
+          {
+            k: 'Pérdidas',
+            v: 'FEC en banda',
+            tone: 'ok',
+            note: '+ ocultación — un paquete perdido no es una sílaba perdida',
+          },
+          { k: 'Puerta de voz', v: 'sí', tone: 'ok', note: '— el silencio no cuesta nada' },
+          { k: 'Procesado', v: 'Apple', tone: 'ok', note: '(aislamiento de voz, cancelación de eco) · no' },
         ],
         bars: [
           { k: 'Frecuencia', v: '48 kHz' },
-          { k: 'Trama', v: '10 ms' },
-          { k: 'Techo', v: '256 kbps' },
+          { k: 'Trama', v: '20 ms' },
+          { k: 'Codificadores', v: '1 por sala' },
         ],
         caption: 'Cada valor es un ajuste o una opción de línea de comandos:',
       },
@@ -134,9 +141,9 @@ export const es: Copy = {
       title: 'Comparte la pantalla. O la cámara. Las dos.',
       paragraphs: [
         'La pantalla compartida conserva su propia forma, hasta 1080 px de alto y 30 fps: un monitor ultrapanorámico sale a 2580×1080, sin bandas negras. La cámara sale hasta 720 px en su propia proporción.',
-        'Cada una viaja en su propia pista WebRTC, así que compartir pantalla no interrumpe la cámara, y el techo de bitrate sigue al tamaño de la sala.',
+        'Cada una viaja en su propia pista WebRTC en H.264 del codificador de la GPU — VideoToolbox en el Mac, NVENC en Windows — codificada una sola vez y enviada a todos, así que compartir pantalla no interrumpe la cámara ni el audio, y el bitrate sigue al tamaño de la sala.',
       ],
-      note: 'La cámara es de momento para macOS y Linux. Windows la tendrá antes de la 1.0.',
+      note: 'La cámara es de momento para macOS. Windows la tendrá antes de la 1.0.',
       pane: {
         title: 'sala · participantes',
         legend: [
@@ -152,16 +159,16 @@ export const es: Copy = {
       eyebrow: 'Rendimiento',
       title: 'Sin navegador de por medio.',
       paragraphs: [
-        'El motor de audio es un proceso aparte que solo ve las llamadas del audio, la señalización y un sondeo de estadísticas. En una llamada de dos se queda en 65 MB y no se mueve en toda la llamada, así que la interfaz puede quedarse colgada un segundo y nadie lo oye.',
-        'Aquí nada trae un navegador dentro. Opus, VP8 y el mezclador corren en nativo, la terminal dibuja texto, y el cliente entero se instala en 78 MB — frente a los 479 MB de la aplicación de Discord y 1,4 GB de la de Chrome, antes de que ninguna de las dos abra una ventana.',
+        'Un proceso, un binario. Las llamadas del audio se quedan en C y un solo codificador Opus alimenta a todos los participantes, así que una llamada cuesta lo mismo con dos personas que con seis: alrededor del 4% de un núcleo y 35 MB con la interfaz incluida, y la interfaz solo dibuja las celdas que cambian.',
+        'Aquí nada trae un navegador dentro. Opus corre en nativo, el vídeo se codifica en la GPU, la terminal dibuja texto, y el cliente entero es un binario de 12 MB — frente a los 479 MB de la aplicación de Discord y 1,4 GB de la de Chrome, antes de que ninguna de las dos abra una ventana.',
       ],
       pane: {
         title: 'instalado, en un mismo Mac',
         facts: [
-          'dos procesos: la interfaz y el motor de audio',
-          'el motor de audio: 65 MB, planos toda la llamada',
-          'sin Electron, sin Chromium, sin compositor en la GPU',
-          'compartir un escritorio quieto cuesta ~3% de un núcleo (Windows, DDA)',
+          'un proceso: interfaz, audio y red',
+          'en llamada: ~4% de un núcleo, 35 MB, sea cual sea la sala',
+          'sin Electron, sin Chromium, sin runtime que instalar',
+          'compartir pantalla: H.264 por hardware, 1,3% de un núcleo en la aplicación',
         ],
         caption:
           'Medido, no estimado: Apple M4 Pro, macOS 15, frente a Discord 0.0.411 y Chrome 152 tal y como se distribuyen.',
@@ -211,7 +218,7 @@ export const es: Copy = {
       },
       {
         q: '¿Necesito ffmpeg?',
-        a: 'Solo para compartir pantalla o cámara. El audio habla con CoreAudio y WASAPI a través de un módulo nativo incluido, así que una llamada no necesita más que Node 22.',
+        a: 'Solo para compartir pantalla o cámara. El binario habla con CoreAudio y WASAPI por sí mismo, así que una llamada no necesita nada más.',
       },
       {
         q: '¿Es gratis?',
@@ -223,9 +230,9 @@ export const es: Copy = {
       },
       {
         q: '¿Qué calidad tiene el audio?',
-        a: 'Opus estéreo a 48 kHz, hasta 256 kbps en cada sentido, con redundancia RED contra la pérdida de paquetes. La supresión de ruido es opcional.',
+        a: 'Opus a 48 kHz con FEC en banda y ocultación contra la pérdida de paquetes, una puerta de voz para que el silencio no cueste nada, y en macOS el aislamiento de voz y la cancelación de eco de Apple por defecto. El bitrate es una opción.',
       },
     ],
   },
-  footer: { madeBy: 'hecho por', changelog: 'Cambios' },
+  footer: { madeBy: 'hecho por', changelog: 'Cambios', download: 'Descargar' },
 };

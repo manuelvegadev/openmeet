@@ -65,8 +65,8 @@ notarized yet: `install.sh` clears the quarantine flag, and Windows SmartScreen 
 Installing and staying current, from the user's side:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/go/scripts/install.sh | bash   # macOS
-irm https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/go/scripts/install.ps1 | iex           # Windows
+curl -fsSL https://github.com/manuelvegadev/openmeet/releases/latest/download/install.sh | bash   # macOS
+irm https://github.com/manuelvegadev/openmeet/releases/latest/download/install.ps1 | iex           # Windows
 ```
 
 The app then keeps itself current (`internal/update`): once a day it asks GitHub Releases,

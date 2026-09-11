@@ -43,7 +43,7 @@ export interface Copy {
   nav: {
     docs: string;
     github: string;
-    npm: string;
+    download: string;
     selfHost: string;
     /** This language's own name, shown as the link to it from the other pages. */
     switchLabel: string;
@@ -53,6 +53,9 @@ export interface Copy {
     titlePlain: string;
     titleAccent: string;
     lead: string;
+    /** The two install lines' labels. */
+    mac: string;
+    windows: string;
     thatIsIt: string;
     note: string;
   };
@@ -102,5 +105,5 @@ export interface Copy {
   selfHost: { eyebrow: string; title: string; text: string };
   stack: { eyebrow: string; title: string };
   faq: { eyebrow: string; title: string; items: Faq[] };
-  footer: { madeBy: string; changelog: string };
+  footer: { madeBy: string; changelog: string; download: string };
 }

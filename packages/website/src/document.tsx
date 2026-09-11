@@ -2,7 +2,7 @@ import { App } from './app';
 import type { Lang } from './content/types';
 import { installCopyHandler } from './lib/copy';
 import { COPY, LANGS } from './lib/i18n';
-import { APP_VERSION, AUTHOR, GITHUB_URL, NPM_URL, PATHS, SITE_URL } from './lib/site';
+import { APP_VERSION, AUTHOR, GITHUB_URL, PATHS, RELEASES_URL, SITE_URL } from './lib/site';
 
 /**
  * Everything a crawler, a link unfurler or an answer engine reads before the body: title and
@@ -34,14 +34,14 @@ export function Head({ lang, noindex }: { lang: Lang; noindex?: boolean }) {
         license: 'https://opensource.org/license/mit',
         isAccessibleForFree: true,
         offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
-        downloadUrl: NPM_URL,
-        installUrl: NPM_URL,
+        downloadUrl: RELEASES_URL,
+        installUrl: RELEASES_URL,
         softwareHelp: { '@type': 'CreativeWork', url: `${GITHUB_URL}/blob/main/packages/terminal/README.md` },
         featureList: c.meta.features,
         screenshot: { '@type': 'ImageObject', url: ogImage, caption: c.meta.ogAlt },
         author: { '@type': 'Person', name: AUTHOR.name, url: AUTHOR.url },
         inLanguage: lang,
-        sameAs: [GITHUB_URL, NPM_URL],
+        sameAs: [GITHUB_URL, RELEASES_URL],
       },
       {
         '@type': 'FAQPage',
