@@ -5,6 +5,26 @@ value within each section. Measurements live in [performance.md](performance.md)
 
 ## Correctness and consistency
 
+### Audio devices, from testing on other people's machines (Sept 2026)
+Three reports, all in the device layer, all worth fixing where the Go client will put that
+layer (see [go-migration-analysis.md](go-migration-analysis.md), "Device problems the Go
+client has to answer for"):
+
+- **The Elgato Wave's effects are missing from what we capture (macOS).** Wave Link exposes
+  its processed audio as separate virtual devices; picking the hardware input gets the signal
+  from before the noise suppression and the EQ. Confirm device by device, then either prefer
+  the processed endpoint or label it in the picker — `audio/nvidia-broadcast.ts` already
+  reasons exactly this way for the Windows equivalent.
+- **AirPods ruin the incoming audio (macOS).** Opening a Bluetooth device for input while it
+  is also the output puts macOS into the hands-free profile: mono, 8–16 kHz, telephone. Never
+  open a Bluetooth input alongside a Bluetooth output, and say why in the picker.
+  `scripts/audio-matrix.ts` on an AirPods pair will show the rate collapse.
+- **Devices come and go unnoticed (Windows).** The list is enumerated once and RtAudio sends
+  no device-change notification (gotcha 21e), so a headset connected after the picker opened
+  is not there, and NVIDIA Broadcast is present or absent depending on when we looked. Needs
+  a device-change watch (`IMMNotificationClient`, `kAudioHardwarePropertyDevices`) and a
+  re-enumeration, not a longer cache.
+
 ### The screen bandwidth budget is bounded by the estimator, not clamped per frame
 `b=AS` (gotcha 27b) sets what the bandwidth estimator will offer the encoder towards a peer,
 and follows the room and the share's shape on every renegotiation. What it is not is a hard
@@ -21,12 +41,11 @@ is unverified. `scripts/share-probe.ts` is the place to assert it once `getParam
 be trusted, or once a newer wrtc build reads the fields correctly.
 
 ### The participants column could be narrower
-`PARTICIPANTS_WIDTH` is 48 columns, from the widest one-line peer row:
-`○ ▸ [MMMMMMMM] mcs ↓999k ~999ms 60% ██████████`. On the Windows profile's 110 columns that
-leaves 62 for the chat. What is left to trim costs the reader something: dropping the `○`/`▸`
-columns and carrying speaking and selection in the name's colour and weight (4 columns), or a
-shorter meter. The two key rows in the column are 43 and 44 cells of the
-46 available, so a longer label or another key needs one of the levers above first.
+Partly done, Sept 2026: the VU meter left the room (gotchas 37–38) and `PARTICIPANTS_WIDTH`
+follows the widest line it can hold, so the column narrowed by ten columns on its own and the
+chat got them. What is left to trim still costs the reader something: dropping the `○`/`▸`
+columns and carrying speaking and selection in the name's colour and weight would save four
+more. Check the two key rows in the column still fit before taking them.
 
 ### Joining a room that does not exist silently creates it
 `signaling.ts` calls `ensureRoom` on `join-room`, so a typo in the room name lands you alone

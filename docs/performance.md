@@ -170,3 +170,110 @@ should cap the TUI's old space; the engine needs no such thing.
 
 Because of that the website compares **install sizes**, which are unambiguous, and quotes
 the engine's flat 65 MB — never a total-memory figure.
+
+## Where an audio-only call spends its CPU — 2026-09-11
+
+The measurements above are about video on the engine's loop. This round asks a plainer
+question: **why does an audio-only call cost more than Discord does?** Everything here is
+from this Mac — Apple M4 Pro, macOS 15.7.9, Node 26.7 — with the signaling server on
+localhost. `scripts/audio-cost.ts` is the decomposition, `scripts/tui-cost.tsx` the renderer,
+and real clients in a real room are the verdict.
+
+### A real call, per client, before any of this
+
+| | 2 people | 4 people |
+|---|---|---|
+| TUI process | 11–13%, 250–350 MB | ~10%, 330 MB |
+| engine process | 4.6%, 130 MB | 8.2%, 120 MB |
+
+The TUI also wrote **90–100 KB/s to the terminal, about 8.5 full-screen repaints a second**,
+with nothing on screen moving but the VU meters. That cost is paid twice: once by us to
+produce the frame, once by the terminal emulator to parse and paint it.
+
+### The engine, decomposed (`scripts/audio-cost.ts`)
+
+A loopback connection carries one encode and one decode, which is what one peer in the mesh
+costs us. Each phase is 12 s; the process holds both ends, so the absolute numbers are about
+twice what one client pays — the differences between rows are the finding.
+
+| phase | CPU |
+|---|---|
+| the 10 ms frame pipeline in JS, no wrtc | **1.3%** |
+| + `RTCAudioSource.onData` | 1.7% |
+| + one connected PeerConnection, **no media** | 1.9% |
+| + **sending one audio track** (nobody decoding) | **8.9%** |
+| + decode and sink | 10.1% |
+| the same, mono 32 kbps with DTX | 8.5% |
+| three peers (a room of four) | 20.4% |
+| **libopus itself**, stereo 128 kbps, 10 ms frames (ffmpeg `-benchmark`) | **0.66%** |
+| libopus, mono 32 kbps, 20 ms frames | 0.29% |
+
+Three conclusions, and none of them is the one that was assumed:
+
+1. **The codec is not the cost.** Opus is under 1% of a core; the send path around it is ten
+   times that. Bitrate and stereo barely move the number (10.1% against 8.5%).
+2. **JavaScript is not the cost.** The whole conditioning-and-mixing pipeline at 100 frames a
+   second is 1.3%.
+3. **A PeerConnection is.** An idle one is free; the moment it carries our audio it is ~7% of
+   a core, and in a mesh that multiplies by the number of peers.
+
+`sample` on the send-only phase says where those 7% go: `opus_encode` ~2.4% of a core, and
+the rest in libwebrtc's machinery — SRTP and `sendto` on the worker thread, the paced sender,
+`rtp_send_controller`, and a **`TestAudioDeviceModuleImpl`** thread pulling playout every
+10 ms (`AudioTransportImpl::NeedMorePlayData` → `AudioMixerImpl::Mix` → NetEq →
+`opus_decode`) whether or not anything consumes the mix. That pull is also what feeds
+`RTCAudioSink`, which is why a receiving connection costs even when the peer is silent.
+
+### The TUI: React, and React in the wrong build
+
+A full room render, measured into a fake 120x34 terminal (`scripts/tui-cost.tsx`), and a CPU
+profile of the same loop:
+
+| | share of busy time |
+|---|---|
+| React (`jsx-runtime`, `react`, `react-reconciler`) | ~56% |
+| ANSI serialisation (`ink/output`, `ansi-tokenize`, `string-width`) | ~9% |
+| Yoga layout (wasm) | ~1% |
+| GC | ~4% |
+
+The profile named `react.development.js` and `react-reconciler.development.js`. Nothing in
+the published bundle set `NODE_ENV`, and `packages: 'external'` left React to be resolved
+from the user's `node_modules` at runtime — so **every install ran React's development
+build**. A static import is hoisted above any assignment the entry point could make, and an
+external one cannot be inlined, so the fix is to bundle React with `process.env.NODE_ENV`
+defined (`build.mjs`), which also dead-code-eliminates the development branches and takes
+`es-toolkit`'s 12 MB out of the install.
+
+| one full room render | CPU per render |
+|---|---|
+| development React | 31 ms |
+| production React | 18 ms |
+| dot instead of meters (0.5 renders/s instead of 10) | 1.2% of a core, against 30.7% |
+
+Dropping the meter does not make a frame cheaper — it makes frames **rare**. The TUI's cost
+is proportional to how often something on screen changes, and a ten-cell meter quantized to
+80 steps changes whenever anyone breathes.
+
+### After the two corrections
+
+Both builds in the same room at the same moment, four clients, nobody talking:
+
+| per client | before | after |
+|---|---|---|
+| engine | 17.1–17.7% | **6.1–6.4%** |
+| TUI | 2.5–3.3% | **0.7–2.4%** |
+| TUI resident | 216–225 MB | 177–203 MB |
+
+In a silent room of four that is 20% of a core per client down to about 7%. The TUI's share
+of the win shows fully only when people talk: with the meters moving it was 11–13%, and the
+dot costs about 1% however loud the room is.
+
+### What this says about the ceiling
+
+The engine's remaining cost is structural, not tunable. `RTCAudioSource.onData` takes PCM,
+and `@roamhq/wrtc` exposes no encoded path (no insertable streams, no encoded transform), so
+every peer gets its own encoder, pacer, estimator and audio device module. A room of six is
+five encoders for one microphone, and no amount of care in our code changes that. The way out
+is a library that accepts a packet we already encoded — pion's `TrackLocalStaticRTP.WriteRTP`
+writes one RTP packet to every bound PeerConnection — which is the argument in
+[go-migration-analysis.md](go-migration-analysis.md).

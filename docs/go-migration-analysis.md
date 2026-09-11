@@ -1,6 +1,10 @@
 # Should OpenMeet leave Node.js? — Research and verdict
 
-Status: analysis, September 2026. Branch `analysis/go-migration`. No decision taken yet.
+Status: **decided, 11 September 2026** — the Node client gets two cheap corrections and then
+the client moves to Go + pion. The analysis below is from the first round; the section
+[What the measurements added](#what-the-measurements-added-11-september-2026) is what settled
+it, and it changed the argument: the reason to leave is not performance in general, it is one
+specific thing `@roamhq/wrtc` cannot do.
 
 ## The question
 
@@ -98,3 +102,94 @@ The hard problems (echo cancellation, playout jitter buffer, bandwidth adaptatio
 3. **Phase 2, video**: ffmpeg → IVF → pion for webcam and screen; RTP → IVF → ffplay for receive; scaler/overlay ported to Go. Keep the current ffmpeg device enumeration. Add `dshow`/`gdigrab` for Windows and a PipeWire portal path for Wayland.
 4. **Phase 3, server in Go** (1–2 days) to unify the repo, with a `FROM scratch` image.
 5. **Later, if needed**: AEC via a cgo-wrapped WebRTC audio processing module or speexdsp; pure-Go Opus once `pion/opus`/`gopus` mature, to drop libopus from the build matrix.
+
+## What the measurements added (11 September 2026)
+
+The first round of this document argued from distribution, platform reach and the state of
+the binding. Then the CPU was actually measured (`docs/performance.md`), and the argument
+changed shape. Three findings matter here.
+
+**The codec is not the cost, and neither is JavaScript.** libopus encoding stereo at
+128 kbps costs 0.66% of a core; the whole 10 ms JS frame pipeline costs 1.3%. What costs is
+a libwebrtc PeerConnection carrying audio: ~7% of a core, of which the encoder is a third,
+the rest being SRTP, the paced sender, the send controller and a fake audio device module
+that pulls playout every 10 ms per connection. A rewrite that only changed the language would
+move the 1.3% and leave the rest.
+
+**Node cannot encode once.** This is the finding that decides the runtime. `RTCAudioSource`
+accepts PCM, and `@roamhq/wrtc` exposes no encoded path at all — no insertable streams, no
+encoded transform, no access to RTP. Every PeerConnection therefore builds its own Opus
+encoder, and a mesh of six is five encoders for one microphone. It is not an inefficiency to
+optimise; it is the shape of the API.
+
+pion is the opposite shape. One `TrackLocalStaticRTP` is added to every PeerConnection and
+`WriteRTP` writes the same packet to all of them, adjusting SSRC and payload type per
+binding. **Encode once, fan out N** — which is Mumble's efficiency, with no media server, no
+loss of end-to-end encryption, and the mesh intact. The per-peer cost that remains is SRTP
+and a `sendto`: microseconds at 64 kbps. That is the whole argument for Go in one sentence,
+and it is about the library rather than the language.
+
+**The UI was the other half, and it did not need a migration.** React was running its
+development build in every install, and a VU meter refreshed at 10 Hz was forcing ~8.5
+full-screen repaints a second. Both are fixed in Node (gotchas 36–38): a silent room of four
+went from ~20% of a core per client to ~7%. What that means for this document is that **the
+corrections are not a delaying tactic and not wasted work** — they are design decisions
+(paint on change, do not transmit silence) that the Go client inherits. The code is thrown
+away; the design is not.
+
+### Constraints the migration inherits
+
+Not negotiable, in this order:
+
+1. **Resource consumption is the point.** The target is Mumble's, not Discord's: an audio
+   call for 1–3% of a core, flat with room size, and tens of MB resident.
+2. **Audio quality second**, and it is the part with real engineering risk (see the playout
+   note below).
+3. **Screen and camera third**, and they **stay on WebRTC** — pion's congestion control and
+   the automatic quality adaptation are worth the machinery for video, which is bursty and
+   compresses badly at a fixed rate. Audio does not need any of it.
+4. **Audio is client-to-client and never passes through a server.** No media server, no
+   relay we operate, nothing for anyone to listen to. This is a privacy property, not a
+   performance one, and it is why an SFU was rejected even though it would also solve the
+   encoder problem.
+5. **One binary, three platforms.**
+
+### The one hard part, named
+
+Pion does no playout. libwebrtc gives us NetEq for free today: an adaptive jitter buffer,
+packet-loss concealment, and time-stretching to absorb the drift between two sound cards that
+disagree about what 48 kHz means. Opus's in-band FEC and PLC cover the loss; the adaptive
+buffering and the drift are ours to write. Mumble uses the speex jitter buffer (BSD) for
+exactly this, which is the reference worth reading before inventing anything. Everything else
+in the migration is mechanical work; this is the part that decides whether the calls sound
+good.
+
+### Device problems the Go client has to answer for
+
+From testing with real people on their own machines, September 2026. These are not
+migration-blockers so much as the requirements the device layer is actually judged on — and
+all three are in the layer the migration replaces (`malgo`/miniaudio instead of
+audify + per-OS enumeration), so they are worth fixing there rather than twice.
+
+1. **macOS, Elgato Wave / Wave Link: we appear to capture the microphone *before* its
+   effects.** Wave Link presents processed audio as its own virtual devices (`Wave Link
+   Stream`, `Wave Link MicrophoneFX`); selecting the hardware Elgato input gets the raw
+   signal, which is the one without noise suppression or EQ. Needs confirming device by
+   device, then either preferring the processed endpoint or saying plainly in the picker
+   which one carries the effects. Related: `audio/nvidia-broadcast.ts` already does exactly
+   this reasoning for the Windows equivalent, so the shape of the answer exists.
+2. **macOS, AirPods: listening to peers degrades.** Almost certainly Bluetooth rather than
+   AirPods: when a Bluetooth output is also opened as an *input*, macOS switches the device
+   to the hands-free profile (HFP/SCO), which is mono at 8–16 kHz, and everything sounds like
+   a telephone. The fix is to never open a Bluetooth input while a Bluetooth output is in
+   use, and to say so in the picker. Verify with `scripts/audio-matrix.ts` on an AirPods pair
+   — it reports each device's native rate, which is where the profile switch will show.
+3. **Windows: devices appear and disappear as they are connected, and NVIDIA Broadcast is
+   intermittent.** There are no default-device-change notifications from RtAudio (gotcha
+   21e), the device list is enumerated once, and a Bluetooth headset connecting after the
+   picker opened is simply not there. A native client should watch for device changes
+   (`IMMNotificationClient` on WASAPI, `kAudioHardwarePropertyDevices` on CoreAudio) and
+   re-enumerate, rather than snapshotting at startup. The Broadcast flakiness is probably the
+   same thing seen from the other side: the virtual device exists only while the app runs,
+   and `resolveBroadcastDefault` only names it when it is the *system* default at the moment
+   we looked.
