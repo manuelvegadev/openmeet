@@ -76,6 +76,7 @@ the gate open — "someone talking without pause" — which a real call is not.
 | both directions, complexity 5 | **4.4%** | — |
 | **3 peers**, sending to all | flat with 1 peer | +two thirds |
 | bytes written to the terminal | **139 B/s** | 90–100 KB/s |
+| **the whole client with its interface**, in a call | **3.9%, 35 MB** — the interface itself is 0.16% of a core (Bubble Tea's loop and `View` in the profile), 1 KB/s to the terminal | engine 8.2% + TUI 6–13%, 330 MB |
 
 Where the rest goes, from the profiles: the UDP `sendto` (~27% of the duplex profile,
 loopback-inflated), the Opus encoder (~17% at complexity 10), and the Go scheduler waking a
