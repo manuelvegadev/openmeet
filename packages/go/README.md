@@ -30,7 +30,7 @@ machine without libopusfile; the client never uses it.
 
 ```bash
 brew install zig cmake pkg-config
-packages/go/scripts/build-windows.sh      # → packages/go/dist/openmeet-windows-amd64.exe
+packages/go/scripts/build-windows.sh      # → packages/go/dist/windows-amd64/openmeet.exe
 ```
 
 One static PE, 12.7 MB, importing only system DLLs (UCRT, ole32, winmm): libopus is built

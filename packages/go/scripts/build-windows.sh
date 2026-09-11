@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cross-build the Go client for Windows from macOS (or Linux).
 #
-#   packages/go/scripts/build-windows.sh            → packages/go/dist/openmeet-windows-amd64.exe
+#   packages/go/scripts/build-windows.sh            → packages/go/dist/windows-amd64/openmeet.exe
 #
 # Needs zig (`brew install zig`), cmake and pkg-config on the host. libopus is the one C
 # dependency that is not compiled into the binary from source, so it is built here once,
@@ -13,9 +13,9 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 CROSS="$HERE/.cross"
 TARGET=x86_64-windows-gnu
 OPUS_VER=1.5.2
-OUT="$HERE/dist/openmeet-windows-amd64.exe"
+OUT="$HERE/dist/windows-amd64/openmeet.exe"
 
-mkdir -p "$CROSS/bin" "$HERE/dist"
+mkdir -p "$CROSS/bin" "$HERE/dist/windows-amd64"
 # zig as a drop-in C toolchain for the target; cmake wants single executables.
 for tool in cc ar ranlib rc; do
   printf '#!/bin/sh\nexec zig %s %s "$@"\n' "$tool" "$([ "$tool" = cc ] && echo "-target $TARGET" || true)" > "$CROSS/bin/z$tool"

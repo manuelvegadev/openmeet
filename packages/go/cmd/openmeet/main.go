@@ -327,8 +327,9 @@ func main() {
 				mu.Unlock()
 				var parts []string
 				for _, id := range ids {
-					u, d, c, depth, rx, ts := playout.Stats(id)
-					parts = append(parts, fmt.Sprintf("%s u%d d%d c%d q%d rx%d ts%d", rtcShort(id), u, d, c, depth, rx, ts))
+					st := playout.Stats(id)
+					parts = append(parts, fmt.Sprintf("%s q%d/%d j%.0f u%d s%d d%d f%d c%d rx%d", rtcShort(id),
+						st.Depth, st.Target, st.JitterMs, st.Underruns, st.Skipped, st.Dropped, st.Recovered, st.Concealed, st.Received))
 				}
 				if pump != nil {
 					parts = append(parts, fmt.Sprintf("dev-underruns %d", pump.Underruns()))
