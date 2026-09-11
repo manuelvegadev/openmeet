@@ -3,6 +3,31 @@
 What is known to be missing or wrong, with enough context to pick it up cold. Ordered by
 value within each section. Measurements live in [performance.md](performance.md).
 
+## The Go client: parity items deferred on purpose (Sept 2026)
+
+Decided 2026-09-11: reconnection, screen and camera, distribution and updates, and the
+retirement of the Node client come first; these are left for after, and each is small.
+
+- **Settings rows that show but do not act yet in Go**: Mic Channels and input gain
+  (port `packages/terminal/src/lib/audio/channels.ts` — the auto mono-in-a-stereo-pair
+  detection and the dB gain — as a step before the gate), Audio Send kbps (wire it to the
+  one Opus encoder; Audio Receive is moot with encode-once, peers choose their own), Noise
+  Suppression on Windows (open WASAPI in the *Communications* category, which is Windows'
+  own voice processing and the Windows Studio Effects where the machine has them; the
+  macOS row is served by Apple's unit), and `--debug` writing `debug.log` next to the
+  settings as the Node client did.
+- **Camera row** with the enumerated name rather than the saved id (comes with video).
+- **The RTX hint**: the PowerShell probe that suggests NVIDIA Broadcast to an RTX owner
+  who has not installed it (`nvidia-broadcast.ts` `hasRtxGpu`).
+- **Pause Rendering**: the setting cycles but does nothing; Bubble Tea repaints only on
+  events so the cost is cosmetic. Focus reporting (`tea.WithReportFocus`) would cover
+  `unfocused`; `minimized` needs the Node client's window watcher.
+- **Peer name clamping** to `NameMaxCells` on receive (`engine.cleanName` exists, unused).
+- **DSCP on Windows** through the qWAVE API, per destination, once the peer's address is
+  known; `IP_TOS` alone is ignored there.
+- **Video overlay**: with compressed H.264 to ffplay there is nothing to burn text into;
+  the window title carries the peer's name instead, and the setting row should say so.
+
 ## Correctness and consistency
 
 ### Audio devices, from testing on other people's machines (Sept 2026)
