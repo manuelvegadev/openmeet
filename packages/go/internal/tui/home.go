@@ -13,6 +13,16 @@ type HomeState struct {
 	Cursor   bool // the input's cursor phase
 	// Escape pressed once: the quit hint changes for two seconds.
 	EscArmed bool
+	// A newer version: downloaded and ready (`r` installs), or only known, with the command.
+	Update *UpdateInfo
+	// The first run after a silent install: a green tick for a few seconds.
+	JustUpdated bool
+}
+
+type UpdateInfo struct {
+	Version string
+	Ready   bool
+	Command string
 }
 
 // DrawHome draws the home screen or its join prompt into the frame.
@@ -34,14 +44,21 @@ func DrawHome(c *Canvas, s HomeState) {
 	title := []Span{
 		{"\U0001F3A5 OpenMeet Terminal ", Style{FG: ThemeAccent, Bold: true}},
 		{"v" + s.Version, Style{FG: ThemeMuted, Bold: true}},
-		{" ", Style{FG: ThemeAccent, Bold: true}},
-		{"· " + s.Platform + ": " + s.Features, Style{FG: ThemeMuted, Bold: true}},
 	}
+	if s.Update != nil {
+		title = append(title, Span{" → v" + s.Update.Version, Style{FG: ThemeAccent, Bold: true}})
+	}
+	if s.JustUpdated {
+		title = append(title, Span{" ✓ updated", Style{FG: ThemeOK, Bold: true}})
+	}
+	title = append(title,
+		Span{" ", Style{FG: ThemeAccent, Bold: true}},
+		Span{"· " + s.Platform + ": " + s.Features, Style{FG: ThemeMuted, Bold: true}})
 	quit := chipRow([]KeyHint{{Key: "esc", Label: "quit"}})
 	if s.EscArmed {
 		quit = []Span{{"Press Esc again to quit", Style{FG: ThemeWarn}}}
 	}
-	Centered(c, inner, [][]Span{
+	lines := [][]Span{
 		title,
 		{{"Lightweight video conferencing", Muted}},
 		nil,
@@ -50,9 +67,17 @@ func DrawHome(c *Canvas, s HomeState) {
 		nil,
 		chipRow([]KeyHint{{Key: "j", Label: "join room"}}),
 		chipRow([]KeyHint{{Key: "s", Label: "settings"}}),
-		nil,
-		quit,
-	})
+	}
+	if u := s.Update; u != nil {
+		lines = append(lines, nil)
+		if u.Ready {
+			lines = append(lines, []Span{{"Update downloaded. Restart to install.", Muted}}, chipRow([]KeyHint{{Key: "r", Label: "restart now"}}))
+		} else {
+			lines = append(lines, []Span{{"v" + u.Version + " is out. Install it with: ", Muted}, {u.Command, Plain}})
+		}
+	}
+	lines = append(lines, nil, quit)
+	Centered(c, inner, lines)
 }
 
 // chipRow is a row of buttons as one line of spans, one space between.

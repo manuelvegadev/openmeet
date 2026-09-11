@@ -52,6 +52,10 @@ type Host struct {
 	// The screens and cameras a share can pick from; nil where video is off.
 	Screens func() []VideoChoice
 	Cameras func() []VideoChoice
+	// `r` on the home screen once an update is downloaded: swap it in and start again.
+	RestartUpdate func()
+	// This launch is the first on a version that installed itself.
+	JustUpdated bool
 	// Where to start: the room to join straight away, if the CLI said so.
 	InitialRoom string
 	InputFlag   string
@@ -154,6 +158,8 @@ type Model struct {
 	joining   bool
 	joinField textField
 	escArmed  bool
+	update    *UpdateInfo
+	showTick  bool
 
 	// profile
 	profile      ProfileState
@@ -199,7 +205,7 @@ type Model struct {
 }
 
 func New(host Host) *Model {
-	m := &Model{host: host, width: 80, height: 24, anchor: -1}
+	m := &Model{host: host, width: 80, height: 24, anchor: -1, showTick: host.JustUpdated}
 	if host.Settings.Name() == "" || host.Settings.Color() == "" {
 		m.screen = screenProfile
 		m.profileFrom = screenHome
@@ -212,7 +218,15 @@ func New(host Host) *Model {
 	return m
 }
 
-func (m *Model) Init() tea.Cmd { return m.tick() }
+func (m *Model) Init() tea.Cmd {
+	if m.showTick {
+		// The tick says its piece and goes, as the Node client's did after four seconds.
+		return tea.Batch(m.tick(), tea.Tick(4*time.Second, func(time.Time) tea.Msg { return tickDoneMsg{} }))
+	}
+	return m.tick()
+}
+
+type tickDoneMsg struct{}
 
 func (m *Model) tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -280,6 +294,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.debugLines) > 200 {
 			m.debugLines = m.debugLines[len(m.debugLines)-200:]
 		}
+		return m, nil
+	case tickDoneMsg:
+		m.showTick = false
+		return m, nil
+	case UpdateAvailable:
+		u := UpdateInfo(msg)
+		m.update = &u
 		return m, nil
 	case Left:
 		if m.screen == screenRoom {
@@ -386,6 +407,10 @@ func (m *Model) keyHome(msg tea.KeyMsg) tea.Cmd {
 		m.screen = screenSettings
 		m.settingsIdx = 0
 		m.picker = ""
+	case isRune(msg, "r") && m.update != nil && m.update.Ready && m.host.RestartUpdate != nil:
+		m.quit = true
+		m.host.RestartUpdate()
+		return tea.Quit
 	}
 	return nil
 }
@@ -894,6 +919,7 @@ func (m *Model) View() string {
 			Version: m.host.Version, Platform: m.host.Platform, Features: m.host.Features,
 			Name: m.host.Settings.Name(), Color: m.host.Settings.Color(),
 			Joining: m.joining, JoinCode: m.joinField.value, Cursor: m.blinkOn, EscArmed: m.escArmed,
+			Update: m.update, JustUpdated: m.showTick,
 		})
 	case screenSettings:
 		st := SettingsState{Rows: m.host.Settings.Rows(), Selected: m.settingsIdx}

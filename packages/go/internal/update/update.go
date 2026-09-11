@@ -1,0 +1,266 @@
+// Package update keeps the binary current from GitHub Releases: once a day it asks for the
+// latest tag, downloads the platform's asset beside the running binary, checks that what
+// came down runs and reports the version it should, and only then says so — the home
+// screen never promises an install it has not already downloaded (the Node client's rule,
+// lib/update.ts). The swap happens when the app is gone: at exit, or on `r`, which swaps
+// and starts the new one with the same arguments. On Windows a running executable can be
+// renamed but not overwritten, so the old one is moved aside and deleted on the next start.
+package update
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	repo         = "manuelvegadev/openmeet"
+	checkEvery   = 24 * time.Hour
+	checkTimeout = 3 * time.Second
+)
+
+// Status is what the home screen shows: a newer version, and whether it is ready to install.
+type Status struct {
+	Version string
+	Ready   bool
+	// When not installing on our own: how to.
+	Command string
+}
+
+// Store is what the check reads and writes: the daily cache.
+type Store interface {
+	LastCheck() time.Time
+	LatestSeen() string
+	SetCheck(at time.Time, latest string)
+}
+
+// AssetName is the release file for this machine.
+func AssetName() string {
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "darwin/arm64":
+		return "openmeet-darwin-arm64"
+	case "windows/amd64":
+		return "openmeet-windows-amd64.exe"
+	}
+	return ""
+}
+
+// Exe is the running binary's real path.
+func Exe() (string, error) {
+	p, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(p)
+}
+
+func staging(exe string) string {
+	if runtime.GOOS == "windows" {
+		return strings.TrimSuffix(exe, ".exe") + ".new.exe"
+	}
+	return exe + ".new"
+}
+
+func old(exe string) string {
+	if runtime.GOOS == "windows" {
+		return strings.TrimSuffix(exe, ".exe") + ".old.exe"
+	}
+	return exe + ".old"
+}
+
+// CleanupOld removes what the last swap left behind.
+func CleanupOld() {
+	if exe, err := Exe(); err == nil {
+		_ = os.Remove(old(exe))
+	}
+}
+
+// Newer says whether b is a later version than a: numeric per component, so 0.5.10 beats
+// 0.5.9. Anything that is not a version (a "dev" build) is never behind.
+func Newer(a, b string) bool {
+	pa, pb := parse(a), parse(b)
+	if pa == nil || pb == nil {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if pb[i] != pa[i] {
+			return pb[i] > pa[i]
+		}
+	}
+	return false
+}
+
+func parse(v string) []int {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	parts := strings.SplitN(v, "-", 2)[0]
+	fields := strings.Split(parts, ".")
+	if len(fields) != 3 {
+		return nil
+	}
+	out := make([]int, 3)
+	for i, f := range fields {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			return nil
+		}
+		out[i] = n
+	}
+	return out
+}
+
+// Latest asks the registry — GitHub — for the newest tag, or takes the day's cached answer.
+func Latest(ctx context.Context, st Store) (string, error) {
+	if time.Since(st.LastCheck()) < checkEvery && st.LatestSeen() != "" {
+		return st.LatestSeen(), nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/repos/"+repo+"/releases/latest", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("releases: HTTP %d", resp.StatusCode)
+	}
+	var rel struct {
+		Tag string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", err
+	}
+	latest := strings.TrimPrefix(rel.Tag, "v")
+	st.SetCheck(time.Now(), latest)
+	return latest, nil
+}
+
+// Check runs the whole policy: nothing for "off" or a dev build; for "notify" the version
+// and the command; for "auto" the download, verified, and then the version as ready.
+func Check(ctx context.Context, policy, current string, st Store, log func(string, ...any)) *Status {
+	if policy == "off" || parse(current) == nil || AssetName() == "" {
+		return nil
+	}
+	latest, err := Latest(ctx, st)
+	if err != nil {
+		log("update check: %v", err)
+		return nil
+	}
+	if !Newer(current, latest) {
+		return nil
+	}
+	if policy != "auto" {
+		return &Status{Version: latest, Command: installCommand()}
+	}
+	exe, err := Exe()
+	if err != nil {
+		return &Status{Version: latest, Command: installCommand()}
+	}
+	if err := download(ctx, latest, staging(exe)); err != nil {
+		log("update download: %v", err)
+		return &Status{Version: latest, Command: installCommand()}
+	}
+	// Only a binary that runs and says the right version counts as downloaded.
+	out, err := exec.Command(staging(exe), "--version").Output()
+	if err != nil || strings.TrimSpace(string(out)) != latest {
+		_ = os.Remove(staging(exe))
+		log("update: downloaded binary did not verify (%v, %q)", err, strings.TrimSpace(string(out)))
+		return &Status{Version: latest, Command: installCommand()}
+	}
+	return &Status{Version: latest, Ready: true}
+}
+
+func download(ctx context.Context, version, to string) error {
+	url := fmt.Sprintf("https://github.com/%s/releases/download/v%s/%s", repo, version, AssetName())
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
+	}
+	f, err := os.OpenFile(to, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		_ = os.Remove(to)
+		return err
+	}
+	return f.Close()
+}
+
+// Pending is the staged binary's path when one is waiting, "" otherwise.
+func Pending() string {
+	exe, err := Exe()
+	if err != nil {
+		return ""
+	}
+	if st, err := os.Stat(staging(exe)); err == nil && st.Size() > 0 {
+		return staging(exe)
+	}
+	return ""
+}
+
+// Apply swaps the staged binary in. Call it once the app has let go of everything.
+func Apply() error {
+	exe, err := Exe()
+	if err != nil {
+		return err
+	}
+	pending := staging(exe)
+	if _, err := os.Stat(pending); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(old(exe))
+		if err := os.Rename(exe, old(exe)); err != nil {
+			return err
+		}
+		if err := os.Rename(pending, exe); err != nil {
+			_ = os.Rename(old(exe), exe) // put it back
+			return err
+		}
+		return nil
+	}
+	return os.Rename(pending, exe)
+}
+
+// Relaunch starts the (new) binary with the same arguments and returns; the caller exits.
+func Relaunch() error {
+	exe, err := Exe()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Start()
+}
+
+func installCommand() string {
+	if runtime.GOOS == "windows" {
+		return "irm https://raw.githubusercontent.com/" + repo + "/main/packages/go/scripts/install.ps1 | iex"
+	}
+	return "curl -fsSL https://raw.githubusercontent.com/" + repo + "/main/packages/go/scripts/install.sh | bash"
+}

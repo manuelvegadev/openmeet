@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -20,6 +21,7 @@ import (
 	"github.com/manuelvegadev/openmeet/packages/go/internal/engine"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/settings"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/tui"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/update"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/video"
 )
 
@@ -54,6 +56,14 @@ func (st *store) OutputID() string        { return settings.Str(st.s.AudioOutput
 func (st *store) DevicesConfigured() bool { return st.s.DevicesConfigured }
 func (st *store) SetDevices(in, out string) {
 	st.s.AudioInputID, st.s.AudioOutputID, st.s.DevicesConfigured = settings.Ptr(in), settings.Ptr(out), true
+	_ = settings.Save(st.s)
+}
+
+// The updater's daily cache, in the same settings the Node client kept it in.
+func (st *store) LastCheck() time.Time { return time.UnixMilli(st.s.LastUpdateCheck) }
+func (st *store) LatestSeen() string   { return settings.Str(st.s.LatestSeen) }
+func (st *store) SetCheck(at time.Time, latest string) {
+	st.s.LastUpdateCheck, st.s.LatestSeen = at.UnixMilli(), settings.Ptr(latest)
 	_ = settings.Save(st.s)
 }
 
@@ -400,6 +410,7 @@ func main() {
 		vidDev   = flag.String("video-device", "", "camera to share (avfoundation index, macOS)")
 		testScr  = flag.Bool("test-screen", false, "capture a screen into a preview window and exit")
 		testCam  = flag.Bool("test-camera", false, "capture the camera into a preview window and exit")
+		noAuto   = flag.Bool("no-auto-update", false, "do not check for or install an update this run")
 	)
 	flag.Parse()
 	if *version {
@@ -481,6 +492,13 @@ func main() {
 	}
 
 	st := &store{s: settings.Load()}
+	// A silent update announces itself once: the version that ran last is not this one.
+	update.CleanupOld()
+	justUpdated := st.s.LastRunVersion != nil && *st.s.LastRunVersion != Version && Version != "dev"
+	if settings.Str(st.s.LastRunVersion) != Version {
+		st.s.LastRunVersion = settings.Ptr(Version)
+		_ = settings.Save(st.s)
+	}
 	if *noGate {
 		st.s.VoiceGate = false
 		_ = settings.Save(st.s)
@@ -560,6 +578,21 @@ func main() {
 		r.Close()
 		return
 	}
+	// The registry, then the download, in the background: the notice appears only when
+	// restarting would really install something.
+	policy := st.s.AutoUpdate
+	if *noAuto {
+		policy = "off"
+	}
+	go func() {
+		if status := update.Check(context.Background(), policy, Version, st, func(f string, a ...any) {}); status != nil {
+			emit(tui.UpdateAvailable{Version: status.Version, Ready: status.Ready, Command: status.Command})
+		}
+	}()
+	restart := false
+	host.RestartUpdate = func() { restart = true }
+	host.JustUpdated = justUpdated
+
 	model := tui.New(host)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	go func() {
@@ -577,5 +610,17 @@ func main() {
 	}()
 	if _, err := program.Run(); err != nil {
 		log.Fatal(err)
+	}
+	// The app is gone from the terminal and holds nothing: the one moment to swap the binary.
+	if update.Pending() != "" && policy == "auto" {
+		if err := update.Apply(); err != nil {
+			fmt.Fprintln(os.Stderr, "update: could not install the downloaded version:", err)
+		} else if restart {
+			if err := update.Relaunch(); err != nil {
+				fmt.Fprintln(os.Stderr, "update installed; start openmeet again:", err)
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "update installed; it runs next time you start openmeet")
+		}
 	}
 }

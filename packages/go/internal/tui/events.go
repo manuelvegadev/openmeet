@@ -29,3 +29,6 @@ type DebugLine ChatEntry
 
 // Left says the engine has left the room (on request, or because the server went away).
 type Left struct{ Reason string }
+
+// UpdateAvailable: a newer version, ready or only known (see internal/update).
+type UpdateAvailable UpdateInfo
