@@ -27,7 +27,18 @@ type Room interface {
 	SetVolume(peerID string, v float64)
 	ToggleDebug()
 	UpdateDevices(in, out string) error
+	// Video: a share by device id, and a peer's window by kind ("webcam" or "screen").
+	StartScreen(id string) error
+	StopScreen()
+	StartCamera(id string) error
+	StopCamera()
+	TogglePeerWindow(peerID, kind string) error
 	Close()
+}
+
+// VideoChoice is a screen or a camera as a picker lists it.
+type VideoChoice struct {
+	ID, Label string
 }
 
 // Host is what the model needs from the program around it.
@@ -38,6 +49,9 @@ type Host struct {
 	Devices  DeviceSource
 	// Join opens a room session; events arrive on the channel the host was given.
 	Join func(room, name, color, input, output string) (Room, error)
+	// The screens and cameras a share can pick from; nil where video is off.
+	Screens func() []VideoChoice
+	Cameras func() []VideoChoice
 	// Where to start: the room to join straight away, if the CLI said so.
 	InitialRoom string
 	InputFlag   string
@@ -169,8 +183,13 @@ type Model struct {
 	devFrom     screenID
 
 	// room
-	room       Room
-	rs         RoomState
+	room Room
+	rs   RoomState
+	// A modal over the room: the screen or camera picker.
+	modal      string // "", "screen", "camera"
+	modalItems []VideoChoice
+	modalIdx   int
+	lastScreen string
 	draft      textField
 	anchor     int
 	clearArmed bool
@@ -302,6 +321,9 @@ func (m *Model) applySnapshot(s Snapshot) {
 	m.rs.Stats = s.Stats
 	m.rs.Error = s.Error
 	m.rs.Debug = s.Debug
+	m.rs.VideoEnabled = s.VideoEnabled
+	m.rs.WebcamEnabled = s.WebcamEnabled
+	m.rs.ScreenSharing = s.ScreenSharing
 }
 
 func isRune(msg tea.KeyMsg, r string) bool {
@@ -666,6 +688,29 @@ func (m *Model) leaveRoom() {
 // ── room ────────────────────────────────────────────────────────────────────
 
 func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
+	// A modal takes every key while it is up; the room behind it stands down.
+	if m.modal != "" {
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.modal = ""
+		case tea.KeyUp:
+			m.modalIdx = max(0, m.modalIdx-1)
+		case tea.KeyDown:
+			m.modalIdx = min(len(m.modalItems)-1, m.modalIdx+1)
+		case tea.KeyEnter:
+			if m.modalIdx < len(m.modalItems) && m.room != nil {
+				choice := m.modalItems[m.modalIdx]
+				if m.modal == "screen" {
+					m.lastScreen = choice.ID
+					_ = m.room.StartScreen(choice.ID)
+				} else {
+					_ = m.room.StartCamera(choice.ID)
+				}
+			}
+			m.modal = ""
+		}
+		return nil
+	}
 	if msg.Type == tea.KeyTab {
 		m.rs.InputFocused = !m.rs.InputFocused
 		if m.rs.InputFocused {
@@ -753,6 +798,48 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 		if m.room != nil {
 			m.room.ToggleDebug()
 		}
+	case isRune(msg, "s") && m.rs.VideoEnabled && m.room != nil:
+		if m.rs.ScreenSharing {
+			m.room.StopScreen()
+			m.lastScreen = ""
+		} else if m.lastScreen != "" {
+			_ = m.room.StartScreen(m.lastScreen)
+		} else if m.host.Screens != nil {
+			screens := m.host.Screens()
+			switch {
+			case len(screens) == 1:
+				m.lastScreen = screens[0].ID
+				_ = m.room.StartScreen(screens[0].ID)
+			case len(screens) > 1:
+				m.modal, m.modalItems, m.modalIdx = "screen", screens, 0
+			}
+		}
+	case isRune(msg, "v") && m.rs.WebcamEnabled && m.room != nil:
+		if m.rs.Me.CamOn {
+			m.room.StopCamera()
+		} else if m.host.Cameras != nil {
+			cams := m.host.Cameras()
+			switch {
+			case len(cams) == 1:
+				_ = m.room.StartCamera(cams[0].ID)
+			case len(cams) > 1:
+				m.modal, m.modalItems, m.modalIdx = "camera", cams, 0
+			}
+		}
+	case isRune(msg, "w") && m.rs.VideoEnabled && m.room != nil:
+		if m.rs.SelectedPeer < len(m.rs.Peers) {
+			p := m.rs.Peers[m.rs.SelectedPeer]
+			if p.CamOpen || p.CamOn {
+				_ = m.room.TogglePeerWindow(p.ID, "webcam")
+			}
+		}
+	case isRune(msg, "e") && m.rs.VideoEnabled && m.room != nil:
+		if m.rs.SelectedPeer < len(m.rs.Peers) {
+			p := m.rs.Peers[m.rs.SelectedPeer]
+			if p.Screen {
+				_ = m.room.TogglePeerWindow(p.ID, "screen")
+			}
+		}
 	case msg.Type == tea.KeyUp:
 		m.rs.SelectedPeer = max(0, m.rs.SelectedPeer-1)
 	case msg.Type == tea.KeyDown:
@@ -832,6 +919,17 @@ func (m *Model) View() string {
 		rs.ClearArmed, rs.LeaveArmed = m.clearArmed, m.leaveArmed
 		rs.DebugLines = m.debugLines
 		DrawRoom(c, rs)
+		if m.modal != "" {
+			title := "Share a screen"
+			if m.modal == "camera" {
+				title = "Share a camera"
+			}
+			labels := make([]string, len(m.modalItems))
+			for i, it := range m.modalItems {
+				labels[i] = it.Label
+			}
+			DrawModal(c, title, labels, m.modalIdx, []KeyHint{{Key: "esc", Label: "cancel"}})
+		}
 	}
 	return c.Render()
 }

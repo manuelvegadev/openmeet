@@ -5,13 +5,12 @@ WebRTC contract as `packages/terminal`, so the two share a room while this one g
 Go, and why now, is in [`docs/go-migration-analysis.md`](../../docs/go-migration-analysis.md);
 the numbers are in [`docs/performance.md`](../../docs/performance.md).
 
-**Status: audio client with the full interface, September 2026.** Every screen the Node
+**Status: audio, screen and camera, with the full interface, September 2026.** Every screen the Node
 client has — first start, home, settings and its pickers, the audio setup with the mic test,
 the room with its chat, participants, keys and debug panel — drawn cell for cell the same:
 `internal/tui/testdata` holds frames captured from the Node client at 120x34 and
-`golden_test.go` fails on any cell, colour or bold that differs. No video yet (screen and
-camera stay on WebRTC and come next), and the Camera row shows the saved id rather than the
-enumerated name until then. What it does that the Node client cannot: encode the microphone
+`golden_test.go` fails on any cell, colour or bold that differs. The Camera row still shows the
+saved id rather than the enumerated name. What it does that the Node client cannot: encode the microphone
 **once** and write the same packet to every peer, in one process, in tens of megabytes.
 
 ## Build and run

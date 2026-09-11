@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
+	"github.com/pion/webrtc/v4"
 
 	"github.com/manuelvegadev/openmeet/packages/go/internal/audio"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/rtc"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/signal"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/tui"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/video"
 )
 
 type Options struct {
@@ -31,6 +33,11 @@ type Options struct {
 	Bitrate   int // Opus bps
 	Complex   int
 	Debug     bool
+	// Video: off with a reason the room log states (--no-video, tools missing, OS).
+	VideoEnabled     bool
+	VideoDisabledWhy string
+	WebcamEnabled    bool
+	ScreenSendKbps   int
 }
 
 type peerInfo struct {
@@ -38,13 +45,16 @@ type peerInfo struct {
 	speaking bool
 	muted    bool
 	camOn    bool
-	screen   bool
 	volume   float64
 	state    string
 	recvKbps int
 	latency  int
 	bytes    int64
 	prevRTT  int
+	// Their video, as they say it (signaling) and as we receive it (tracks).
+	webcam  *video.Receiver
+	screen  *video.Receiver
+	sharing bool
 }
 
 // Engine is one room session. Events go to Emit; Close leaves.
@@ -69,6 +79,12 @@ type Engine struct {
 	sentBytes int64
 	done      chan struct{}
 	once      sync.Once
+
+	// Our shares.
+	screenCap *video.Capture
+	screenDev *video.Device
+	cameraCap *video.Capture
+	cameraDev *video.Device
 }
 
 func New(a *audio.Engine, opts Options, emit func(interface{})) *Engine {
@@ -120,7 +136,8 @@ func (e *Engine) Start() error {
 			e.mu.Unlock()
 			e.snapshot()
 		},
-		Log: e.logf,
+		OnVideo: e.onVideoTrack,
+		Log:     e.logf,
 	})
 	if err != nil {
 		return err
@@ -152,7 +169,190 @@ func (e *Engine) Start() error {
 	}
 	go e.loop()
 	go e.statsLoop()
+	if !e.opts.VideoEnabled && e.opts.VideoDisabledWhy != "" {
+		e.notice(tui.KindInfo, "", "", "Video disabled: "+e.opts.VideoDisabledWhy+" — screen sharing and watching peers are off")
+	} else if e.opts.VideoEnabled {
+		e.logf("video tools: ffmpeg %s, ffplay %s, encoder %s", video.Ffmpeg(), video.Ffplay(), video.Encoder())
+	}
 	return sig.Send(signal.Message{Type: "join-room", RoomID: e.opts.Room, Username: e.opts.Name, Color: e.opts.Color})
+}
+
+// ── video ────────────────────────────────────────────────────────────────────
+
+// onVideoTrack: a peer's camera or screen arrived. A receiver follows it from now on; the
+// window is the user's to open (w, e), and closes on its own when a share ends.
+func (e *Engine) onVideoTrack(peerID, kind string, track *webrtc.TrackRemote) {
+	if !e.opts.VideoEnabled {
+		return
+	}
+	e.mu.Lock()
+	p := e.people[peerID]
+	if p == nil {
+		e.mu.Unlock()
+		return
+	}
+	r := video.NewReceiver(p.p.Username, video.Kind(kind), track, e.logf)
+	r.OnWindowClosed = func() { e.snapshot() }
+	if kind == "screen" {
+		p.screen = r
+	} else {
+		p.webcam = r
+	}
+	e.mu.Unlock()
+	e.snapshot()
+}
+
+// screenBudgetKbps is the whole share's rate — the same packet goes to every peer — under
+// the user's ceiling, with a floor that keeps a full room legible (webrtc.ts).
+func (e *Engine) screenBudgetKbps() int {
+	e.mu.Lock()
+	n := len(e.people)
+	e.mu.Unlock()
+	if n < 1 {
+		n = 1
+	}
+	share := 6000 / n
+	if share < 800 {
+		share = 800
+	}
+	if e.opts.ScreenSendKbps > 0 && e.opts.ScreenSendKbps < share {
+		share = e.opts.ScreenSendKbps
+	}
+	return share
+}
+
+func (e *Engine) sendScreenState() {
+	sharing := e.screenCap != nil
+	_ = e.sig.Send(signal.Message{Type: "screen-share-state", FromID: e.myID, IsScreenSharing: &sharing})
+}
+
+// StartScreen shares a screen to everyone. One capture, one encoder, every peer.
+func (e *Engine) StartScreen(d video.Device) error {
+	if !e.opts.VideoEnabled {
+		return fmt.Errorf("video is off")
+	}
+	e.StopScreen()
+	c, err := video.Start(video.Screen, d, e.screenBudgetKbps(),
+		func(s video.Sample) { _ = e.peers.WriteVideo("screen", s) },
+		func(reason string) {
+			e.mu.Lock()
+			was := e.screenCap != nil
+			e.screenCap, e.screenDev = nil, nil
+			e.mu.Unlock()
+			if was {
+				e.notice(tui.KindInfo, "", "", "Screen share ended: "+reason)
+				e.sendScreenState()
+				e.snapshot()
+			}
+		}, e.logf)
+	if err != nil {
+		e.notice(tui.KindInfo, "", "", "Could not share the screen: "+err.Error())
+		return err
+	}
+	e.mu.Lock()
+	e.screenCap, e.screenDev = c, &d
+	e.mu.Unlock()
+	e.notice(tui.KindScreen, e.opts.Name, e.opts.Color, "started screen sharing")
+	e.sendScreenState()
+	e.snapshot()
+	return nil
+}
+
+func (e *Engine) StopScreen() {
+	e.mu.Lock()
+	c := e.screenCap
+	e.screenCap, e.screenDev = nil, nil
+	e.mu.Unlock()
+	if c == nil {
+		return
+	}
+	c.Stop()
+	e.notice(tui.KindScreen, e.opts.Name, e.opts.Color, "stopped screen sharing")
+	e.sendScreenState()
+	e.snapshot()
+}
+
+// StartCamera shares a camera; StopCamera releases it (a camera opens once on macOS,
+// gotcha 12b, so nothing holds it while it is off).
+func (e *Engine) StartCamera(d video.Device) error {
+	if !e.opts.WebcamEnabled {
+		return fmt.Errorf("camera is not available here")
+	}
+	e.StopCamera()
+	c, err := video.Start(video.Webcam, d, 1500,
+		func(s video.Sample) { _ = e.peers.WriteVideo("webcam", s) },
+		func(reason string) {
+			e.mu.Lock()
+			was := e.cameraCap != nil
+			e.cameraCap, e.cameraDev = nil, nil
+			e.mu.Unlock()
+			if was {
+				e.notice(tui.KindInfo, "", "", "Camera stopped: "+reason)
+				e.sendMute()
+				e.snapshot()
+			}
+		}, e.logf)
+	if err != nil {
+		e.notice(tui.KindInfo, "", "", "Could not open the camera: "+err.Error())
+		return err
+	}
+	e.mu.Lock()
+	e.cameraCap, e.cameraDev = c, &d
+	e.mu.Unlock()
+	e.sendMute()
+	e.snapshot()
+	return nil
+}
+
+func (e *Engine) StopCamera() {
+	e.mu.Lock()
+	c := e.cameraCap
+	e.cameraCap, e.cameraDev = nil, nil
+	e.mu.Unlock()
+	if c == nil {
+		return
+	}
+	c.Stop()
+	e.sendMute()
+	e.snapshot()
+}
+
+func (e *Engine) ScreenSharing() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.screenCap != nil
+}
+
+func (e *Engine) CameraOn() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cameraCap != nil
+}
+
+// TogglePeerWindow opens or closes the window for a peer's camera or screen.
+func (e *Engine) TogglePeerWindow(peerID, kind string) error {
+	e.mu.Lock()
+	p := e.people[peerID]
+	var r *video.Receiver
+	if p != nil {
+		if kind == "screen" {
+			r = p.screen
+		} else {
+			r = p.webcam
+		}
+	}
+	e.mu.Unlock()
+	if r == nil {
+		return fmt.Errorf("nothing to show yet")
+	}
+	if r.IsOpen() {
+		r.CloseWindow()
+	} else if err := r.Open(); err != nil {
+		e.notice(tui.KindInfo, "", "", "Could not open the window: "+err.Error())
+		return err
+	}
+	e.snapshot()
+	return nil
 }
 
 var mySpeaking bool
@@ -269,6 +469,9 @@ func (e *Engine) readAll() {
 				e.mu.Unlock()
 				_ = e.play.AddPeer(p.ID)
 				e.sendMute()
+				if e.ScreenSharing() {
+					e.sendScreenState() // a newcomer learns the share (gotcha 6)
+				}
 				e.notice(tui.KindJoin, p.Username, p.Color, "joined")
 				e.snapshot()
 			}
@@ -313,10 +516,25 @@ func (e *Engine) readAll() {
 			e.snapshot()
 		case "screen-share-state":
 			e.mu.Lock()
-			if p := e.people[msg.FromID]; p != nil && msg.IsScreenSharing != nil {
-				p.screen = *msg.IsScreenSharing
+			p := e.people[msg.FromID]
+			var was, now bool
+			var r *video.Receiver
+			if p != nil && msg.IsScreenSharing != nil {
+				was, now = p.sharing, *msg.IsScreenSharing
+				p.sharing = now
+				r = p.screen
 			}
 			e.mu.Unlock()
+			if p != nil && was != now {
+				if now {
+					e.notice(tui.KindScreen, p.p.Username, p.p.Color, "started screen sharing")
+				} else {
+					e.notice(tui.KindScreen, p.p.Username, p.p.Color, "stopped screen sharing")
+					if r != nil {
+						r.CloseWindow() // the window closes with the share (gotcha 14)
+					}
+				}
+			}
 			e.snapshot()
 		case "chat-broadcast":
 			if c := msg.ChatMessage; c != nil {
@@ -344,13 +562,16 @@ func (e *Engine) snapshot() {
 		p := e.people[id]
 		peers = append(peers, tui.Peer{
 			ID: id, Name: p.p.Username, Color: p.p.Color, Speaking: p.speaking, Muted: p.muted,
-			CamOn: p.camOn, Screen: p.screen, Volume: p.volume, RecvKbps: p.recvKbps, LatencyMs: p.latency,
+			CamOn: p.camOn, CamOpen: p.webcam != nil && p.webcam.IsOpen(),
+			Screen: p.sharing, ScreenOpen: p.screen != nil && p.screen.IsOpen(),
+			Volume: p.volume, RecvKbps: p.recvKbps, LatencyMs: p.latency,
 		})
 	}
 	snap := tui.Snapshot{
 		Connected: e.connected, JoinedAt: e.joined, Error: e.errMsg, Debug: e.debug, Stats: e.stats,
-		Me:    tui.Peer{Name: e.opts.Name, Color: e.opts.Color, Speaking: mySpeaking, Muted: e.cap != nil && e.cap.Muted()},
-		Peers: peers,
+		Me:           tui.Peer{Name: e.opts.Name, Color: e.opts.Color, Speaking: mySpeaking, Muted: e.cap != nil && e.cap.Muted(), CamOn: e.cameraCap != nil},
+		Peers:        peers,
+		VideoEnabled: e.opts.VideoEnabled, WebcamEnabled: e.opts.WebcamEnabled, ScreenSharing: e.screenCap != nil,
 	}
 	e.mu.Unlock()
 	e.Emit(snap)
@@ -498,6 +719,12 @@ func deviceName(d *audio.Device) string {
 func (e *Engine) Close() {
 	e.once.Do(func() {
 		close(e.done)
+		if e.screenCap != nil {
+			e.screenCap.Stop()
+		}
+		if e.cameraCap != nil {
+			e.cameraCap.Stop()
+		}
 		if e.pump != nil {
 			e.pump.Close()
 		}

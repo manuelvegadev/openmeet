@@ -15,6 +15,10 @@ type Snapshot struct {
 	Stats     *Stats
 	Error     string
 	Debug     bool
+	// Video: whether it is on here at all, whether a camera can be, and our shares.
+	VideoEnabled  bool
+	WebcamEnabled bool
+	ScreenSharing bool
 }
 
 // Line is one chat entry to append.

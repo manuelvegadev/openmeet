@@ -20,6 +20,7 @@ import (
 	"github.com/manuelvegadev/openmeet/packages/go/internal/engine"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/settings"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/tui"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/video"
 )
 
 // Version is set at build time (-ldflags "-X main.Version=…"); the scripts read it from
@@ -29,9 +30,9 @@ var Version = "dev"
 func platformSupport() (name, features string) {
 	switch runtime.GOOS {
 	case "darwin":
-		return "macOS", "audio, chat"
+		return "macOS", "audio, chat, video, screen share"
 	case "windows":
-		return "Windows", "audio, chat"
+		return "Windows", "audio, chat, screen share"
 	case "linux":
 		return "Linux", "best effort"
 	}
@@ -322,6 +323,61 @@ func (r *roomSession) Close()                         { r.e.Close() }
 func (r *roomSession) UpdateDevices(in, out string) error {
 	return r.e.UpdateDevices(r.d.find(in, false), r.d.find(out, true))
 }
+func (r *roomSession) StartScreen(id string) error {
+	for _, d := range video.Screens() {
+		if d.ID == id {
+			return r.e.StartScreen(d)
+		}
+	}
+	return fmt.Errorf("no such screen")
+}
+func (r *roomSession) StopScreen() { r.e.StopScreen() }
+func (r *roomSession) StartCamera(id string) error {
+	for _, d := range video.Cameras() {
+		if d.ID == id {
+			return r.e.StartCamera(d)
+		}
+	}
+	return fmt.Errorf("no such camera")
+}
+func (r *roomSession) StopCamera() { r.e.StopCamera() }
+func (r *roomSession) TogglePeerWindow(peerID, kind string) error {
+	return r.e.TogglePeerWindow(peerID, kind)
+}
+
+func choices(list []video.Device) []tui.VideoChoice {
+	out := make([]tui.VideoChoice, 0, len(list))
+	for _, d := range list {
+		out = append(out, tui.VideoChoice{ID: d.ID, Label: d.Label()})
+	}
+	return out
+}
+
+// preview runs a capture into a window with no room: --test-screen and --test-camera.
+func preview(kind video.Kind, d video.Device) {
+	p, err := video.NewPlayer("openmeet preview · " + d.Label())
+	if err != nil {
+		log.Fatal(err)
+	}
+	c, err := video.Start(kind, d, 2500, func(s video.Sample) { p.Write(s.Data) },
+		func(reason string) { log.Print("capture ended: ", reason) }, func(f string, a ...any) { log.Printf(f, a...) })
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Print("preview open; close the window or press ctrl-c")
+	sigc := make(chan os.Signal, 1)
+	osSignal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+	for !p.Closed() {
+		select {
+		case <-sigc:
+			c.Stop()
+			p.Close()
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	c.Stop()
+}
 
 func main() {
 	var (
@@ -340,6 +396,10 @@ func main() {
 		noPrio   = flag.Bool("no-priority", false, "leave process and thread priorities alone (for measuring)")
 		noVPIO   = flag.Bool("no-voice-processing", false, "macOS: raw devices instead of Apple's voice processing unit")
 		vpBypass = flag.Bool("voice-processing-bypass", false, "macOS: keep Apple's unit but skip its echo canceller, gain and noise suppression")
+		noVideo  = flag.Bool("no-video", false, "audio-only: no screen sharing, no camera, no windows")
+		vidDev   = flag.String("video-device", "", "camera to share (avfoundation index, macOS)")
+		testScr  = flag.Bool("test-screen", false, "capture a screen into a preview window and exit")
+		testCam  = flag.Bool("test-camera", false, "capture the camera into a preview window and exit")
 	)
 	flag.Parse()
 	if *version {
@@ -378,6 +438,48 @@ func main() {
 	audio.NoPriority = *noPrio
 	audio.NoVoiceProcessing = *noVPIO
 	audio.VoiceProcessingBypass = *vpBypass
+	// Video needs ffmpeg and ffplay with an H.264 encoder; the room log says why when not.
+	videoEnabled, videoWhy := !*noVideo, ""
+	switch {
+	case *noVideo:
+		videoWhy = "--no-video"
+	case runtime.GOOS != "darwin" && runtime.GOOS != "windows":
+		videoEnabled, videoWhy = false, "unsupported on this OS"
+	case !video.Available():
+		videoEnabled, videoWhy = false, "ffmpeg and ffplay not found on PATH"
+	case video.Encoder() == "":
+		videoEnabled, videoWhy = false, "ffmpeg has no H.264 encoder"
+	}
+	webcamEnabled := videoEnabled && runtime.GOOS == "darwin"
+	if *testScr || *testCam {
+		if !videoEnabled {
+			log.Fatal("video: ", videoWhy)
+		}
+		if *testScr {
+			screens := video.Screens()
+			if len(screens) == 0 {
+				log.Fatal("no screens found")
+			}
+			for _, d := range screens {
+				log.Printf("screen %s: %s", d.ID, d.Label())
+			}
+			preview(video.Screen, screens[0])
+		} else {
+			cams := video.Cameras()
+			if len(cams) == 0 {
+				log.Fatal("no cameras found")
+			}
+			d := cams[0]
+			for _, c := range cams {
+				if *vidDev != "" && c.ID == *vidDev {
+					d = c
+				}
+			}
+			preview(video.Webcam, d)
+		}
+		return
+	}
+
 	st := &store{s: settings.Load()}
 	if *noGate {
 		st.s.VoiceGate = false
@@ -396,6 +498,21 @@ func main() {
 		Version: Version, Platform: name, Features: features,
 		Settings: st, Devices: dev,
 		InitialRoom: *room, InputFlag: *inDev, OutputFlag: *outDev,
+		Screens: func() []tui.VideoChoice { return choices(video.Screens()) },
+		Cameras: func() []tui.VideoChoice {
+			cams := video.Cameras()
+			// A camera named on the command line or in settings is the one, not a choice.
+			want := *vidDev
+			if want == "" {
+				want = settings.Str(st.s.VideoDeviceID)
+			}
+			for _, c := range cams {
+				if want != "" && c.ID == want {
+					return choices([]video.Device{c})
+				}
+			}
+			return choices(cams)
+		},
 		Join: func(roomID, name, color, input, output string) (tui.Room, error) {
 			// The setting decides the macOS path unless a flag said otherwise for this run.
 			if !*noVPIO && !*vpBypass {
@@ -405,6 +522,8 @@ func main() {
 				ServerURL: *server, Room: roomID, Name: name, Color: color,
 				Input: dev.find(input, false), Output: dev.find(output, true),
 				VoiceGate: st.s.VoiceGate, Bitrate: *bitrate * 1000, Complex: *complex, Debug: *debug,
+				VideoEnabled: videoEnabled, VideoDisabledWhy: videoWhy, WebcamEnabled: webcamEnabled,
+				ScreenSendKbps: st.s.ScreenSendKbps,
 			}, emit)
 			if err := e.Start(); err != nil {
 				return nil, err

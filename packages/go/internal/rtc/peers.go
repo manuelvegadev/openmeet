@@ -18,6 +18,8 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/pion/webrtc/v4/pkg/media"
+
 	"github.com/manuelvegadev/openmeet/packages/go/internal/audio"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/signal"
 )
@@ -43,8 +45,11 @@ type Manager struct {
 	myID    string
 	api     *webrtc.API
 	track   *webrtc.TrackLocalStaticRTP
+	webcam  *webrtc.TrackLocalStaticSample
+	screen  *webrtc.TrackLocalStaticSample
 	send    func(signal.Message) error
 	onAudio func(peerID string, pkt *rtp.Packet)
+	onVideo func(peerID string, kind string, track *webrtc.TrackRemote)
 	onState func(peerID string, state string)
 	log     func(format string, args ...any)
 
@@ -58,6 +63,8 @@ type Options struct {
 	MyID    string
 	Send    func(signal.Message) error
 	OnAudio func(peerID string, pkt *rtp.Packet)
+	// A peer's video track, "webcam" or "screen" by the contract's transceiver order.
+	OnVideo func(peerID string, kind string, track *webrtc.TrackRemote)
 	OnState func(peerID string, state string)
 	Log     func(format string, args ...any)
 }
@@ -75,10 +82,15 @@ func NewManager(o Options) (*Manager, error) {
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		return nil, err
 	}
-	// The two video m-lines have to negotiate something even while nobody sends.
+	// Video is H.264, because that is what the machine's hardware encoder makes and pion
+	// carries any codec it is handed — the door the Node client's binding kept shut
+	// (gotcha 28). Constrained baseline, packetization mode 1, as browsers offer it.
 	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000},
-		PayloadType:        96,
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeH264, ClockRate: 90000,
+			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+		},
+		PayloadType: 102,
 	}, webrtc.RTPCodecTypeVideo); err != nil {
 		return nil, err
 	}
@@ -97,6 +109,18 @@ func NewManager(o Options) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The two video tracks, bound to every connection like the audio one: a share is
+	// encoded once and its access units written once, whoever is in the room. Frames flow
+	// only while a share runs; an idle track costs nothing.
+	h264 := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000}
+	webcam, err := webrtc.NewTrackLocalStaticSample(h264, "webcam", "openmeet")
+	if err != nil {
+		return nil, err
+	}
+	screen, err := webrtc.NewTrackLocalStaticSample(h264, "screen", "openmeet")
+	if err != nil {
+		return nil, err
+	}
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
@@ -108,6 +132,9 @@ func NewManager(o Options) (*Manager, error) {
 		myID:    o.MyID,
 		api:     webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithInterceptorRegistry(reg), webrtc.WithSettingEngine(se)),
 		track:   track,
+		webcam:  webcam,
+		screen:  screen,
+		onVideo: o.OnVideo,
 		send:    o.Send,
 		onAudio: o.OnAudio,
 		onState: o.OnState,
@@ -162,8 +189,19 @@ func (m *Manager) newPeerConnection(peerID string) (*conn, error) {
 			},
 		})
 	})
-	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		if track.Kind() != webrtc.RTPCodecTypeAudio {
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		if track.Kind() == webrtc.RTPCodecTypeVideo {
+			// The contract: transceiver 1 is the camera, 2 the screen — mids "1" and "2".
+			kind := "webcam"
+			for _, t := range pc.GetTransceivers() {
+				if t.Receiver() == receiver && t.Mid() == "2" {
+					kind = "screen"
+				}
+			}
+			m.log("%s track from %s (%s)", kind, short(peerID), track.Codec().MimeType)
+			if m.onVideo != nil {
+				m.onVideo(peerID, kind, track)
+			}
 			return
 		}
 		m.log("audio track from %s (%s)", short(peerID), track.Codec().MimeType)
@@ -199,6 +237,27 @@ func (m *Manager) newPeerConnection(peerID string) (*conn, error) {
 	return c, nil
 }
 
+// addTracks creates the three transceivers of the contract — audio, webcam, screen — each
+// sendrecv and carrying the shared track, so a share needs no renegotiation to start: its
+// frames simply begin, and the screen-share-state message says so.
+func (m *Manager) addTracks(pc *webrtc.PeerConnection) error {
+	init := webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv}
+	for _, t := range []webrtc.TrackLocal{m.track, m.webcam, m.screen} {
+		if _, err := pc.AddTransceiverFromTrack(t, init); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WriteVideo hands one encoded access unit to every peer, on the camera or the screen track.
+func (m *Manager) WriteVideo(kind string, sample media.Sample) error {
+	if kind == "screen" {
+		return m.screen.WriteSample(sample)
+	}
+	return m.webcam.WriteSample(sample)
+}
+
 // Offer starts a connection to a peer who was already in the room: we are the newcomer, so
 // we create the three transceivers in the contract's order and send the offer.
 func (m *Manager) Offer(peerID string) { m.offer(peerID, 0) }
@@ -220,15 +279,9 @@ func (m *Manager) offer(peerID string, retries int) {
 	m.mu.Unlock()
 
 	pc := c.pc
-	if _, err := pc.AddTransceiverFromTrack(m.track, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-		m.log("audio transceiver: %v", err)
+	if err := m.addTracks(pc); err != nil {
+		m.log("transceivers for %s: %v", short(peerID), err)
 		return
-	}
-	for i := 0; i < 2; i++ {
-		if _, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
-			m.log("video transceiver: %v", err)
-			return
-		}
 	}
 	offer, err := pc.CreateOffer(nil)
 	if err == nil {
@@ -272,11 +325,11 @@ func (m *Manager) HandleOffer(peerID string, sdp *signal.SessionDescription) {
 			return
 		}
 		m.conns[peerID] = c
-		// AddTrack, so the transceiver is eligible to match the offer's audio m-line;
-		// the two video m-lines get recvonly transceivers from SetRemoteDescription.
-		if _, err := c.pc.AddTrack(m.track); err != nil {
+		// The three transceivers, in the contract's order, before the remote description:
+		// pion matches them to the offer's m-lines by kind, in order.
+		if err := m.addTracks(c.pc); err != nil {
 			m.mu.Unlock()
-			m.log("add track for %s: %v", short(peerID), err)
+			m.log("transceivers for %s: %v", short(peerID), err)
 			return
 		}
 	}

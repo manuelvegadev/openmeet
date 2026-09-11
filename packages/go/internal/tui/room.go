@@ -496,3 +496,43 @@ func camLabel(on bool) string {
 	}
 	return "cam"
 }
+
+// DrawModal paints a panel over the room, centred: a rounded frame in the accent, the
+// title, the list, the hints, on the theme background — opaque, so the room shows around
+// it and not through it (modal.tsx). Padding two cells across, one down, as Ink had it.
+func DrawModal(c *Canvas, title string, items []string, idx int, hints []KeyHint) {
+	w := Width(title)
+	for _, it := range items {
+		if lw := Width(it) + 2; lw > w {
+			w = lw
+		}
+	}
+	if hw := HintsWidth(hints); hw > w {
+		w = hw
+	}
+	innerW := w + 4
+	innerH := 1 + 1 + len(items) + 1 + 1 + 2 // title, gap, items, gap, hints, padding
+	x := (c.W - (innerW + 2)) / 2
+	y := (c.H - (innerH + 2)) / 2
+	box := Rect{x, y, innerW + 2, innerH + 2}
+	c.Fill(box, Plain)
+	st := Style{FG: ThemeAccent}
+	c.Set(box.X, box.Y, '╭', st)
+	c.Set(box.X+box.W-1, box.Y, '╮', st)
+	c.Set(box.X, box.Y+box.H-1, '╰', st)
+	c.Set(box.X+box.W-1, box.Y+box.H-1, '╯', st)
+	for i := 1; i < box.W-1; i++ {
+		c.Set(box.X+i, box.Y, '─', st)
+		c.Set(box.X+i, box.Y+box.H-1, '─', st)
+	}
+	for j := 1; j < box.H-1; j++ {
+		c.Set(box.X, box.Y+j, '│', st)
+		c.Set(box.X+box.W-1, box.Y+j, '│', st)
+	}
+	cx, cy := box.X+3, box.Y+2
+	c.Put(cx, cy, title, Style{FG: ThemeAccent, Bold: true}, box.X+box.W-3)
+	cy += 2
+	DrawSelect(c, Rect{cx, cy, w, len(items)}, items, idx)
+	cy += len(items) + 1
+	DrawHints(c, cx, cy, w, hints)
+}
