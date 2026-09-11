@@ -15,8 +15,10 @@
 #define MA_NO_ENGINE
 #include "miniaudio/miniaudio.h"
 #include "shim.h"
+#include "shim_internal.h"
 #include <string.h>
 
+#define SAMPLE_RATE_DUPLEX 48000
 static ma_context ctx;
 static int ctxReady = 0;
 static ma_device_info* playbackInfos = NULL;
@@ -37,6 +39,53 @@ int om_refresh(void) {
 
 int om_device_count(int playback) { return playback ? (int)playbackCount : (int)captureCount; }
 
+// The device's platform id: on macOS the CoreAudio UID, which vpio_darwin.c turns into an
+// AudioDeviceID. Empty for the system default.
+int om_device_uid(int playback, int index, char* buf, int len) {
+  ma_device_info* infos = playback ? playbackInfos : captureInfos;
+  int count = om_device_count(playback);
+  buf[0] = 0;
+  if (index < 0 || index >= count) return -1;
+#if defined(__APPLE__)
+  strncpy(buf, infos[index].id.coreaudio, (size_t)len - 1);
+  buf[len - 1] = 0;
+#else
+  (void)infos;
+#endif
+  return 0;
+}
+
+om_stream* om_stream_ring(int playback, int channels, int rate, int ringMs) {
+  om_stream* s = (om_stream*)calloc(1, sizeof(om_stream));
+  if (!s) return NULL;
+  s->channels = channels;
+  s->playback = playback;
+  s->duplex = 1;
+  if (ma_pcm_rb_init(ma_format_s16, (ma_uint32)channels, (ma_uint32)(rate * ringMs / 1000), NULL, NULL, &s->rb) != MA_SUCCESS) {
+    free(s);
+    return NULL;
+  }
+  return s;
+}
+
+void om_stream_free_ring(om_stream* s) {
+  if (!s) return;
+  ma_pcm_rb_uninit(&s->rb);
+  free(s);
+}
+
+#if !defined(__APPLE__)
+om_duplex* om_open_duplex(int inIndex, int outIndex, int rate, int ringMs, int prefillMs, int bypass, om_stream** cap, om_stream** play) {
+  (void)inIndex; (void)outIndex; (void)rate; (void)ringMs; (void)prefillMs; (void)bypass; (void)cap; (void)play;
+  return NULL;
+}
+void om_close_duplex(om_duplex* d) { (void)d; }
+int om_watch(int inIndex, int outIndex) { (void)inIndex; (void)outIndex; return -1; }
+void om_unwatch(void) {}
+int om_devices_changed(void) { return 0; }
+const char* om_duplex_error(void) { return "not on this platform"; }
+#endif
+
 int om_device_name(int playback, int index, char* buf, int len, int* isDefault) {
   ma_device_info* infos = playback ? playbackInfos : captureInfos;
   int count = om_device_count(playback);
@@ -46,15 +95,6 @@ int om_device_name(int playback, int index, char* buf, int len, int* isDefault) 
   *isDefault = infos[index].isDefault ? 1 : 0;
   return 0;
 }
-
-struct om_stream {
-  ma_device dev;
-  ma_pcm_rb rb;
-  int channels;
-  int playback;
-  ma_uint32 underruns;
-  ma_uint32 overruns;
-};
 
 static void capture_cb(ma_device* dev, void* out, const void* in, ma_uint32 frames) {
   (void)out;
@@ -141,7 +181,7 @@ om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int pe
   return s;
 }
 
-int om_rate(om_stream* s) { return (int)s->dev.sampleRate; }
+int om_rate(om_stream* s) { return s->duplex ? SAMPLE_RATE_DUPLEX : (int)s->dev.sampleRate; }
 int om_available(om_stream* s) {
   return s->playback ? (int)ma_pcm_rb_available_write(&s->rb) : (int)ma_pcm_rb_available_read(&s->rb);
 }
@@ -177,6 +217,7 @@ int om_write(om_stream* s, const int16_t* in, int frames) {
 
 void om_close(om_stream* s) {
   if (!s) return;
+  if (s->duplex) return; // the om_duplex owns it
   ma_device_uninit(&s->dev);
   ma_pcm_rb_uninit(&s->rb);
   free(s);

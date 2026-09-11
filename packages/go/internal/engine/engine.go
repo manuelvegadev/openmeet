@@ -140,6 +140,7 @@ func (e *Engine) Start() error {
 	if err != nil {
 		return err
 	}
+	e.pump.OnEvent = func(msg string) { e.notice(tui.KindInfo, "", "", msg) }
 	// The call outranks whatever else the machine is doing: the process class here, the
 	// pump's own thread inside audio.Pump. Neither needs elevation.
 	if audio.NoPriority {

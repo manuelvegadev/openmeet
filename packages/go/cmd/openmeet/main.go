@@ -90,6 +90,13 @@ func (st *store) Rows() []tui.SettingsRow {
 		}
 		rows = append(rows, tui.SettingsRow{Label: "Camera", Value: cam})
 	}
+	if runtime.GOOS == "darwin" {
+		proc := "Off (raw devices, cheapest)"
+		if s.AudioProcessing == "apple" {
+			proc = "Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)"
+		}
+		rows = append(rows, tui.SettingsRow{Label: "Audio Processing", Value: proc})
+	}
 	rows = append(rows,
 		tui.SettingsRow{Label: "Video Overlay", Value: overlay},
 		tui.SettingsRow{Label: "Mic Channels", Value: s.AudioInputChannels},
@@ -149,6 +156,12 @@ func (st *store) Run(idx int) string {
 		return "output"
 	case "Camera":
 		return "camera"
+	case "Audio Processing":
+		if s.AudioProcessing == "apple" {
+			s.AudioProcessing = "raw"
+		} else {
+			s.AudioProcessing = "apple"
+		}
 	case "Video Overlay":
 		s.VideoOverlay = !s.VideoOverlay
 	case "Mic Channels":
@@ -265,6 +278,8 @@ func main() {
 		version  = flag.Bool("version", false, "print the version and exit")
 		headless = flag.Bool("headless", false, "no interface: join --room, log to stdout, quit on ctrl-c (for measuring)")
 		noPrio   = flag.Bool("no-priority", false, "leave process and thread priorities alone (for measuring)")
+		noVPIO   = flag.Bool("no-voice-processing", false, "macOS: raw devices instead of Apple's voice processing unit")
+		vpBypass = flag.Bool("voice-processing-bypass", false, "macOS: keep Apple's unit but skip its echo canceller, gain and noise suppression")
 	)
 	flag.Parse()
 	if *version {
@@ -301,6 +316,8 @@ func main() {
 	}
 
 	audio.NoPriority = *noPrio
+	audio.NoVoiceProcessing = *noVPIO
+	audio.VoiceProcessingBypass = *vpBypass
 	st := &store{s: settings.Load()}
 	if *noGate {
 		st.s.VoiceGate = false
@@ -320,6 +337,10 @@ func main() {
 		Settings: st, Devices: dev,
 		InitialRoom: *room, InputFlag: *inDev, OutputFlag: *outDev,
 		Join: func(roomID, name, color, input, output string) (tui.Room, error) {
+			// The setting decides the macOS path unless a flag said otherwise for this run.
+			if !*noVPIO && !*vpBypass {
+				audio.NoVoiceProcessing = st.s.AudioProcessing != "apple"
+			}
 			e := engine.New(a, engine.Options{
 				ServerURL: *server, Room: roomID, Name: name, Color: color,
 				Input: dev.find(input, false), Output: dev.find(output, true),

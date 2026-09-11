@@ -32,6 +32,14 @@ const (
 // priority buys, never for a call.
 var NoPriority = false
 
+// NoVoiceProcessing keeps macOS on miniaudio's raw devices instead of Apple's voice
+// processing unit: for comparing, and as the way out if the unit misbehaves on a machine.
+var NoVoiceProcessing = false
+
+// VoiceProcessingBypass keeps Apple's unit (and its Mic Modes) but turns its echo
+// canceller, gain control and noise suppressor off: what headphones need, and cheaper.
+var VoiceProcessingBypass = false
+
 // PeriodMs is the device period. The rings are pumped every PumpMs from Go; the ring holds
 // RingMs so a late pump is a late pump and not a dropout.
 var (
@@ -102,10 +110,11 @@ func Find(devices []Device, name string) (*Device, error) {
 	return nil, fmt.Errorf("no audio device matches %q", name)
 }
 
-// Stream is one open device and its ring.
+// Stream is one open device and its ring — or one side of a duplex unit, which owns both.
 type Stream struct {
 	s        *C.om_stream
 	channels int
+	duplex   bool
 }
 
 func (e *Engine) open(playback bool, dev *Device, channels int) (*Stream, error) {
@@ -148,29 +157,125 @@ func (st *Stream) write(buf []int16) int {
 // ring more headroom — 20 ms at a time, up to the ring — so latency is only paid under
 // pressure, and only as much as the pressure needs.
 type Pump struct {
+	engine   *Engine
+	in, out  *Device // what was asked for; nil is the system default
 	capture  *Stream
 	playback *Stream
+	dup      *C.om_duplex // Apple's voice processing unit, when that is the path
 	stop     chan struct{}
 	done     chan struct{}
 	mu       sync.Mutex
 	ahead    int // frames kept in the playback ring
 	late     int // ticks that arrived more than a period late
 	priority string
+	path     string
+	reopens  int
+	// OnEvent hears about reopens: a device changed its rate or the default moved.
+	OnEvent func(msg string)
 }
 
 func (e *Engine) StartPump(in, out *Device, onPCM func(pcm []int16), fill func(out []int16)) (*Pump, error) {
-	capture, err := e.open(false, in, 1)
-	if err != nil {
+	p := &Pump{engine: e, in: in, out: out, stop: make(chan struct{}), done: make(chan struct{}), ahead: SampleRate * PlayAheadMs / 1000}
+	if err := p.openStreams(); err != nil {
 		return nil, err
 	}
-	playback, err := e.open(true, out, OutChannels)
-	if err != nil {
-		capture.Close()
-		return nil, err
-	}
-	p := &Pump{capture: capture, playback: playback, stop: make(chan struct{}), done: make(chan struct{}), ahead: SampleRate * PlayAheadMs / 1000}
 	go p.run(onPCM, fill)
 	return p, nil
+}
+
+// openStreams opens the devices: through Apple's voice processing unit where there is
+// one (macOS, unless told not to), else as two miniaudio devices.
+func (p *Pump) openStreams() error {
+	if !NoVoiceProcessing {
+		inIdx, outIdx := C.int(-1), C.int(-1)
+		if p.in != nil {
+			inIdx = C.int(p.in.Index)
+		}
+		if p.out != nil {
+			outIdx = C.int(p.out.Index)
+		}
+		var cs, ps *C.om_stream
+		bypass := C.int(0)
+		if VoiceProcessingBypass {
+			bypass = 1
+		}
+		if d := C.om_open_duplex(inIdx, outIdx, SampleRate, C.int(RingMs), C.int(PlayAheadMs), bypass, &cs, &ps); d != nil {
+			p.dup = d
+			p.capture = &Stream{s: cs, channels: 1, duplex: true}
+			p.playback = &Stream{s: ps, channels: OutChannels, duplex: true}
+			p.path = "Apple voice processing (Voice Isolation, echo cancellation, gain)"
+			if VoiceProcessingBypass {
+				p.path = "Apple voice processing, bypassed (Voice Isolation only)"
+			}
+			p.watch()
+			return nil
+		} else if msg := C.GoString(C.om_duplex_error()); msg != "" && msg != "not on this platform" {
+			p.path = "miniaudio (voice processing unit refused: " + msg + ")"
+		}
+	}
+	capture, err := p.engine.open(false, p.in, 1)
+	if err != nil {
+		return err
+	}
+	playback, err := p.engine.open(true, p.out, OutChannels)
+	if err != nil {
+		capture.Close()
+		return err
+	}
+	p.capture, p.playback = capture, playback
+	if p.path == "" {
+		p.path = "miniaudio"
+	}
+	p.watch()
+	return nil
+}
+
+// watch the devices as opened, so a rate or default change reopens them.
+func (p *Pump) watch() {
+	inIdx, outIdx := C.int(-1), C.int(-1)
+	if p.in != nil {
+		inIdx = C.int(p.in.Index)
+	}
+	if p.out != nil {
+		outIdx = C.int(p.out.Index)
+	}
+	C.om_watch(inIdx, outIdx)
+}
+
+func (p *Pump) closeStreams() {
+	C.om_unwatch()
+	if p.dup != nil {
+		C.om_close_duplex(p.dup)
+		p.dup = nil
+		return
+	}
+	p.capture.Close()
+	p.playback.Close()
+}
+
+// reopen follows a device that changed under us — a Bluetooth headset switching profile
+// and rate, the default device moving — by opening the same choice again. The names are
+// looked up afresh: indices shift when devices come and go.
+func (p *Pump) reopen() error {
+	p.closeStreams()
+	C.om_refresh()
+	if p.in != nil {
+		p.in = p.engine.findByName(false, p.in.Name)
+	}
+	if p.out != nil {
+		p.out = p.engine.findByName(true, p.out.Name)
+	}
+	return p.openStreams()
+}
+
+func (e *Engine) findByName(playback bool, name string) *Device {
+	list, _ := e.list(playback)
+	for i := range list {
+		if list[i].Name == name {
+			return &list[i]
+		}
+	}
+	return nil
 }
 
 func (p *Pump) run(onPCM func([]int16), fill func([]int16)) {
@@ -205,6 +310,27 @@ func (p *Pump) run(onPCM func([]int16), fill func([]int16)) {
 		case <-p.stop:
 			return
 		case now := <-t.C:
+			if C.om_devices_changed() != 0 {
+				// Let the change settle — a profile switch takes a moment — then follow it.
+				time.Sleep(300 * time.Millisecond)
+				err := p.reopen()
+				p.mu.Lock()
+				p.reopens++
+				p.mu.Unlock()
+				if p.OnEvent != nil {
+					if err != nil {
+						p.OnEvent("audio device changed and could not be reopened: " + err.Error())
+					} else {
+						p.OnEvent("audio device changed; reopened (" + p.path + ")")
+					}
+				}
+				if err != nil {
+					return
+				}
+				lastUnderruns = p.playback.Underruns()
+				started = time.Now()
+				continue
+			}
 			p.mu.Lock()
 			if now.Sub(last) > 2*period {
 				p.late++
@@ -256,8 +382,18 @@ func (p *Pump) Priority() string {
 
 // Describe says what the devices are really running at, and what the pump's thread got.
 func (p *Pump) Describe() string {
-	return fmt.Sprintf("capture %d Hz, playback %d Hz, ring %d ms, pump every %d ms, ahead %d ms, thread priority %s",
-		p.capture.Rate(), p.playback.Rate(), RingMs, PumpMs, p.AheadMs(), p.Priority())
+	return fmt.Sprintf("%s; capture %d Hz, playback %d Hz, ring %d ms, pump every %d ms, ahead %d ms, thread priority %s",
+		p.path, p.capture.Rate(), p.playback.Rate(), RingMs, PumpMs, p.AheadMs(), p.Priority())
+}
+
+// Path says which way the devices are open.
+func (p *Pump) Path() string { return p.path }
+
+// Reopens is how often a device change made the pump open its devices again.
+func (p *Pump) Reopens() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reopens
 }
 
 // Underruns is how often the playback callback found the ring empty, plus capture overruns.
@@ -266,6 +402,5 @@ func (p *Pump) Underruns() int { return p.playback.Underruns() + p.capture.Under
 func (p *Pump) Close() {
 	close(p.stop)
 	<-p.done
-	p.capture.Close()
-	p.playback.Close()
+	p.closeStreams()
 }

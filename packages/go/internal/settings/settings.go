@@ -28,11 +28,14 @@ type App struct {
 	ScreenReceiveKbps  int     `json:"screenReceiveKbps"`
 	NoiseSuppression   bool    `json:"noiseSuppression"`
 	VoiceGate          bool    `json:"voiceGate"`
-	PauseRendering     string  `json:"pauseRendering"`
-	AutoUpdate         string  `json:"autoUpdate"`
-	LastUpdateCheck    int64   `json:"lastUpdateCheck"`
-	LatestSeen         *string `json:"latestSeen"`
-	LastRunVersion     *string `json:"lastRunVersion"`
+	// macOS: "raw" (miniaudio, cheapest) or "apple" (the voice processing unit: Voice
+	// Isolation, echo cancellation, gain — at ~10% of a core, measured). Go client only.
+	AudioProcessing string  `json:"audioProcessing,omitempty"`
+	PauseRendering  string  `json:"pauseRendering"`
+	AutoUpdate      string  `json:"autoUpdate"`
+	LastUpdateCheck int64   `json:"lastUpdateCheck"`
+	LatestSeen      *string `json:"latestSeen"`
+	LastRunVersion  *string `json:"lastRunVersion"`
 }
 
 func Defaults() App {
