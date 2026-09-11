@@ -214,7 +214,9 @@ func main() {
 	people := map[string]signal.Participant{}
 	sendMute := func() {
 		m := capture.Muted()
-		_ = sig.Send(signal.Message{Type: "mute-state", FromID: myID, IsAudioMuted: &m})
+		// No camera yet: say so, or the Node client reads an absent field as a camera on.
+		noCam := true
+		_ = sig.Send(signal.Message{Type: "mute-state", FromID: myID, IsAudioMuted: &m, IsVideoMuted: &noCam})
 	}
 	publish := func() {
 		mu.Lock()

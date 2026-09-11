@@ -254,3 +254,10 @@ one point of a core for not having the first two. In a real two-person call — 
 people talking in turns — that puts it at one to two percent on this Mac, with 31 MB
 resident. The Node client cannot get there from where it is: its engine alone is 6–8% in
 the same states, before its TUI.
+
+**Windows, the same day.** `scripts/build-windows.sh` cross-builds a static PE from the Mac
+(zig as the C toolchain, libopus built once for `x86_64-windows-gnu`, miniaudio in the tree;
+12.7 MB, system DLLs only). On the rig — Windows 11, i7-9700K — joined a room against a Node
+client on the Mac over the LAN, both directions: **1.25% of one core and 25.9 MB** while
+sending continuously and decoding a continuous stream. The macOS numbers above carry the
+loopback and thread-wake costs this run does not, which is the better guide to a real call.

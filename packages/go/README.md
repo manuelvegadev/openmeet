@@ -22,7 +22,27 @@ go build -o openmeet ./cmd/openmeet
 ```
 
 `--input-device` / `--output-device` match a substring of the name; `--no-voice-gate`
-transmits continuously; `--audio-kbps` sets the one encoder (64 mono by default).
+transmits continuously; `--audio-kbps` sets the one encoder (64 mono by default);
+`--opus-complexity` its CPU lever (10 by default). Build with `-tags nolibopusfile` on a
+machine without libopusfile; the client never uses it.
+
+### Windows, cross-built from the Mac
+
+```bash
+brew install zig cmake pkg-config
+packages/go/scripts/build-windows.sh      # → packages/go/dist/openmeet-windows-amd64.exe
+```
+
+One static PE, 12.7 MB, importing only system DLLs (UCRT, ole32, winmm): libopus is built
+once for `x86_64-windows-gnu` with zig and cached under `.cross/`, miniaudio is in the tree.
+On the test rig, `scripts/win/openmeet-go.cmd <room> [ws://mac-ip:3001/ws]` runs it with the
+Roland as devices, next to the exe in `C:\Users\mvega\openmeet-go\`.
+
+Run on the rig (Windows 11, i7-9700K) against a Node client on the Mac over the LAN, both
+directions, the box sending continuously (`--no-voice-gate`) and decoding a tone:
+**1.25% of one core, 25.9 MB working set** — no loopback penalty, no macOS thread-wake tax.
+The exe enumerates the Roland and NVIDIA Broadcast through WASAPI; audio ran over an SSH
+session, which on Windows is enough for sound (only screen capture needs the desktop).
 
 ## Shape
 
