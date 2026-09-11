@@ -13,7 +13,7 @@ export function Nav() {
   const c = useCopy();
   return (
     <header className="wrap nav">
-      <a href={PATHS[c.lang]} className="nav__brand" aria-label="OpenMeet">
+      <a href={PATHS[c.lang]} className="nav__brand">
         <Logo />
         <span className="muted nav__version">v{APP_VERSION}</span>
       </a>

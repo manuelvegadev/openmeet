@@ -130,7 +130,9 @@
   // The chat lines appear one by one on load.
   &--reveal &__ln {
     opacity: 0;
-    animation: appear 0.05s forwards;
+    // steps(1) rather than a fade: the line is either not there or fully legible, never a
+    // half-opacity grey that fails contrast for 50 ms.
+    animation: appear 0.05s steps(1, end) forwards;
     animation-delay: calc(0.2s + var(--i) * 0.45s);
 
     @include reduced-motion {

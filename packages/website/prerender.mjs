@@ -19,12 +19,25 @@ const manifest = JSON.parse(readFileSync(new URL('.vite/manifest.json', dist), '
 // The entry is keyed by the HTML template Vite was given, not by the script it pulls in.
 const entry = manifest['index.html'];
 
-const stylesheets = (entry.css ?? []).map((href) => `<link rel="stylesheet" crossorigin href="/${href}">`).join('\n    ');
+// The stylesheet goes into the page rather than beside it: 3 KB gzipped against a second
+// round trip that blocks the first paint. Its url()s are absolute, so inlining moves nothing.
+const css = (entry.css ?? []).map((href) => readFileSync(new URL(href, dist), 'utf8')).join('');
+if (css.includes('</style')) throw new Error('the stylesheet would close its own tag');
+const head = [`<style>${css}</style>`];
+for (const href of entry.css ?? []) rmSync(new URL(href, dist), { force: true });
 rmSync(new URL(entry.file, dist), { force: true });
+
+// The two faces, asked for at the same moment as the markup: without this the browser only
+// learns about them once it has parsed the CSS, and the swap shifts the terminal mock.
+for (const asset of Object.values(manifest)) {
+  if (asset.file?.endsWith('.woff2')) {
+    head.push(`<link rel="preload" href="/${asset.file}" as="font" type="font/woff2" crossorigin>`);
+  }
+}
 
 const { render, pages, SITE_URL, DEFAULT_LANG } = await import(new URL('server/entry-server.js', dist));
 
-const page = (lang, opts) => `<!doctype html>\n${render(lang, opts).replace('</head>', `    ${stylesheets}\n  </head>`)}\n`;
+const page = (lang, opts) => `<!doctype html>\n${render(lang, opts).replace('</head>', `    ${head.join('\n    ')}\n  </head>`)}\n`;
 
 for (const { lang, path } of pages) {
   const dir = new URL(`.${path}`, dist);

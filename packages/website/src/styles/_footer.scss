@@ -12,6 +12,13 @@
     }
   }
 
+  // A link sitting inside a sentence is only 2.8:1 against the text around it, so colour
+  // alone does not say it is a link. The rows of links either side are not sentences.
+  &__inner > div a {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
   &__inner {
     display: flex;
     justify-content: space-between;
