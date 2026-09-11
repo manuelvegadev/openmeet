@@ -74,62 +74,139 @@ func orDefault(s string) string {
 	return s
 }
 
+// The settings, in sections. Only rows that do something are here: the Node client's
+// Noise Suppression, Audio Receive, Screen Receive, Mic Channels, Video Overlay and Pause
+// Rendering had nothing behind them in this client — the fields stay in settings.json, and
+// what each would take is in docs/backlog.md, but a row that does nothing is worse than no
+// row, and this is where someone goes to understand why a call sounds the way it does.
 func (st *store) Rows() []tui.SettingsRow {
 	s := st.s
-	noise := "Off"
-	if s.NoiseSuppression {
-		noise = "On (RNNoise, CPU)"
-	}
 	gate := "Off (always sending)"
 	if s.VoiceGate {
 		gate = "On (silence is not sent)"
 	}
-	overlay := "Off"
-	if s.VideoOverlay {
-		overlay = "On"
-	}
 	updates := map[string]string{"auto": "install on exit", "notify": "tell me, do not install", "off": "do not check"}[s.AutoUpdate]
 	rows := []tui.SettingsRow{
-		{Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color()},
-		{Label: "Audio Input", Value: orDefault(st.InputID())},
-		{Label: "Audio Output", Value: orDefault(st.OutputID())},
+		{Tab: "Audio", Label: "Audio Input", Value: orDefault(st.InputID())},
+		{Tab: "Audio", Label: "Audio Output", Value: orDefault(st.OutputID())},
+		{Tab: "Audio", Label: "Audio Processing", Value: processingValue(s.AudioProcessing)},
+		{Tab: "Audio", Label: "Mic Level", Value: micLevelValue(s.MicLevel)},
+		{Tab: "Audio", Label: "Voice Gate", Value: gate},
+		{Tab: "Audio", Label: "Audio Send", Value: fmt.Sprintf("%d kbps (applies on next join)", s.AudioSendKbps)},
 	}
 	if runtime.GOOS == "darwin" {
 		cam := "Default (0)"
 		if v := settings.Str(s.VideoDeviceID); v != "" {
 			cam = "Device " + v
 		}
-		rows = append(rows, tui.SettingsRow{Label: "Camera", Value: cam})
-	}
-	if runtime.GOOS == "darwin" {
-		// On unless turned off: every feature from the start, the cost in the row.
-		proc := "Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)"
-		if s.AudioProcessing == "raw" {
-			proc = "Off (raw devices, cheapest)"
-		}
-		rows = append(rows, tui.SettingsRow{Label: "Audio Processing", Value: proc})
+		rows = append(rows, tui.SettingsRow{Tab: "Video", Label: "Camera", Value: cam})
 	}
 	rows = append(rows,
-		tui.SettingsRow{Label: "Video Overlay", Value: overlay},
-		tui.SettingsRow{Label: "Mic Channels", Value: s.AudioInputChannels},
-		tui.SettingsRow{Label: "Noise Suppression", Value: noise},
-		tui.SettingsRow{Label: "Voice Gate", Value: gate},
-		tui.SettingsRow{Label: "Audio Send", Value: fmt.Sprintf("%d kbps (applies on next join)", s.AudioSendKbps)},
-		tui.SettingsRow{Label: "Audio Receive", Value: fmt.Sprintf("%d kbps (applies on next join)", s.AudioReceiveKbps)},
-		tui.SettingsRow{Label: "Screen Send", Value: fmt.Sprintf("%d kbps per peer at 1080p (applies on next join)", s.ScreenSendKbps)},
-		tui.SettingsRow{Label: "Screen Receive", Value: fmt.Sprintf("%d kbps from each peer (applies on next join)", s.ScreenReceiveKbps)},
-		tui.SettingsRow{Label: "Updates", Value: updates},
-		tui.SettingsRow{Label: "Pause Rendering", Value: fmt.Sprintf("when %s (applies on next start)", s.PauseRendering)},
+		tui.SettingsRow{Tab: "Video", Label: "Screen Send", Value: fmt.Sprintf("%d kbps per peer at 1080p (applies on next join)", s.ScreenSendKbps)},
+		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Value: fmt.Sprintf("%d of 10 (applies on next join)", complexityOf(s))},
+		tui.SettingsRow{Tab: "Other", Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color()},
+		tui.SettingsRow{Tab: "Other", Label: "Updates", Value: updates},
 	)
 	return rows
 }
 
+// What the system's own voice processing is called on this platform, and what it is worth:
+// on macOS Apple's unit, which does the lot; on Windows the communications category, whose
+// content is the endpoint driver's — a lot on a laptop's own microphone, often nothing at
+// all on a USB interface, and Windows Studio Effects only on a machine with an NPU.
+func processingValue(v string) string {
+	if v == "raw" {
+		return "Off (raw devices, cheapest)"
+	}
+	if runtime.GOOS == "windows" {
+		return "Windows (communications mode: whatever the device's driver adds)"
+	}
+	return "Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)"
+}
+
+func micLevelValue(v string) string {
+	if v == "off" {
+		return "Off (send the microphone as it is)"
+	}
+	return "Auto (level the voice, +18 dB at most)"
+}
+
+func complexityOf(s settings.App) int {
+	if s.OpusComplexity <= 0 {
+		return 10
+	}
+	return s.OpusComplexity
+}
+
+// Meters are the two or three bars under the settings: what this section's choices cost the
+// machine and the network, and what they buy. The weights are anchored on measurements in
+// docs/performance.md — Apple's unit against raw devices, a hardware H.264 encoder against a
+// software one, what the voice gate saves — and are an estimate, not a prediction: the point
+// is that a choice's price is visible before it is made.
+func (st *store) Meters(tab string) []tui.Meter {
+	s := st.s
+	switch tab {
+	case "Audio":
+		cpu := 0.10 + float64(complexityOf(s))*0.02
+		what := "raw"
+		if s.AudioProcessing != "raw" {
+			cpu += 0.35
+			what = "Apple"
+			if runtime.GOOS == "windows" {
+				what = "Windows"
+			}
+		}
+		if s.MicLevel != "off" {
+			cpu += 0.03
+			what += " + level"
+		}
+		if !s.VoiceGate {
+			cpu += 0.12
+		}
+		net := float64(s.AudioSendKbps) / 256
+		netNote := fmt.Sprintf("%d kbps while you talk", s.AudioSendKbps)
+		if s.VoiceGate {
+			net *= 0.45
+			netNote += ", nothing while you do not"
+		}
+		quality := 0.35 + float64(s.AudioSendKbps-64)/192*0.45
+		if s.AudioProcessing != "raw" {
+			quality += 0.15
+		}
+		if s.MicLevel != "off" {
+			quality += 0.05
+		}
+		return []tui.Meter{
+			{Label: "CPU", Fill: cpu, Note: what},
+			{Label: "Network", Fill: net, Note: netNote},
+			{Label: "Quality", Fill: quality, Note: fmt.Sprintf("Opus %d kbps", s.AudioSendKbps), Good: true},
+		}
+	case "Video":
+		enc := video.Encoder()
+		cpu, note := 0.30, enc
+		if enc == "libx264" || enc == "" {
+			cpu, note = 0.95, "libx264 (no hardware encoder found)"
+		}
+		return []tui.Meter{
+			{Label: "CPU", Fill: cpu, Note: note},
+			{Label: "Network", Fill: float64(s.ScreenSendKbps) / 10000, Note: fmt.Sprintf("up to %d kbps per peer", s.ScreenSendKbps)},
+			{Label: "Quality", Fill: 0.3 + float64(s.ScreenSendKbps-1000)/9000*0.7, Note: "at 1080p30", Good: true},
+		}
+	case "Advanced":
+		c := float64(complexityOf(s))
+		return []tui.Meter{
+			{Label: "CPU", Fill: 0.10 + c*0.055, Note: "the Opus encoder"},
+			{Label: "Quality", Fill: 0.45 + c*0.055, Note: "at the same bitrate", Good: true},
+		}
+	}
+	return nil
+}
+
 var (
-	channelPolicies = []string{"auto", "stereo", "mono", "left", "right"}
+	complexitySteps = []int{1, 3, 5, 8, 10}
 	audioKbpsSteps  = []int{64, 96, 128, 192, 256}
 	screenKbpsSteps = []int{1000, 1500, 2500, 4000, 6000, 10000}
 	updatePolicies  = []string{"auto", "notify", "off"}
-	pausePolicies   = []string{"minimized", "unfocused", "never"}
 )
 
 func cycle(list []string, cur string) string {
@@ -140,6 +217,7 @@ func cycle(list []string, cur string) string {
 	}
 	return list[0]
 }
+
 func cycleNumber(list []int, cur int) int {
 	for i, v := range list {
 		if v >= cur {
@@ -170,30 +248,26 @@ func (st *store) Run(idx int) string {
 		return "camera"
 	case "Audio Processing":
 		if s.AudioProcessing == "raw" {
-			s.AudioProcessing = "apple"
+			s.AudioProcessing = "system"
 		} else {
 			s.AudioProcessing = "raw"
 		}
-	case "Video Overlay":
-		s.VideoOverlay = !s.VideoOverlay
-	case "Mic Channels":
-		s.AudioInputChannels = cycle(channelPolicies, s.AudioInputChannels)
-	case "Noise Suppression":
-		s.NoiseSuppression = !s.NoiseSuppression
+	case "Mic Level":
+		if s.MicLevel == "off" {
+			s.MicLevel = "auto"
+		} else {
+			s.MicLevel = "off"
+		}
+	case "Opus Complexity":
+		s.OpusComplexity = cycleNumber(complexitySteps, complexityOf(*s))
 	case "Voice Gate":
 		s.VoiceGate = !s.VoiceGate
 	case "Audio Send":
 		s.AudioSendKbps = cycleNumber(audioKbpsSteps, s.AudioSendKbps)
-	case "Audio Receive":
-		s.AudioReceiveKbps = cycleNumber(audioKbpsSteps, s.AudioReceiveKbps)
 	case "Screen Send":
 		s.ScreenSendKbps = cycleNumber(screenKbpsSteps, s.ScreenSendKbps)
-	case "Screen Receive":
-		s.ScreenReceiveKbps = cycleNumber(screenKbpsSteps, s.ScreenReceiveKbps)
 	case "Updates":
 		s.AutoUpdate = cycle(updatePolicies, s.AutoUpdate)
-	case "Pause Rendering":
-		s.PauseRendering = cycle(pausePolicies, s.PauseRendering)
 	}
 	_ = settings.Save(st.s)
 	return ""
@@ -398,7 +472,7 @@ func main() {
 		listDevs = flag.Bool("list-devices", false, "list audio devices and exit")
 		noGate   = flag.Bool("no-voice-gate", false, "transmit continuously instead of only while speaking (saved)")
 		bitrate  = flag.Int("audio-kbps", 0, "Opus bitrate (mono); overrides the Audio Send setting for this run")
-		complex  = flag.Int("opus-complexity", 10, "Opus encoder complexity 0..10")
+		complex  = flag.Int("opus-complexity", 0, "Opus encoder complexity 1..10; overrides the setting for this run")
 		debug    = flag.Bool("debug", false, "start with the debug panel on")
 		profile  = flag.String("cpuprofile", "", "write a CPU profile here until exit")
 		version  = flag.Bool("version", false, "print the version and exit")
@@ -536,15 +610,20 @@ func main() {
 			if !*noVPIO && !*vpBypass {
 				audio.NoVoiceProcessing = st.s.AudioProcessing == "raw"
 			}
-			// The Audio Send setting is the one encoder's bitrate; the flag is a one-run override.
+			// The settings are the call's; each flag is a one-run override of one of them.
 			audioBps := st.s.AudioSendKbps * 1000
 			if *bitrate > 0 {
 				audioBps = *bitrate * 1000
 			}
+			complexity := complexityOf(st.s)
+			if *complex > 0 {
+				complexity = *complex
+			}
 			e := engine.New(a, engine.Options{
 				ServerURL: *server, Room: roomID, Name: name, Color: color,
 				Input: dev.find(input, false), Output: dev.find(output, true),
-				VoiceGate: st.s.VoiceGate, Bitrate: audioBps, Complex: *complex, Debug: *debug,
+				VoiceGate: st.s.VoiceGate, Bitrate: audioBps, Complex: complexity, Debug: *debug,
+				MicLevel:     st.s.MicLevel != "off",
 				VideoEnabled: videoEnabled, VideoDisabledWhy: videoWhy, WebcamEnabled: webcamEnabled,
 				ScreenSendKbps: st.s.ScreenSendKbps,
 			}, emit)

@@ -31,7 +31,12 @@ type App struct {
 	// macOS: "apple" (the voice processing unit: Voice Isolation, echo cancellation, gain
 	// — at ~10% of a core, measured; the default, and what an empty value means) or "raw"
 	// (miniaudio, cheapest). Go client only.
-	AudioProcessing string  `json:"audioProcessing,omitempty"`
+	AudioProcessing string `json:"audioProcessing,omitempty"`
+	// Our own levelling, for the platforms and devices whose driver has none: "auto" (the
+	// default, including when the field is absent) or "off".
+	MicLevel string `json:"micLevel,omitempty"`
+	// The Opus encoder's CPU lever, 1..10; 0 (absent) means the default, 10.
+	OpusComplexity  int     `json:"opusComplexity,omitempty"`
 	PauseRendering  string  `json:"pauseRendering"`
 	AutoUpdate      string  `json:"autoUpdate"`
 	LastUpdateCheck int64   `json:"lastUpdateCheck"`

@@ -50,25 +50,44 @@ func TestJoinMatchesNode(t *testing.T) {
 	compare(t, "join", c)
 }
 
-func TestSettingsMatchesNode(t *testing.T) {
+// The settings are the one screen that has deliberately left the Node client's design: it
+// grew sections and the cost/quality bars, so its reference frame is our own rather than a
+// capture of Ink. Everything else here is still Node's, cell for cell.
+func settingsPose() ([]SettingsRow, []Meter, []Meter) {
+	rows := []SettingsRow{
+		{Tab: "Audio", Label: "Audio Input", Value: "Roland: STREAM (BRIDGE CAST X V2-II)"},
+		{Tab: "Audio", Label: "Audio Output", Value: "Roland: CHAT (BRIDGE CAST X V2-II)"},
+		{Tab: "Audio", Label: "Audio Processing", Value: "Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)"},
+		{Tab: "Audio", Label: "Mic Level", Value: "Auto (level the voice, +18 dB at most)"},
+		{Tab: "Audio", Label: "Voice Gate", Value: "On (silence is not sent)"},
+		{Tab: "Audio", Label: "Audio Send", Value: "128 kbps (applies on next join)"},
+		{Tab: "Video", Label: "Camera", Value: "Default (0)"},
+		{Tab: "Video", Label: "Screen Send", Value: "2500 kbps per peer at 1080p (applies on next join)"},
+		{Tab: "Advanced", Label: "Opus Complexity", Value: "10 of 10 (applies on next join)"},
+		{Tab: "Other", Label: "Profile", Value: "[mvega]", ValueColor: "#A3E635"},
+		{Tab: "Other", Label: "Updates", Value: "install on exit"},
+	}
+	audio := []Meter{
+		{Label: "CPU", Fill: 0.68, Note: "Apple + level"},
+		{Label: "Network", Fill: 0.225, Note: "128 kbps while you talk, nothing while you do not"},
+		{Label: "Quality", Fill: 0.87, Note: "Opus 128 kbps", Good: true},
+	}
+	video := []Meter{
+		{Label: "CPU", Fill: 0.30, Note: "h264_videotoolbox"},
+		{Label: "Network", Fill: 0.25, Note: "up to 2500 kbps per peer"},
+		{Label: "Quality", Fill: 0.4166, Note: "at 1080p30", Good: true},
+	}
+	return rows, audio, video
+}
+
+func TestSettingsFrame(t *testing.T) {
+	rows, audioMeters, videoMeters := settingsPose()
 	c := NewCanvas(120, 34)
-	DrawSettings(c, SettingsState{Rows: []SettingsRow{
-		{Label: "Profile", Value: "[mvega]", ValueColor: "#A3E635"},
-		{Label: "Audio Input", Value: "Roland: STREAM (BRIDGE CAST X V2-II)"},
-		{Label: "Audio Output", Value: "Roland: CHAT (BRIDGE CAST X V2-II)"},
-		{Label: "Camera", Value: "Roland BRIDGE CAST X"},
-		{Label: "Video Overlay", Value: "Off"},
-		{Label: "Mic Channels", Value: "auto"},
-		{Label: "Noise Suppression", Value: "Off"},
-		{Label: "Voice Gate", Value: "On (silence is not sent)"},
-		{Label: "Audio Send", Value: "96 kbps (applies on next join)"},
-		{Label: "Audio Receive", Value: "96 kbps (applies on next join)"},
-		{Label: "Screen Send", Value: "2500 kbps per peer at 1080p (applies on next join)"},
-		{Label: "Screen Receive", Value: "2500 kbps from each peer (applies on next join)"},
-		{Label: "Updates", Value: "install on exit"},
-		{Label: "Pause Rendering", Value: "when minimized (applies on next start)"},
-	}})
+	DrawSettings(c, SettingsState{Rows: rows, Selected: 2, Tabs: settingsTabs(rows), Tab: 0, Meters: audioMeters})
 	compare(t, "settings", c)
+	c = NewCanvas(120, 34)
+	DrawSettings(c, SettingsState{Rows: rows, Selected: 6, Tabs: settingsTabs(rows), Tab: 1, Meters: videoMeters})
+	compare(t, "settings-video", c)
 }
 
 func TestProfileMatchesNode(t *testing.T) {

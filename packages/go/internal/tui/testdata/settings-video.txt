@@ -3,12 +3,12 @@
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │  Audio   Video   Advanced   Other                                                                                    │
 │                                                                                                                      │
-│   Audio Input        Roland: STREAM (BRIDGE CAST X V2-II)                                                            │
-│   Audio Output       Roland: CHAT (BRIDGE CAST X V2-II)                                                              │
-│ ▸ Audio Processing   Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)                                     │
-│   Mic Level          Auto (level the voice, +18 dB at most)                                                          │
-│   Voice Gate         On (silence is not sent)                                                                        │
-│   Audio Send         128 kbps (applies on next join)                                                                 │
+│ ▸ Camera             Default (0)                                                                                     │
+│   Screen Send        2500 kbps per peer at 1080p (applies on next join)                                              │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -27,8 +27,8 @@
 │                                                                                                                      │
 │                                                                                                                      │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ CPU      ████████████████▍         Apple + level                                                                     │
-│ Network  █████▍                    128 kbps while you talk, nothing while you do not                                 │
-│ Quality  ████████████████████▉     Opus 128 kbps                                                                     │
+│ CPU      ███████▎                  h264_videotoolbox                                                                 │
+│ Network  ██████                    up to 2500 kbps per peer                                                          │
+│ Quality  ██████████                at 1080p30                                                                        │
 │  ↑↓  navigate   ←→  section   enter  change   esc  back                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

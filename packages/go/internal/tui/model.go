@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -71,6 +72,8 @@ type SettingsStore interface {
 	DevicesConfigured() bool
 	SetDevices(input, output string)
 	Rows() []SettingsRow
+	// Meters are the cost and quality bars for one tab, or none where they say nothing.
+	Meters(tab string) []Meter
 	// Run the row's action (cycle a value, or say which picker to open: "input"/"output"/"camera"/"profile").
 	Run(idx int) string
 }
@@ -169,6 +172,7 @@ type Model struct {
 
 	// settings
 	settingsIdx    int
+	settingsTab    int
 	picker         string // "", "input", "output", "camera"
 	pickerItems    []string
 	pickerIdx      int
@@ -503,13 +507,38 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	rows := m.host.Settings.Rows()
+	tabs := settingsTabs(rows)
+	m.settingsTab = min(m.settingsTab, max(0, len(tabs)-1))
+	// The selection lives on the tab being shown, so ↑↓ walk that tab's rows and nothing else.
+	visible := []int{}
+	for i, r := range rows {
+		if m.settingsTab < len(tabs) && r.Tab == tabs[m.settingsTab] {
+			visible = append(visible, i)
+		}
+	}
+	at := 0
+	for i, idx := range visible {
+		if idx == m.settingsIdx {
+			at = i
+		}
+	}
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.screen = screenHome
 	case tea.KeyUp:
-		m.settingsIdx = max(0, m.settingsIdx-1)
+		if len(visible) > 0 {
+			m.settingsIdx = visible[max(0, at-1)]
+		}
 	case tea.KeyDown:
-		m.settingsIdx = min(len(rows)-1, m.settingsIdx+1)
+		if len(visible) > 0 {
+			m.settingsIdx = visible[min(len(visible)-1, at+1)]
+		}
+	case tea.KeyLeft, tea.KeyShiftTab:
+		m.settingsTab = max(0, m.settingsTab-1)
+		m.settingsIdx = firstOfTab(rows, tabs, m.settingsTab)
+	case tea.KeyRight, tea.KeyTab:
+		m.settingsTab = min(len(tabs)-1, m.settingsTab+1)
+		m.settingsIdx = firstOfTab(rows, tabs, m.settingsTab)
 	case tea.KeyEnter:
 		if m.settingsIdx < len(rows) && !rows[m.settingsIdx].Disabled {
 			switch m.host.Settings.Run(m.settingsIdx) {
@@ -922,7 +951,13 @@ func (m *Model) View() string {
 			Update: m.update, JustUpdated: m.showTick,
 		})
 	case screenSettings:
-		st := SettingsState{Rows: m.host.Settings.Rows(), Selected: m.settingsIdx}
+		rows := m.host.Settings.Rows()
+		tabs := settingsTabs(rows)
+		tab := min(m.settingsTab, max(0, len(tabs)-1))
+		st := SettingsState{Rows: rows, Selected: m.settingsIdx, Tabs: tabs, Tab: tab}
+		if tab < len(tabs) {
+			st.Meters = m.host.Settings.Meters(tabs[tab])
+		}
 		if m.picker != "" {
 			st.PickerTitle = map[string]string{"input": "Audio Input", "output": "Audio Output", "camera": "Camera"}[m.picker]
 			st.Picker, st.PickerIdx = m.labels(m.pickerItems), m.pickerIdx
@@ -994,4 +1029,30 @@ func (m *Model) deviceHint() string {
 		return "A Bluetooth headset's microphone puts it in the hands-free profile: mono, 16 kHz, both ways. This computer's own microphone as the input keeps the headset in full quality."
 	}
 	return ""
+}
+
+// settingsTabs is the sections in the order the rows first mention them.
+func settingsTabs(rows []SettingsRow) []string {
+	var tabs []string
+	for _, r := range rows {
+		if r.Tab == "" {
+			continue
+		}
+		if !slices.Contains(tabs, r.Tab) {
+			tabs = append(tabs, r.Tab)
+		}
+	}
+	return tabs
+}
+
+func firstOfTab(rows []SettingsRow, tabs []string, tab int) int {
+	if tab < 0 || tab >= len(tabs) {
+		return 0
+	}
+	for i, r := range rows {
+		if r.Tab == tabs[tab] {
+			return i
+		}
+	}
+	return 0
 }
