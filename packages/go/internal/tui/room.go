@@ -510,11 +510,14 @@ func DrawModal(c *Canvas, title string, items []string, idx int, hints []KeyHint
 	if hw := HintsWidth(hints); hw > w {
 		w = hw
 	}
-	innerW := w + 4
-	innerH := 1 + 1 + len(items) + 1 + 1 + 2 // title, gap, items, gap, hints, padding
+	innerW := w + 2
+	innerH := 1 + 1 + len(items) + 1 + 1 // title, gap, items, gap, hints
 	x := (c.W - (innerW + 2)) / 2
 	y := (c.H - (innerH + 2)) / 2
 	box := Rect{x, y, innerW + 2, innerH + 2}
+	// A ring of background around the panel, which blanks whatever it is standing on: a
+	// terminal has no way to dim what is behind, so the margin is what separates them.
+	c.Fill(box.Inset(-1, -1), Style{BG: ThemeBG})
 	c.Fill(box, Plain)
 	st := Style{FG: ThemeAccent}
 	c.Set(box.X, box.Y, '╭', st)
@@ -529,7 +532,7 @@ func DrawModal(c *Canvas, title string, items []string, idx int, hints []KeyHint
 		c.Set(box.X, box.Y+j, '│', st)
 		c.Set(box.X+box.W-1, box.Y+j, '│', st)
 	}
-	cx, cy := box.X+3, box.Y+2
+	cx, cy := box.X+2, box.Y+1
 	c.Put(cx, cy, title, Style{FG: ThemeAccent, Bold: true}, box.X+box.W-3)
 	cy += 2
 	DrawSelect(c, Rect{cx, cy, w, len(items)}, items, idx)

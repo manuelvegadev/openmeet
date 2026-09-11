@@ -1,34 +1,34 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Settings ●                                                                                                           │
+│ Settings ●   esc  back                                                                                               │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │   Audio    Video    Advanced    Other                                                                                │
 ├──━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│   Where your voice is taken from. Devices that carry their own effects are offered first.                            │
+│                                                                                                                      │
 │ ▸ Audio Input        Roland: STREAM (BRIDGE CAST X V2-II)                                                            │
 │   Audio Output       Roland: CHAT (BRIDGE CAST X V2-II)                                                              │
 │   Audio Processing    Apple   Off                                                                                    │
 │   Mic Level           Auto   Off                                                                                     │
 │   Voice Gate          On   Off                                                                                       │
-│   Audio Send          64   96   128   192   256  kbps                                                                │
-│                                  ╭────────────────────────────────────────────────╮                                  │
-│                                  │                                                │                                  │
-│                                  │  Audio Input                                   │                                  │
-│                                  │                                                │                                  │
-│                                  │    System Default                              │                                  │
-│                                  │    Wave Link MicrophoneFX — effects            │                                  │
-│                                  │  ▸ MIC (BRIDGE CAST X V2-II)                   │                                  │
-│                                  │                                                │                                  │
-│                                  │   ↑↓  navigate   enter  select   esc  cancel   │                                  │
-│                                  │                                                │                                  │
-│                                  ╰────────────────────────────────────────────────╯                                  │
+│   Audio Send          64   96   1 ╭──────────────────────────────────────────────╮                                   │
+│                                   │ Audio Input                                  │                                   │
+│                                   │                                              │                                   │
+│                                   │   System Default                             │                                   │
+│                                   │   Wave Link MicrophoneFX — effects           │                                   │
+│                                   │ ▸ MIC (BRIDGE CAST X V2-II)                  │                                   │
+│                                   │                                              │                                   │
+│                                   │  ↑↓  navigate   enter  select   esc  cancel  │                                   │
+│                                   ╰──────────────────────────────────────────────╯                                   │
 │                                                                                                                      │
 │                                                                                                                      │
-│   Where your voice is taken from. Devices that carry their own effects are offered first.                            │
 │                                                                                                                      │
-│ ● applies when you next join a room                                                                                  │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                  ● applies when you next join a room │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ CPU      ████████████████▍         Apple + level                                                                     │
 │ Network  █████▍                    128 kbps while you talk, nothing while you do not                                 │
 │ Quality  ████████████████████▉     Opus 128 kbps                                                                     │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ↑↓  navigate   ←→  section   enter  change   esc  back                                                              │
+│  ↑↓  navigate   ←→  section   enter  change                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

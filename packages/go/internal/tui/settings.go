@@ -52,9 +52,12 @@ type SettingsState struct {
 }
 
 var settingsHints = []KeyHint{
-	{Key: "↑↓", Label: "navigate"}, {Key: "←→", Label: "section"},
-	{Key: "enter", Label: "change"}, {Key: "esc", Label: "back"},
+	{Key: "↑↓", Label: "navigate"}, {Key: "←→", Label: "section"}, {Key: "enter", Label: "change"},
 }
+
+// Leaving is drawn beside the title, where the room draws it too, rather than in the row of
+// things you do *to* the settings.
+var settingsBack = []KeyHint{{Key: "esc", Label: "back"}}
 var pickHints = []KeyHint{{Key: "↑↓", Label: "navigate"}, {Key: "enter", Label: "select"}, {Key: "esc", Label: "cancel"}}
 
 const (
@@ -65,20 +68,28 @@ const (
 	// joined, and the screen is only reachable from the home screen, so one mark for the
 	// screen says it once instead of every row saying it again.
 	joinNote = "applies when you next join a room"
+	// The most rows the line under the tabs may take at a narrow width.
+	maxHelpRows = 4
 )
 
 func DrawSettings(c *Canvas, s SettingsState) {
 	area := Screen(c, "Settings", settingsHints)
-	c.Put(area.X+Width("Settings")+1, area.Y-2, "●", Style{FG: ThemeWarn}, area.X+area.W)
+	right := area.X + area.W
+	x := area.X + Width("Settings") + 1
+	x = c.Put(x, area.Y-2, "●", Style{FG: ThemeWarn}, right) + 2
+	DrawHints(c, x, area.Y-2, right-x, settingsBack)
 	if s.Loading {
-		c.Put(area.X, area.Y, "Loading devices...", Style{FG: ThemeWarn}, area.X+area.W)
+		c.Put(area.X, area.Y, "Loading devices...", Style{FG: ThemeWarn}, right)
 		return
 	}
-	DrawTabs(c, area.X, area.Y, area.X+area.W, s.Tabs, s.Tab)
+	DrawTabs(c, area.X, area.Y, right, s.Tabs, s.Tab)
+	tab := ""
+	if s.Tab >= 0 && s.Tab < len(s.Tabs) {
+		tab = s.Tabs[s.Tab]
+	}
 
 	// From the bottom up: the rule the key hints sit under, the bars and their rule, and the
 	// line that says what the dot beside the title meant.
-	right := area.X + area.W
 	bottom := area.Y + area.H - 1
 	Rule(c, bottom, '├', '┤', nil)
 	y := bottom
@@ -89,14 +100,29 @@ func DrawSettings(c *Canvas, s SettingsState) {
 		Rule(c, y, '├', '┤', nil)
 	}
 	legendY := y - 1
-	c.Put(area.X, legendY, "●", Style{FG: ThemeWarn}, right)
-	c.Put(area.X+2, legendY, joinNote, Muted, right)
+	noteX := right - Width(joinNote) - 2
+	c.Put(noteX, legendY, "●", Style{FG: ThemeWarn}, right)
+	c.Put(noteX+2, legendY, joinNote, Muted, right)
 
-	tab := ""
-	if s.Tab >= 0 && s.Tab < len(s.Tabs) {
-		tab = s.Tabs[s.Tab]
+	// The selected row's line sits under the tabs, where it is read before the list rather
+	// than after it, and wraps rather than running off a narrow window. The block is as tall
+	// as the tallest line in this tab, so moving the selection never shifts the list under it.
+	helpTop := area.Y + 2
+	helpRows := 1
+	for _, row := range s.Rows {
+		if row.Tab == tab {
+			helpRows = max(helpRows, min(maxHelpRows, len(Wrap([]Span{{row.Help, Muted}}, area.W-2))))
+		}
 	}
-	body := Rect{area.X, area.Y + 2, area.W, legendY - 2 - (area.Y + 2)}
+	if row, ok := selectedRow(s); ok && row.Help != "" {
+		for i, line := range Wrap([]Span{{row.Help, Muted}}, area.W-2) {
+			if i >= helpRows {
+				break
+			}
+			c.PutSpans(area.X+2, helpTop+i, line, right)
+		}
+	}
+	body := Rect{area.X, helpTop + helpRows + 1, area.W, legendY - 1 - (helpTop + helpRows + 1)}
 	rowY := body.Y
 	for i, row := range s.Rows {
 		if row.Tab != tab || rowY >= body.Y+body.H {
@@ -105,9 +131,9 @@ func DrawSettings(c *Canvas, s SettingsState) {
 		selected := i == s.Selected
 		Pointer(c, body.X, rowY, selected)
 		label := fmt.Sprintf("%-*s", settingsLabelWidth, row.Label)
-		x := c.Put(body.X+2, rowY, label, Style{Bold: selected}, right)
+		vx := c.Put(body.X+2, rowY, label, Style{Bold: selected}, right) + 1
 		if len(row.Choices) > 0 {
-			drawChoices(c, x+1, rowY, right, row)
+			drawChoices(c, vx, rowY, right, row)
 		} else {
 			vs := Muted
 			if row.ValueColor != "" {
@@ -115,16 +141,20 @@ func DrawSettings(c *Canvas, s SettingsState) {
 			} else if selected && !row.Disabled {
 				vs = Plain
 			}
-			c.Put(x+1, rowY, row.Value, vs, right)
-		}
-		if selected && row.Help != "" {
-			c.Put(body.X+2, legendY-2, row.Help, Muted, right)
+			c.Put(vx, rowY, row.Value, vs, right)
 		}
 		rowY++
 	}
 	if s.PickerTitle != "" {
 		DrawModal(c, s.PickerTitle, s.Picker, s.PickerIdx, pickHints)
 	}
+}
+
+func selectedRow(s SettingsState) (SettingsRow, bool) {
+	if s.Selected >= 0 && s.Selected < len(s.Rows) {
+		return s.Rows[s.Selected], true
+	}
+	return SettingsRow{}, false
 }
 
 // drawChoices draws every value the row can take as a chip, the current one on the accent

@@ -114,10 +114,10 @@ func (st *store) Rows() []tui.SettingsRow {
 		rows = append(rows, tui.SettingsRow{Tab: "Video", Label: "Camera", Value: cam, Help: "Which camera a share uses."})
 	}
 	rows = append(rows,
-		tui.SettingsRow{Tab: "Video", Label: "Screen Send", Choices: numbers(screenKbpsSteps), Choice: indexOf(screenKbpsSteps, s.ScreenSendKbps), Suffix: "kbps at 1080p, split between the people watching",
-			Help: "The ceiling for a screen share. It is encoded once too, on the GPU, whoever is watching."},
+		tui.SettingsRow{Tab: "Video", Label: "Screen Send", Choices: numbers(screenKbpsSteps), Choice: indexOf(screenKbpsSteps, s.ScreenSendKbps), Suffix: "kbps",
+			Help: "The ceiling for a screen share at 1080p, split between the people watching. It is encoded once too, on the GPU, whoever is watching."},
 		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Choices: numbers(complexitySteps), Choice: indexOf(complexitySteps, complexityOf(s)),
-			Help: "How hard the encoder works for the same bitrate: 10 is the best sound per kbps and the most CPU, 1 the cheapest. It never changes what is sent, only what it costs to make it."},
+			Help: "How hard the encoder works for the same bitrate: 10 is the best sound per kbps and the most CPU, 1 the cheapest. It never changes what is sent."},
 		tui.SettingsRow{Tab: "Other", Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color(),
 			Help: "Your name and colour, as everyone in the room sees them."},
 		tui.SettingsRow{Tab: "Other", Label: "Updates", Choices: []string{"install on exit", "tell me", "do not check"}, Choice: indexOfString(updatePolicies, s.AutoUpdate),

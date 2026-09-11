@@ -1,8 +1,10 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Settings ●                                                                                                           │
+│ Settings ●   esc  back                                                                                               │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │   Audio    Video    Advanced    Other                                                                                │
 ├──━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│   Apple's voice processing unit: Voice Isolation, echo cancellation and gain, for about a tenth of a core.           │
+│                                                                                                                      │
 │   Audio Input        Roland: STREAM (BRIDGE CAST X V2-II)                                                            │
 │   Audio Output       Roland: CHAT (BRIDGE CAST X V2-II)                                                              │
 │ ▸ Audio Processing    Apple   Off                                                                                    │
@@ -22,13 +24,11 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│   Apple's voice processing unit: Voice Isolation, echo cancellation and gain, for about a tenth of a core.           │
-│                                                                                                                      │
-│ ● applies when you next join a room                                                                                  │
+│                                                                                  ● applies when you next join a room │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ CPU      ████████████████▍         Apple + level                                                                     │
 │ Network  █████▍                    128 kbps while you talk, nothing while you do not                                 │
 │ Quality  ████████████████████▉     Opus 128 kbps                                                                     │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ↑↓  navigate   ←→  section   enter  change   esc  back                                                              │
+│  ↑↓  navigate   ←→  section   enter  change                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
