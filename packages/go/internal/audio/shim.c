@@ -140,15 +140,13 @@ static void playback_cb(ma_device* dev, void* out, const void* in, ma_uint32 fra
   }
 }
 
+// rate 0 opens the device at its own rate — no resampling in miniaudio, whose converter
+// is linear interpolation — and om_rate says what that was; the caller converts.
 om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs, int prefillMs) {
   om_stream* s = (om_stream*)calloc(1, sizeof(om_stream));
   if (!s) return NULL;
   s->channels = channels;
   s->playback = playback;
-  if (ma_pcm_rb_init(ma_format_s16, (ma_uint32)channels, (ma_uint32)(rate * ringMs / 1000), NULL, NULL, &s->rb) != MA_SUCCESS) {
-    free(s);
-    return NULL;
-  }
   ma_device_config cfg = ma_device_config_init(playback ? ma_device_type_playback : ma_device_type_capture);
   cfg.sampleRate = (ma_uint32)rate;
   cfg.notificationCallback = on_notification;
@@ -166,7 +164,12 @@ om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int pe
     cfg.dataCallback = capture_cb;
   }
   if (ma_device_init(&ctx, &cfg, &s->dev) != MA_SUCCESS) {
-    ma_pcm_rb_uninit(&s->rb);
+    free(s);
+    return NULL;
+  }
+  rate = (int)s->dev.sampleRate;
+  if (ma_pcm_rb_init(ma_format_s16, (ma_uint32)channels, (ma_uint32)(rate * ringMs / 1000), NULL, NULL, &s->rb) != MA_SUCCESS) {
+    ma_device_uninit(&s->dev);
     free(s);
     return NULL;
   }

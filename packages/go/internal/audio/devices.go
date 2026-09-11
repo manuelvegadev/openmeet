@@ -121,10 +121,17 @@ func Find(devices []Device, name string) (*Device, error) {
 }
 
 // Stream is one open device and its ring — or one side of a duplex unit, which owns both.
+// A miniaudio device is opened at its own rate and converted here (`Resampler`), so the
+// pipeline sees 48 kHz whatever the device runs at, and neither the driver nor miniaudio
+// touches the samples. Apple's unit converts inside itself.
 type Stream struct {
 	s        *C.om_stream
 	channels int
 	duplex   bool
+	rate     int // the device's own rate; SampleRate when no conversion is needed
+	rs       *Resampler
+	native   []int16 // a capture's frames at the device rate, before conversion
+	carry    []int16 // converted capture frames that did not fit the caller's buffer
 }
 
 func (e *Engine) open(playback bool, dev *Device, channels int) (*Stream, error) {
@@ -135,7 +142,7 @@ func (e *Engine) open(playback bool, dev *Device, channels int) (*Stream, error)
 	if dev != nil {
 		idx = C.int(dev.Index)
 	}
-	s := C.om_open(pb, idx, C.int(channels), SampleRate, C.int(PeriodMs), C.int(RingMs), C.int(PlayAheadMs))
+	s := C.om_open(pb, idx, C.int(channels), 0, C.int(PeriodMs), C.int(RingMs), C.int(PlayAheadMs))
 	if s == nil {
 		kind := "capture"
 		if playback {
@@ -143,18 +150,74 @@ func (e *Engine) open(playback bool, dev *Device, channels int) (*Stream, error)
 		}
 		return nil, fmt.Errorf("%s device: could not open", kind)
 	}
-	return &Stream{s: s, channels: channels}, nil
+	st := &Stream{s: s, channels: channels, rate: int(C.om_rate(s))}
+	if st.rate != SampleRate {
+		if playback {
+			st.rs = NewResampler(SampleRate, st.rate, channels)
+		} else {
+			st.rs = NewResampler(st.rate, SampleRate, channels)
+		}
+	}
+	return st, nil
 }
 
-func (st *Stream) Close()         { C.om_close(st.s) }
-func (st *Stream) Rate() int      { return int(C.om_rate(st.s)) }
-func (st *Stream) Available() int { return int(C.om_available(st.s)) }
-func (st *Stream) Underruns() int { return int(C.om_underruns(st.s)) }
-func (st *Stream) read(buf []int16) int {
-	return int(C.om_read(st.s, (*C.int16_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)/st.channels)))
+func (st *Stream) Close() { C.om_close(st.s) }
+
+// Rate is the device's own; the stream always reads and writes at SampleRate.
+func (st *Stream) Rate() int {
+	if st.duplex {
+		return int(C.om_rate(st.s))
+	}
+	return st.rate
 }
+
+// Available is in frames at SampleRate, whatever the device runs at.
+func (st *Stream) Available() int {
+	n := int(C.om_available(st.s))
+	if st.rs != nil {
+		n = n * SampleRate / st.rate
+	}
+	return n
+}
+func (st *Stream) Underruns() int { return int(C.om_underruns(st.s)) }
+
+// read fills buf with frames at SampleRate and returns how many.
+func (st *Stream) read(buf []int16) int {
+	if st.rs == nil {
+		return int(C.om_read(st.s, (*C.int16_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)/st.channels)))
+	}
+	n := copy(buf, st.carry)
+	st.carry = st.carry[:copy(st.carry, st.carry[n:])]
+	want := (len(buf) - n) / st.channels * st.rate / SampleRate
+	if want > 0 {
+		if cap(st.native) < want*st.channels {
+			st.native = make([]int16, want*st.channels)
+		}
+		st.native = st.native[:want*st.channels]
+		if got := int(C.om_read(st.s, (*C.int16_t)(unsafe.Pointer(&st.native[0])), C.int(want))); got > 0 {
+			out := st.rs.Process(st.native[:got*st.channels])
+			k := copy(buf[n:], out)
+			n += k
+			st.carry = append(st.carry, out[k:]...)
+		}
+	}
+	return n / st.channels
+}
+
+// write takes frames at SampleRate and returns how many of them the ring took.
 func (st *Stream) write(buf []int16) int {
-	return int(C.om_write(st.s, (*C.int16_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)/st.channels)))
+	if st.rs == nil {
+		return int(C.om_write(st.s, (*C.int16_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)/st.channels)))
+	}
+	out := st.rs.Process(buf)
+	if len(out) == 0 {
+		return len(buf) / st.channels
+	}
+	took := int(C.om_write(st.s, (*C.int16_t)(unsafe.Pointer(&out[0])), C.int(len(out)/st.channels)))
+	if took < len(out)/st.channels {
+		return took * SampleRate / st.rate
+	}
+	return len(buf) / st.channels
 }
 
 // Pump moves audio between the device rings and the pipeline on a goroutine of our own:
@@ -419,8 +482,15 @@ func (p *Pump) Priority() string {
 
 // Describe says what the devices are really running at, and what the pump's thread got.
 func (p *Pump) Describe() string {
-	return fmt.Sprintf("%s; capture %d Hz, playback %d Hz, ring %d ms, pump every %d ms, ahead %d ms, thread priority %s",
-		p.path, p.capture.Rate(), p.playback.Rate(), RingMs, PumpMs, p.AheadMs(), p.Priority())
+	return fmt.Sprintf("%s; capture %s, playback %s, ring %d ms, pump every %d ms, ahead %d ms, thread priority %s",
+		p.path, p.capture.describe(), p.playback.describe(), RingMs, PumpMs, p.AheadMs(), p.Priority())
+}
+
+func (st *Stream) describe() string {
+	if st.rs != nil {
+		return fmt.Sprintf("%d Hz (converted to %d here)", st.rate, SampleRate)
+	}
+	return fmt.Sprintf("%d Hz", st.Rate())
 }
 
 // Path says which way the devices are open.
