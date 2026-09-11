@@ -32,6 +32,8 @@ type Capture struct {
 	gate       *VoiceGate
 	gateOn     bool
 	enc        *opus.Encoder
+	agc        *AutomaticGain
+	scratch    []int16
 	muted      atomic.Bool
 	acc        []int16
 	frames     uint32 // capture clock, in frames
@@ -49,6 +51,9 @@ type CaptureOptions struct {
 	Complexity int
 	// Transmit only while the gate is open. Off sends every frame.
 	VoiceGate bool
+	// Level the voice before encoding (agc.go). What the system's own processing does on a
+	// machine that has some, for every machine that has none.
+	MicLevel bool
 }
 
 func NewCapture(opts CaptureOptions, send func(Packet), onSpeaking func(bool)) (*Capture, error) {
@@ -70,7 +75,12 @@ func NewCapture(opts CaptureOptions, send func(Packet), onSpeaking func(bool)) (
 	// one packet reconstructs it from the next instead of concealing. Cheap at these rates.
 	_ = enc.SetInBandFEC(true)
 	_ = enc.SetPacketLossPerc(10)
+	var agc *AutomaticGain
+	if opts.MicLevel {
+		agc = NewAutomaticGain()
+	}
 	c := &Capture{
+		agc:        agc,
 		send:       send,
 		onSpeaking: onSpeaking,
 		gate:       NewVoiceGate(FrameLen),
@@ -115,6 +125,13 @@ func (c *Capture) frame(frame []int16) {
 	}
 	for i, f := range outgoing {
 		age := uint32(len(outgoing) - 1 - i)
+		if c.agc != nil {
+			// On a copy: the gate's pre-buffer owns those frames, and the level it measures
+			// has to stay the microphone's own.
+			c.scratch = append(c.scratch[:0], f...)
+			c.agc.Apply(c.scratch, RMS(f))
+			f = c.scratch
+		}
 		n, err := c.enc.Encode(f, c.out)
 		if err != nil {
 			continue

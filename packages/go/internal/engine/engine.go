@@ -30,7 +30,8 @@ type Options struct {
 	Input     *audio.Device
 	Output    *audio.Device
 	VoiceGate bool
-	Bitrate   int // Opus bps
+	Bitrate   int  // Opus bps
+	MicLevel  bool // level the microphone ourselves (audio.AutomaticGain)
 	Complex   int
 	Debug     bool
 	// Video: off with a reason the room log states (--no-video, tools missing, OS).
@@ -142,7 +143,7 @@ func (e *Engine) Start() error {
 	if err != nil {
 		return err
 	}
-	e.cap, err = audio.NewCapture(audio.CaptureOptions{Bitrate: e.opts.Bitrate, Complexity: e.opts.Complex, VoiceGate: e.opts.VoiceGate},
+	e.cap, err = audio.NewCapture(audio.CaptureOptions{Bitrate: e.opts.Bitrate, Complexity: e.opts.Complex, VoiceGate: e.opts.VoiceGate, MicLevel: e.opts.MicLevel},
 		func(p audio.Packet) {
 			e.mu.Lock()
 			e.sentBytes += int64(len(p.Payload)) + 12
