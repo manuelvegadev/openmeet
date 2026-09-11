@@ -1,8 +1,8 @@
 name: Deploy website
 
 # openmeet.manuelvega.dev is packages/website prerendered to static HTML and served by GitHub
-# Pages. Only changes under that package (or to this file) deploy; the terminal release flow
-# is untouched. Pages must be set to "GitHub Actions" as its source in the repository settings.
+# Pages. Only changes under that package (or to this file) deploy; the client's release flow
+# (go-client.yml) is untouched. Pages must be set to "GitHub Actions" as its source in the repository settings.
 
 on:
   push:

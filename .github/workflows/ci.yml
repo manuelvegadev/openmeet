@@ -6,13 +6,11 @@ on:
   pull_request:
 
 jobs:
+  # The server and the shared types. The client is Go and has its own workflow (go-client.yml);
+  # the retired Node client in packages/terminal is not built or tested any more.
   build:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: server
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -23,67 +21,15 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # The filter keeps the retired client's native modules (wrtc, audify) out of the job.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --filter @openmeet/server... --filter @openmeet/website... --filter openmeet
 
       - name: Lint
         run: pnpm lint
 
       - name: Build
         run: pnpm build
-
-      - name: Type-check terminal
-        run: pnpm --filter openmeet-terminal exec tsc --noEmit
-
-      - name: Audio, negotiation, capture and UI checks (resampler, channels, SDP, Broadcast, screen sender, screen size, palette, chat, room frame, child processes, updates)
-        run: |
-          pnpm --filter openmeet-terminal exec tsx scripts/resampler-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/channels-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/voice-gate-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/sdp-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/nvidia-broadcast-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/share-probe.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/screen-size-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/theme-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/chat-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/room-frame-test.tsx
-          pnpm --filter openmeet-terminal exec tsx scripts/children-test.ts
-          pnpm --filter openmeet-terminal exec tsx scripts/update-test.ts
-
-      # audify links against PulseAudio on Linux; the runner image ships no libpulse.
-      - name: Install Linux audio libraries
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libpulse0
-
-      # The native addons (wrtc, audify) must load and run on this platform.
-      - name: Smoke-test native modules
-        shell: bash
-        run: |
-          node packages/terminal/dist/index.js --help
-          node -e "
-            const w = require('@roamhq/wrtc');
-            const pc = new w.RTCPeerConnection();
-            pc.close();
-            const a = require('audify');
-            if (typeof a.RtAudio !== 'function') throw new Error('audify did not load');
-            console.log('wrtc ok; audify loaded');
-            process.exit(0);
-          "
-
-      # Opening RtAudio is skipped on Windows runners: its WASAPI backend crashes when the
-      # machine has no audio endpoints at all ("RtApiWasapi::probeDevices: No devices found."
-      # then SIGSEGV), which is what a runner looks like. Real Windows hardware is covered by
-      # scripts/audio-matrix.ts.
-      - name: Enumerate audio devices
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          node -e "
-            const a = require('audify');
-            const rt = new a.RtAudio();
-            console.log('audify api:', rt.getApi(), 'devices:', rt.getDevices().length);
-            process.exit(0);
-          "
 
   # The landing page (packages/website) is static HTML prerendered from React. Pull requests
   # only: a push to main is followed by deploy-website.yml, which runs the same build before it

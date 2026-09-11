@@ -58,6 +58,6 @@
     }
   ],
   "files": {
-    "includes": ["packages/**/*.ts", "packages/**/*.tsx", "packages/**/*.json", "!**/dist"]
+    "includes": ["packages/**/*.ts", "packages/**/*.tsx", "packages/**/*.json", "!**/dist", "!packages/go"]
   }
 }
