@@ -14,6 +14,10 @@ import (
 // AC_VO) ahead of a browser's downloads. A router that honours DSCP does the same on its
 // side; one that does not simply ignores the mark. Windows ignores IP_TOS on its own —
 // marking there goes through the qWAVE API, per destination, which is still to do.
+//
+// The sockets also get generous buffers: a video keyframe arrives as a burst of a couple
+// of hundred packets, and Windows' default receive buffer (64 KB) holds a fraction of
+// one, so the tail was dropped before pion ever read it.
 type qosNet struct {
 	*stdnet.Net
 }
@@ -30,6 +34,7 @@ func (q *qosNet) ListenUDP(network string, laddr *net.UDPAddr) (transport.UDPCon
 	c, err := q.Net.ListenUDP(network, laddr)
 	if err == nil {
 		markVoice(c)
+		sizeBuffers(c)
 	}
 	return c, err
 }
@@ -38,8 +43,20 @@ func (q *qosNet) ListenPacket(network, address string) (net.PacketConn, error) {
 	c, err := q.Net.ListenPacket(network, address)
 	if err == nil {
 		markVoice(c)
+		sizeBuffers(c)
 	}
 	return c, err
+}
+
+const socketBuffer = 4 << 20
+
+func sizeBuffers(c interface{}) {
+	if b, ok := c.(interface{ SetReadBuffer(int) error }); ok {
+		_ = b.SetReadBuffer(socketBuffer)
+	}
+	if b, ok := c.(interface{ SetWriteBuffer(int) error }); ok {
+		_ = b.SetWriteBuffer(socketBuffer)
+	}
 }
 
 const dscpEF = 46 << 2

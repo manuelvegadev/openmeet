@@ -10,6 +10,8 @@ package rtc
 
 import (
 	"fmt"
+	"github.com/pion/rtp/codecs"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -45,8 +47,8 @@ type Manager struct {
 	myID    string
 	api     *webrtc.API
 	track   *webrtc.TrackLocalStaticRTP
-	webcam  *webrtc.TrackLocalStaticSample
-	screen  *webrtc.TrackLocalStaticSample
+	webcam  *videoTrack
+	screen  *videoTrack
 	send    func(signal.Message) error
 	onAudio func(peerID string, pkt *rtp.Packet)
 	onVideo func(peerID string, kind string, track *webrtc.TrackRemote)
@@ -85,10 +87,18 @@ func NewManager(o Options) (*Manager, error) {
 	// Video is H.264, because that is what the machine's hardware encoder makes and pion
 	// carries any codec it is handed — the door the Node client's binding kept shut
 	// (gotcha 28). Constrained baseline, packetization mode 1, as browsers offer it.
+	//
+	// The feedback list is what makes pion's NACK interceptors act on this stream: a lost
+	// video packet is retransmitted instead of breaking the frame and everything after it
+	// until the next keyframe. Audio carries no such list on purpose — a retransmitted 20 ms
+	// frame arrives too late to play, and FEC already covers it — so the responder keeps no
+	// history for it. PLI and FIR are accepted (a keyframe comes every second regardless;
+	// ffmpeg cannot be asked for one mid-stream), REMB is offered for a browser someday.
 	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType: webrtc.MimeTypeH264, ClockRate: 90000,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+			SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+			RTCPFeedback: []webrtc.RTCPFeedback{{Type: "nack"}, {Type: "nack", Parameter: "pli"}, {Type: "ccm", Parameter: "fir"}, {Type: "goog-remb"}},
 		},
 		PayloadType: 102,
 	}, webrtc.RTPCodecTypeVideo); err != nil {
@@ -110,14 +120,13 @@ func NewManager(o Options) (*Manager, error) {
 		return nil, err
 	}
 	// The two video tracks, bound to every connection like the audio one: a share is
-	// encoded once and its access units written once, whoever is in the room. Frames flow
+	// encoded once and its access units packetized once, whoever is in the room. Frames flow
 	// only while a share runs; an idle track costs nothing.
-	h264 := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000}
-	webcam, err := webrtc.NewTrackLocalStaticSample(h264, "webcam", "openmeet")
+	webcam, err := newVideoTrack("webcam")
 	if err != nil {
 		return nil, err
 	}
-	screen, err := webrtc.NewTrackLocalStaticSample(h264, "screen", "openmeet")
+	screen, err := newVideoTrack("screen")
 	if err != nil {
 		return nil, err
 	}
@@ -253,9 +262,53 @@ func (m *Manager) addTracks(pc *webrtc.PeerConnection) error {
 // WriteVideo hands one encoded access unit to every peer, on the camera or the screen track.
 func (m *Manager) WriteVideo(kind string, sample media.Sample) error {
 	if kind == "screen" {
-		return m.screen.WriteSample(sample)
+		return m.screen.write(sample)
 	}
-	return m.webcam.WriteSample(sample)
+	return m.webcam.write(sample)
+}
+
+// videoTrack is an H.264 track written packet by packet, paced. A keyframe of a 1080p
+// screen is 100–300 KB — 100 to 250 packets — and TrackLocalStaticSample writes them all
+// in one tight loop, a burst that a Wi-Fi link or a small socket buffer drops the tail
+// of; and since keyframes are the biggest frames, they were the ones most likely lost,
+// which left the receiver decoding P-frames against a picture it never got until the next
+// keyframe survived whole. Spreading the packets by a millisecond every pacingBurst keeps
+// a frame under a few milliseconds and the bursts inside what the path can absorb.
+type videoTrack struct {
+	*webrtc.TrackLocalStaticRTP
+	mu sync.Mutex
+	pk rtp.Packetizer
+}
+
+const (
+	videoMTU    = 1200
+	pacingBurst = 16
+	pacingGap   = time.Millisecond
+)
+
+func newVideoTrack(id string) (*videoTrack, error) {
+	t, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000}, id, "openmeet")
+	if err != nil {
+		return nil, err
+	}
+	// The payload type and SSRC here are placeholders: WriteRTP rewrites both per binding.
+	pk := rtp.NewPacketizer(videoMTU, 102, rand.Uint32(), &codecs.H264Payloader{}, rtp.NewRandomSequencer(), 90000)
+	return &videoTrack{TrackLocalStaticRTP: t, pk: pk}, nil
+}
+
+func (v *videoTrack) write(s media.Sample) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	pkts := v.pk.Packetize(s.Data, uint32(s.Duration.Seconds()*90000))
+	for i, p := range pkts {
+		if i > 0 && i%pacingBurst == 0 {
+			time.Sleep(pacingGap)
+		}
+		if err := v.WriteRTP(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Offer starts a connection to a peer who was already in the room: we are the newcomer, so

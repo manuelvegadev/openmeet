@@ -116,7 +116,11 @@ func NewReceiver(peerName string, kind Kind, track *webrtc.TrackRemote, log func
 }
 
 func (r *Receiver) run(track *webrtc.TrackRemote) {
-	sb := samplebuilder.New(50, &codecs.H264Packet{}, track.Codec().ClockRate)
+	// Room for a NACK round trip: a retransmitted packet lands a network RTT after the
+	// gap, and a frame given up on before that is a frame lost twice. 400 packets is a few
+	// frames at full rate; the time bound is what keeps a still screen (few packets, none
+	// late) from holding a sample for ever.
+	sb := samplebuilder.New(400, &codecs.H264Packet{}, track.Codec().ClockRate, samplebuilder.WithMaxTimeDelay(200*time.Millisecond))
 	for {
 		pkt, _, err := track.ReadRTP()
 		if err != nil {

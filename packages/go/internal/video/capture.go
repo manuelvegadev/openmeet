@@ -85,8 +85,8 @@ func outputSize(w, h int, short, long int) (int, int) {
 //     for any chain that scales or converts on the CPU. `-r` because avfoundation ignores
 //     `-framerate` for screens (gotcha 16).
 //   - Windows: ddagrab keeps frames in D3D11 with `dup_frames=false` so a still desktop
-//     costs nothing (gotcha 23); NVENC takes them as they are, the other encoders need them
-//     downloaded. gdigrab is the fallback when DDA has no output (an RDP session).
+//     costs nothing (gotcha 23); NVENC takes them as they are, unscaled, the other encoders
+//     need them downloaded. gdigrab is the fallback when DDA has no output (an RDP session).
 func screenArgs(d Device, fallback bool) []string {
 	fps := strconv.Itoa(ScreenFPS)
 	ow, oh := outputSize(d.Width, d.Height, ScreenShort, ScreenLong)
@@ -106,10 +106,14 @@ func screenArgs(d Device, fallback bool) []string {
 		if !fallback {
 			args := []string{"-f", "lavfi", "-i", fmt.Sprintf("ddagrab=output_idx=%s:framerate=%d:dup_frames=false", d.ID, ScreenFPS)}
 			if Encoder() == "h264_nvenc" {
-				if ow > 0 && (ow != d.Width || oh != d.Height) {
-					return append(args, "-vf", fmt.Sprintf("scale_cuda=%d:%d", ow, oh))
+				// The D3D11 frames go to NVENC as they are: no filter can scale them there
+				// (scale_cuda wants CUDA frames, hwmap to CUDA is ENOSYS — gotcha 28), so the
+				// screen goes out at its own size — an ultrawide as 3440x1440 — and only a
+				// panel past 4K is downloaded and scaled on the CPU.
+				if d.Width <= 3840 && d.Height <= 2160 {
+					return args
 				}
-				return args
+				return append(args, "-vf", "hwdownload,format=bgra"+cpuScale(ow, oh))
 			}
 			args = append(args, "-vf", "hwdownload,format=bgra"+cpuScale(ow, oh))
 			return args
