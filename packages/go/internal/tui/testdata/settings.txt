@@ -1,0 +1,34 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Settings                                                                                                             │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ▸ Profile            [mvega]                                                                                         │
+│   Audio Input        Roland: STREAM (BRIDGE CAST X V2-II)                                                            │
+│   Audio Output       Roland: CHAT (BRIDGE CAST X V2-II)                                                              │
+│   Camera             Roland BRIDGE CAST X                                                                            │
+│   Video Overlay      Off                                                                                             │
+│   Mic Channels       auto                                                                                            │
+│   Noise Suppression  Off                                                                                             │
+│   Voice Gate         On (silence is not sent)                                                                        │
+│   Audio Send         96 kbps (applies on next join)                                                                  │
+│   Audio Receive      96 kbps (applies on next join)                                                                  │
+│   Screen Send        2500 kbps per peer at 1080p (applies on next join)                                              │
+│   Screen Receive     2500 kbps from each peer (applies on next join)                                                 │
+│   Updates            install on exit                                                                                 │
+│   Pause Rendering    when minimized (applies on next start)                                                          │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│  ↑↓  navigate   enter  change   esc  back                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -14,6 +14,7 @@ CROSS="$HERE/.cross"
 TARGET=x86_64-windows-gnu
 OPUS_VER=1.5.2
 OUT="$HERE/dist/windows-amd64/openmeet.exe"
+VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$HERE/../terminal/package.json")"
 
 mkdir -p "$CROSS/bin" "$HERE/dist/windows-amd64"
 # zig as a drop-in C toolchain for the target; cmake wants single executables.
@@ -54,5 +55,5 @@ echo "building $OUT..."
 cd "$HERE"
 PKG_CONFIG_PATH="$CROSS/pkgconfig" CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
   CC="$CROSS/bin/zcc" CGO_LDFLAGS="-static" \
-  go build -tags nolibopusfile -trimpath -ldflags "-s -w" -o "$OUT" ./cmd/openmeet
+  go build -tags nolibopusfile -trimpath -ldflags "-s -w -X main.Version=$VERSION" -o "$OUT" ./cmd/openmeet
 ls -la "$OUT"

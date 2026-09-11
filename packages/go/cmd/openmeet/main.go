@@ -1,82 +1,275 @@
-// The Go client, audio only: the spike that answers whether encoding once, a playout of our
-// own and a renderer that repaints only what changed get a call down to the cost of the
-// codec. It speaks the same server and the same WebRTC contract as the Node client, so the
-// two share a room.
+// The Go client: one process with the interface, the audio and the mesh. It speaks the same
+// server and the same WebRTC contract as the Node client, and draws the same screens.
 package main
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	osSignal "os/signal"
-	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/pion/rtp"
 
 	"github.com/manuelvegadev/openmeet/packages/go/internal/audio"
-	"github.com/manuelvegadev/openmeet/packages/go/internal/rtc"
-	"github.com/manuelvegadev/openmeet/packages/go/internal/signal"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/engine"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/settings"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/tui"
 )
 
-// The Node client's settings file, read for the name, the colour and the devices so the two
-// clients look like the same person. Never written.
-type settings struct {
-	Name          string `json:"name"`
-	Color         string `json:"color"`
-	AudioInputID  string `json:"audioInputId"`
-	AudioOutputID string `json:"audioOutputId"`
-	VoiceGate     *bool  `json:"voiceGate"`
+// Version is set at build time (-ldflags "-X main.Version=…"); the scripts read it from
+// packages/terminal/package.json so both clients report the one version.
+var Version = "dev"
+
+func platformSupport() (name, features string) {
+	switch runtime.GOOS {
+	case "darwin":
+		return "macOS", "audio, chat"
+	case "windows":
+		return "Windows", "audio, chat"
+	case "linux":
+		return "Linux", "best effort"
+	}
+	return runtime.GOOS, "unsupported"
 }
 
-func loadSettings() settings {
-	var s settings
-	dir, _ := os.UserConfigDir()
-	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".config")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "openmeet", "settings.json"))
-	if err == nil {
-		// A settings.json saved by Notepad or PowerShell carries a UTF-8 BOM (gotcha 23).
-		_ = json.Unmarshal(bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF}), &s)
+// ── the host: settings and devices as the interface sees them ───────────────
+
+type store struct{ s settings.App }
+
+func (st *store) Name() string  { return settings.Str(st.s.Name) }
+func (st *store) Color() string { return settings.Str(st.s.Color) }
+func (st *store) SetIdentity(name, color string) {
+	st.s.Name, st.s.Color = settings.Ptr(name), settings.Ptr(color)
+	_ = settings.Save(st.s)
+}
+func (st *store) InputID() string         { return settings.Str(st.s.AudioInputID) }
+func (st *store) OutputID() string        { return settings.Str(st.s.AudioOutputID) }
+func (st *store) DevicesConfigured() bool { return st.s.DevicesConfigured }
+func (st *store) SetDevices(in, out string) {
+	st.s.AudioInputID, st.s.AudioOutputID, st.s.DevicesConfigured = settings.Ptr(in), settings.Ptr(out), true
+	_ = settings.Save(st.s)
+}
+
+func orDefault(s string) string {
+	if s == "" {
+		return "System Default"
 	}
 	return s
 }
 
+func (st *store) Rows() []tui.SettingsRow {
+	s := st.s
+	noise := "Off"
+	if s.NoiseSuppression {
+		noise = "On (RNNoise, CPU)"
+	}
+	gate := "Off (always sending)"
+	if s.VoiceGate {
+		gate = "On (silence is not sent)"
+	}
+	overlay := "Off"
+	if s.VideoOverlay {
+		overlay = "On"
+	}
+	updates := map[string]string{"auto": "install on exit", "notify": "tell me, do not install", "off": "do not check"}[s.AutoUpdate]
+	rows := []tui.SettingsRow{
+		{Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color()},
+		{Label: "Audio Input", Value: orDefault(st.InputID())},
+		{Label: "Audio Output", Value: orDefault(st.OutputID())},
+	}
+	if runtime.GOOS == "darwin" {
+		cam := "Default (0)"
+		if v := settings.Str(s.VideoDeviceID); v != "" {
+			cam = "Device " + v
+		}
+		rows = append(rows, tui.SettingsRow{Label: "Camera", Value: cam})
+	}
+	rows = append(rows,
+		tui.SettingsRow{Label: "Video Overlay", Value: overlay},
+		tui.SettingsRow{Label: "Mic Channels", Value: s.AudioInputChannels},
+		tui.SettingsRow{Label: "Noise Suppression", Value: noise},
+		tui.SettingsRow{Label: "Voice Gate", Value: gate},
+		tui.SettingsRow{Label: "Audio Send", Value: fmt.Sprintf("%d kbps (applies on next join)", s.AudioSendKbps)},
+		tui.SettingsRow{Label: "Audio Receive", Value: fmt.Sprintf("%d kbps (applies on next join)", s.AudioReceiveKbps)},
+		tui.SettingsRow{Label: "Screen Send", Value: fmt.Sprintf("%d kbps per peer at 1080p (applies on next join)", s.ScreenSendKbps)},
+		tui.SettingsRow{Label: "Screen Receive", Value: fmt.Sprintf("%d kbps from each peer (applies on next join)", s.ScreenReceiveKbps)},
+		tui.SettingsRow{Label: "Updates", Value: updates},
+		tui.SettingsRow{Label: "Pause Rendering", Value: fmt.Sprintf("when %s (applies on next start)", s.PauseRendering)},
+	)
+	return rows
+}
+
+var (
+	channelPolicies = []string{"auto", "stereo", "mono", "left", "right"}
+	audioKbpsSteps  = []int{64, 96, 128, 192, 256}
+	screenKbpsSteps = []int{1000, 1500, 2500, 4000, 6000, 10000}
+	updatePolicies  = []string{"auto", "notify", "off"}
+	pausePolicies   = []string{"minimized", "unfocused", "never"}
+)
+
+func cycle(list []string, cur string) string {
+	for i, v := range list {
+		if v == cur {
+			return list[(i+1)%len(list)]
+		}
+	}
+	return list[0]
+}
+func cycleNumber(list []int, cur int) int {
+	for i, v := range list {
+		if v >= cur {
+			return list[(i+1)%len(list)]
+		}
+	}
+	return list[0]
+}
+
+// Run is what Enter does on a row: cycles a value, or names the screen to open.
+func (st *store) Run(idx int) string {
+	labels := []string{}
+	for _, r := range st.Rows() {
+		labels = append(labels, r.Label)
+	}
+	if idx >= len(labels) {
+		return ""
+	}
+	s := &st.s
+	switch labels[idx] {
+	case "Profile":
+		return "profile"
+	case "Audio Input":
+		return "input"
+	case "Audio Output":
+		return "output"
+	case "Camera":
+		return "camera"
+	case "Video Overlay":
+		s.VideoOverlay = !s.VideoOverlay
+	case "Mic Channels":
+		s.AudioInputChannels = cycle(channelPolicies, s.AudioInputChannels)
+	case "Noise Suppression":
+		s.NoiseSuppression = !s.NoiseSuppression
+	case "Voice Gate":
+		s.VoiceGate = !s.VoiceGate
+	case "Audio Send":
+		s.AudioSendKbps = cycleNumber(audioKbpsSteps, s.AudioSendKbps)
+	case "Audio Receive":
+		s.AudioReceiveKbps = cycleNumber(audioKbpsSteps, s.AudioReceiveKbps)
+	case "Screen Send":
+		s.ScreenSendKbps = cycleNumber(screenKbpsSteps, s.ScreenSendKbps)
+	case "Screen Receive":
+		s.ScreenReceiveKbps = cycleNumber(screenKbpsSteps, s.ScreenReceiveKbps)
+	case "Updates":
+		s.AutoUpdate = cycle(updatePolicies, s.AutoUpdate)
+	case "Pause Rendering":
+		s.PauseRendering = cycle(pausePolicies, s.PauseRendering)
+	}
+	_ = settings.Save(st.s)
+	return ""
+}
+
+type devices struct{ a *audio.Engine }
+
+func names(list []audio.Device) []string {
+	out := make([]string, 0, len(list))
+	for _, d := range list {
+		out = append(out, d.Name)
+	}
+	return out
+}
+
+func (d *devices) Inputs() []string  { l, _ := d.a.Inputs(); return names(l) }
+func (d *devices) Outputs() []string { l, _ := d.a.Outputs(); return names(l) }
+
+// Resolve matches a saved id to a listed name: exactly, then as the tail of a name the
+// Node client's RtAudio backend prefixed ("Roland: STREAM (…)" is "STREAM (…)" here), then
+// as a substring, so a settings file from the other client still names the same device.
+func (d *devices) Resolve(saved string, list []string) string {
+	if saved == "" {
+		return ""
+	}
+	for _, n := range list {
+		if n == saved {
+			return n
+		}
+	}
+	for _, n := range list {
+		if strings.HasSuffix(saved, n) || strings.HasSuffix(n, saved) {
+			return n
+		}
+	}
+	needle := strings.ToLower(saved)
+	for _, n := range list {
+		if strings.Contains(strings.ToLower(n), needle) {
+			return n
+		}
+	}
+	return ""
+}
+
+func (d *devices) find(name string, playback bool) *audio.Device {
+	if name == "" {
+		return nil
+	}
+	var list []audio.Device
+	if playback {
+		list, _ = d.a.Outputs()
+	} else {
+		list, _ = d.a.Inputs()
+	}
+	for i := range list {
+		if list[i].Name == name {
+			return &list[i]
+		}
+	}
+	return nil
+}
+
+func (d *devices) StartMicTest(input, output string) (tui.MicTest, error) {
+	return d.a.StartMicTest(d.find(input, false), d.find(output, true))
+}
+
+// roomSession adapts the engine to what the interface asks of a room.
+type roomSession struct {
+	e *engine.Engine
+	d *devices
+}
+
+func (r *roomSession) ToggleMute()                    { r.e.ToggleMute() }
+func (r *roomSession) SendChat(text string)           { r.e.SendChat(text) }
+func (r *roomSession) SetVolume(id string, v float64) { r.e.SetVolume(id, v) }
+func (r *roomSession) ToggleDebug()                   { r.e.ToggleDebug() }
+func (r *roomSession) Close()                         { r.e.Close() }
+func (r *roomSession) UpdateDevices(in, out string) error {
+	return r.e.UpdateDevices(r.d.find(in, false), r.d.find(out, true))
+}
+
 func main() {
 	var (
-		server   = flag.String("server", "ws://localhost:3001/ws", "signaling WebSocket URL")
-		room     = flag.String("room", "", "room to join")
-		name     = flag.String("name", "", "your name (default: the Node client's settings)")
-		color    = flag.String("color", "", "your colour, #rrggbb (default: the Node client's settings)")
-		inDev    = flag.String("input-device", "", "input device name (substring); default: system default")
-		outDev   = flag.String("output-device", "", "output device name (substring); default: system default")
+		server   = flag.String("server", "wss://openmeet.mvega.pro/ws", "signaling WebSocket URL")
+		room     = flag.String("room", "", "room to join straight away")
+		inDev    = flag.String("input-device", "", "input device name (skips the picker)")
+		outDev   = flag.String("output-device", "", "output device name (skips the picker)")
 		listDevs = flag.Bool("list-devices", false, "list audio devices and exit")
-		noGate   = flag.Bool("no-voice-gate", false, "transmit continuously instead of only while speaking")
+		noGate   = flag.Bool("no-voice-gate", false, "transmit continuously instead of only while speaking (saved)")
 		bitrate  = flag.Int("audio-kbps", 64, "Opus bitrate (mono)")
 		complex  = flag.Int("opus-complexity", 10, "Opus encoder complexity 0..10")
-		headless = flag.Bool("headless", false, "no TUI: log to stderr, quit on SIGINT")
-		debug    = flag.Bool("debug", false, "write the engine's log to stderr (TUI) / stdout (headless)")
+		debug    = flag.Bool("debug", false, "start with the debug panel on")
 		profile  = flag.String("cpuprofile", "", "write a CPU profile here until exit")
-		muted    = flag.Bool("start-muted", false, "join muted")
-		noAudio  = flag.Bool("no-audio", false, "open no audio devices (measures the network path alone)")
-		period   = flag.Int("period-ms", 10, "audio device period in ms (experiment)")
-		fullRTP  = flag.Bool("full-interceptors", false, "pion with NACK and TWCC too (audio needs neither; experiment)")
+		version  = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
-	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	if *version {
+		fmt.Println(Version)
+		return
+	}
+	log.SetFlags(0)
 	if *profile != "" {
 		f, err := os.Create(*profile)
 		if err != nil {
@@ -86,307 +279,72 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	audio.PeriodMs = *period
-	rtc.LeanInterceptors = !*fullRTP
-	engine, err := audio.NewEngine()
+	a, err := audio.NewEngine()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer engine.Close()
-	inputs, _ := engine.Inputs()
-	outputs, _ := engine.Outputs()
+	defer a.Close()
+	dev := &devices{a: a}
 	if *listDevs {
-		fmt.Println("inputs:")
-		for _, d := range inputs {
-			fmt.Printf("  %s%s\n", d.Name, mark(d.Default))
-		}
-		fmt.Println("outputs:")
-		for _, d := range outputs {
-			fmt.Printf("  %s%s\n", d.Name, mark(d.Default))
+		for _, kind := range []struct {
+			label string
+			list  []string
+		}{{"inputs", dev.Inputs()}, {"outputs", dev.Outputs()}} {
+			fmt.Println(kind.label + ":")
+			for _, n := range kind.list {
+				fmt.Println("  " + n)
+			}
 		}
 		return
 	}
-	if *room == "" {
-		log.Fatal("--room is required")
-	}
-	cfg := loadSettings()
-	if *name == "" {
-		*name = cfg.Name
-	}
-	if *name == "" {
-		*name = "go"
-	}
-	if *color == "" {
-		*color = cfg.Color
-	}
-	if *color == "" {
-		*color = "#E8B900"
-	}
-	gate := !*noGate
-	if cfg.VoiceGate != nil && !*noGate {
-		gate = *cfg.VoiceGate
-	}
-	input, err := audio.Find(inputs, *inDev)
-	if err != nil {
-		log.Fatal(err)
-	}
-	output, err := audio.Find(outputs, *outDev)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	// ── the log: stderr, or into the TUI as notices when asked ─────────────────
-	var program *tea.Program
-	var logMu sync.Mutex
-	logf := func(format string, args ...any) {
-		if !*debug {
-			return
-		}
-		line := fmt.Sprintf(format, args...)
-		logMu.Lock()
-		defer logMu.Unlock()
-		if *headless || program == nil {
-			log.Print(line)
-		} else {
-			program.Send(tui.Notice(line))
-		}
+	st := &store{s: settings.Load()}
+	if *noGate {
+		st.s.VoiceGate = false
+		_ = settings.Save(st.s)
 	}
-	// Events reach the TUI through a channel a forwarder drains: program.Send blocks until
-	// the event loop takes the message, and some callers are the audio thread.
-	events := make(chan tea.Msg, 256)
-	emit := func(msg tea.Msg) {
-		if *headless {
-			switch msg.(type) {
-			case tui.Speaking, tui.State, tui.Chat, tui.Muted:
-				logf("%T%+v", msg, msg)
-			}
-			return
-		}
+	name, features := platformSupport()
+
+	events := make(chan tea.Msg, 512)
+	emit := func(msg interface{}) {
 		select {
 		case events <- msg:
 		default:
 		}
 	}
-
-	// ── signaling ─────────────────────────────────────────────────────────────
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	sig, err := signal.Dial(ctx, *server)
-	cancel()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer sig.Close()
-
-	// ── the mesh ──────────────────────────────────────────────────────────────
-	playout := audio.NewPlayout(func(id string, on bool) { emit(tui.Speaking{ID: id, On: on}) })
-	peers, err := rtc.NewManager(rtc.Options{
-		Send:    sig.Send,
-		OnAudio: func(peerID string, pkt *rtp.Packet) { playout.Push(peerID, pkt) },
-		OnState: func(peerID, state string) { emit(tui.State{ID: peerID, State: state}) },
-		Log:     logf,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer peers.CloseAll()
-
-	// ── the microphone, encoded once ──────────────────────────────────────────
-	var myID string
-	capture, err := audio.NewCapture(audio.CaptureOptions{Bitrate: *bitrate * 1000, Complexity: *complex, VoiceGate: gate},
-		func(p audio.Packet) { _ = peers.Write(p) },
-		func(on bool) { emit(tui.Speaking{ID: myID, On: on}) })
-	if err != nil {
-		log.Fatal(err)
-	}
-	capture.SetMuted(*muted)
-	var pump *audio.Pump
-	if !*noAudio {
-		pump, err = engine.StartPump(input, output, capture.OnPCM, playout.Fill)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer pump.Close()
-		logf("audio: %s", pump.Describe())
-	}
-
-	// ── the room ──────────────────────────────────────────────────────────────
-	var mu sync.Mutex
-	people := map[string]signal.Participant{}
-	sendMute := func() {
-		m := capture.Muted()
-		// No camera yet: say so, or the Node client reads an absent field as a camera on.
-		noCam := true
-		_ = sig.Send(signal.Message{Type: "mute-state", FromID: myID, IsAudioMuted: &m, IsVideoMuted: &noCam})
-	}
-	publish := func() {
-		mu.Lock()
-		list := make([]tui.Person, 0, len(people))
-		for _, p := range people {
-			list = append(list, tui.Person{ID: p.ID, Name: p.Username, Color: colorOr(p.Color)})
-		}
-		mu.Unlock()
-		emit(tui.Participants{Me: tui.Person{ID: myID, Name: *name, Color: *color}, List: list})
-	}
-	done := make(chan struct{})
-	var once sync.Once
-	finish := func() { once.Do(func() { close(done) }) }
-
-	actions := tui.Actions{
-		ToggleMute: func() {
-			capture.SetMuted(!capture.Muted())
-			emit(tui.MyMuted(capture.Muted()))
-			sendMute()
-		},
-		SendChat: func(text string) {
-			_ = sig.Send(signal.Message{
-				Type: "chat-message", ID: fmt.Sprintf("%d", time.Now().UnixNano()), RoomID: *room,
-				Username: *name, Content: text, Timestamp: time.Now().UnixMilli(),
-			})
-		},
-		Quit: finish,
-	}
-
-	go func() {
-		for msg := range sig.Incoming {
-			switch msg.Type {
-			case "room-joined":
-				myID = msg.YourID
-				peers.SetMyID(myID)
-				mu.Lock()
-				for _, p := range msg.Participants {
-					people[p.ID] = p
-				}
-				mu.Unlock()
-				publish()
-				sendMute()
-				for _, p := range msg.Participants {
-					_ = playout.AddPeer(p.ID)
-					peers.Offer(p.ID)
-				}
-				logf("joined %s as %s with %d peers", *room, rtcShort(myID), len(msg.Participants))
-			case "participant-joined":
-				if msg.Participant != nil {
-					mu.Lock()
-					people[msg.Participant.ID] = *msg.Participant
-					mu.Unlock()
-					_ = playout.AddPeer(msg.Participant.ID)
-					publish()
-					sendMute()
-					emit(tui.Notice(msg.Participant.Username + " joined"))
-				}
-			case "participant-left":
-				mu.Lock()
-				p, known := people[msg.ParticipantID]
-				delete(people, msg.ParticipantID)
-				mu.Unlock()
-				playout.RemovePeer(msg.ParticipantID)
-				peers.Remove(msg.ParticipantID)
-				publish()
-				if known {
-					emit(tui.Notice(p.Username + " left"))
-				}
-			case "offer":
-				peers.HandleOffer(msg.FromID, msg.SDP)
-			case "answer":
-				peers.HandleAnswer(msg.FromID, msg.SDP)
-			case "ice-candidate":
-				peers.HandleCandidate(msg.FromID, msg.Candidate)
-			case "mute-state":
-				if msg.IsAudioMuted != nil {
-					emit(tui.Muted{ID: msg.FromID, On: *msg.IsAudioMuted})
-				}
-			case "chat-broadcast":
-				if c := msg.ChatMessage; c != nil {
-					emit(tui.Chat{Who: c.Username, Color: colorOr(c.Color), Text: c.Content, At: time.UnixMilli(c.Timestamp)})
-				}
-			case "error":
-				logf("server: %s", msg.ErrorMessage)
+	host := tui.Host{
+		Version: Version, Platform: name, Features: features,
+		Settings: st, Devices: dev,
+		InitialRoom: *room, InputFlag: *inDev, OutputFlag: *outDev,
+		Join: func(roomID, name, color, input, output string) (tui.Room, error) {
+			e := engine.New(a, engine.Options{
+				ServerURL: *server, Room: roomID, Name: name, Color: color,
+				Input: dev.find(input, false), Output: dev.find(output, true),
+				VoiceGate: st.s.VoiceGate, Bitrate: *bitrate * 1000, Complex: *complex, Debug: *debug,
+			}, emit)
+			if err := e.Start(); err != nil {
+				return nil, err
 			}
-		}
-		finish()
-	}()
-
-	if err := sig.Send(signal.Message{Type: "join-room", RoomID: *room, Username: *name, Color: *color}); err != nil {
-		log.Fatal(err)
+			return &roomSession{e: e, d: dev}, nil
+		},
 	}
 
-	// A stats line every two seconds, like the Node client's header.
+	model := tui.New(host)
+	program := tea.NewProgram(model, tea.WithAltScreen())
 	go func() {
-		t := time.NewTicker(2 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				mu.Lock()
-				ids := make([]string, 0, len(people))
-				for id := range people {
-					ids = append(ids, id)
-				}
-				mu.Unlock()
-				var parts []string
-				for _, id := range ids {
-					st := playout.Stats(id)
-					parts = append(parts, fmt.Sprintf("%s q%d/%d j%.0f u%d s%d d%d f%d c%d rx%d", rtcShort(id),
-						st.Depth, st.Target, st.JitterMs, st.Underruns, st.Skipped, st.Dropped, st.Recovered, st.Concealed, st.Received))
-				}
-				if pump != nil {
-					parts = append(parts, fmt.Sprintf("dev-underruns %d", pump.Underruns()))
-				}
-				emit(tui.Stats(strings.Join(parts, "  ")))
-				if *headless && *debug {
-					logf("%s | %s", peers.Stats(), strings.Join(parts, "  "))
-				}
-			}
+		for msg := range events {
+			program.Send(msg)
 		}
 	}()
-
-	if *headless {
-		log.Printf("headless: in room %s, ctrl-c to leave", *room)
-		sigc := make(chan os.Signal, 1)
-		osSignal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
-		select {
-		case <-done:
-		case <-sigc:
-		}
-		return
-	}
-	program = tea.NewProgram(tui.New(*room, actions), tea.WithAltScreen())
+	sigc := make(chan os.Signal, 1)
+	osSignal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		for {
-			select {
-			case msg := <-events:
-				program.Send(msg)
-			case <-done:
-				program.Send(tui.Finished{})
-				return
-			}
-		}
+		<-sigc
+		program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+		time.Sleep(time.Second)
+		os.Exit(0)
 	}()
 	if _, err := program.Run(); err != nil {
 		log.Fatal(err)
 	}
-	finish()
-}
-
-func mark(def bool) string {
-	if def {
-		return "  (default)"
-	}
-	return ""
-}
-
-func colorOr(c string) string {
-	if c == "" {
-		return "#8A8A8A"
-	}
-	return c
-}
-
-func rtcShort(id string) string {
-	if len(id) > 6 {
-		return id[:6]
-	}
-	return id
 }

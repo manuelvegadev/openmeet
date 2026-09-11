@@ -1,0 +1,34 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ OpenMeet v0.5.2 (macOS)  q  leave  | Room: standup | 4p | 23m                     ↑128k ↓384k | RTT:18ms Loss:0% | ● │
+├────────────────────────────────────────────────────────────────────────────────┬─────────────────────────────────────┤
+│                                                                                │ ○ [mvega] c                   ↑128k │
+│                                                                                │ ─────────────────────────────────── │
+│                                                                                │  m  mute   d  devices   s  share    │
+│                                                                                │  v  stop cam                        │
+│                                                                                ├─────────────────────────────────────┤
+│                                                                                │ ● ▸ [sofia] S           ↓384k ~38ms │
+│ [14:51] + [mvega] joined the room                                              │ ○   [diego] C           ↓128k ~96ms │
+│ [14:53] + [sofia] joined the room                                              │ ○   [amara] m      ↓128k ~155ms 70% │
+│ [14:54] › [sofia] morning — did the Windows build ever finish?                 │                                     │
+│ [14:55] › [mvega] yeah, four minutes on the i7. rebuilding wrtc is most of it  │                                     │
+│ [14:56] + [diego] joined the room                                              │                                     │
+│ [14:57] › [diego] hey. audio is clean on my end this time, no robot voice      │                                     │
+│ [14:59] › [sofia] good. the dropouts are gone on my side too                   │                                     │
+│ [15:00] › [sofia] let me put the trace up                                      │                                     │
+│ [15:01] ▣ [sofia] started screen sharing                                       │                                     │
+│ [15:02] › [mvega] that spike at the end is the camera opening — it holds the   │                                     │
+│ device for a moment after SIGTERM, which is why a preview right after a call   │                                     │
+│ used to fail                                                                   │                                     │
+│ [15:04] › [diego] so we wait for the exit instead of a timer?                  │                                     │
+│ [15:05] › [mvega] already in — stopCapture only resolves once the grabber is   │                                     │
+│ really gone                                                                    │                                     │
+│ [15:06] + [amara] joined the room                                              │                                     │
+│ [15:07] › [amara] sorry, late. my mic was on the wrong device again            │                                     │
+│ [15:08] ♪ [amara] muted                                                        │                                     │
+│ [15:10] › [sofia] no worries, we are still on the capture path                 │                                     │
+│ [15:11] › [diego] looks good to me                                             │                                     │
+│ [15:12] › [mvega] one more pass on the docs and I will tag it                  │                                     │
+│                                                                                │ ─────────────────────────────────── │
+├────────────────────────────────────────────────────────────────────────────────┤  ↑↓  select   -/+  vol   w  cam     │
+│ > Type message...                                                   tab  chat  │  e  screen                          │
+╰────────────────────────────────────────────────────────────────────────────────┴─────────────────────────────────────╯

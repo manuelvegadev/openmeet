@@ -5,18 +5,22 @@ WebRTC contract as `packages/terminal`, so the two share a room while this one g
 Go, and why now, is in [`docs/go-migration-analysis.md`](../../docs/go-migration-analysis.md);
 the numbers are in [`docs/performance.md`](../../docs/performance.md).
 
-**Status: audio-only spike, September 2026.** It joins a room, talks and listens to Node
-clients, shows who is on the air, and carries the chat. No video yet, no settings screen, no
-device picker. What it already does that the Node client cannot: encode the microphone
-**once** and write the same packet to every peer.
+**Status: audio client with the full interface, September 2026.** Every screen the Node
+client has — first start, home, settings and its pickers, the audio setup with the mic test,
+the room with its chat, participants, keys and debug panel — drawn cell for cell the same:
+`internal/tui/testdata` holds frames captured from the Node client at 120x34 and
+`golden_test.go` fails on any cell, colour or bold that differs. No video yet (screen and
+camera stay on WebRTC and come next), and the Camera row shows the saved id rather than the
+enumerated name until then. What it does that the Node client cannot: encode the microphone
+**once** and write the same packet to every peer, in one process, in tens of megabytes.
 
 ## Build and run
 
 ```bash
 brew install opus            # libopus via cgo; miniaudio and pion need nothing
-cd packages/go
-go build -o openmeet ./cmd/openmeet
-./openmeet --room standup    # name, colour and devices come from ~/.config/openmeet/settings.json
+packages/go/scripts/build.sh              # → packages/go/openmeet, stamped with the package version
+packages/go/openmeet                      # the home screen; --room standup goes straight in
+                                          # name, colour and devices come from ~/.config/openmeet/settings.json
 ./openmeet --list-devices
 ./openmeet --room standup --headless --debug --cpuprofile cpu.prof
 ```
@@ -51,7 +55,9 @@ session, which on Windows is enough for sound (only screen capture needs the des
 | `internal/signal` | The WebSocket protocol, field for field with `packages/shared/src/types.ts` |
 | `internal/rtc` | pion: one PeerConnection per peer, the three-transceiver contract, `polite = myID < peerID`, and **one `TrackLocalStaticRTP` bound to every connection** — the encode-once fan-out |
 | `internal/audio` | miniaudio compiled in from `shim.c`, its callbacks in C feeding lock-free rings; a Go pump every 20 ms does capture → voice gate → Opus and keeps the playback ring fed from the playout (per-peer jitter buffer, Opus decode with PLC, mixer). No audio thread ever enters Go |
-| `internal/tui` | Bubble Tea: participants with their dots, the chat, three keys. Repaints only changed lines |
+| `internal/tui` | The interface: a cell canvas drawn the way Ink drew it (`canvas.go`), the palette (`theme.go`), the chrome (`frame.go`, `chips.go`), one file per screen, and the Bubble Tea model with every key the Node client has (`model.go`). Bubble Tea writes only the lines that changed |
+| `internal/engine` | The room session: signaling, the mesh, the pump, the stats, and the snapshots the interface draws from |
+| `internal/settings` | The same `settings.json` the Node client keeps, field for field |
 
 The voice gate is a port of `packages/terminal/src/lib/audio/voice-gate.ts`, constant for
 constant, with the same tests (`go test ./...`).

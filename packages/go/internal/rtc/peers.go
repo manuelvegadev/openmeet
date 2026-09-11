@@ -360,6 +360,26 @@ func (m *Manager) CloseAll() {
 	}
 }
 
+// RTTs is the current round-trip time per peer in milliseconds, from the ICE candidate pair
+// in use — what the header's RTT and the per-peer latency estimate are built on.
+func (m *Manager) RTTs() map[string]int {
+	m.mu.Lock()
+	conns := make(map[string]*conn, len(m.conns))
+	for id, c := range m.conns {
+		conns[id] = c
+	}
+	m.mu.Unlock()
+	out := map[string]int{}
+	for id, c := range conns {
+		for _, st := range c.pc.GetStats() {
+			if pair, ok := st.(webrtc.ICECandidatePairStats); ok && pair.State == webrtc.StatsICECandidatePairStateSucceeded && pair.Nominated {
+				out[id] = int(pair.CurrentRoundTripTime*1000 + 0.5)
+			}
+		}
+	}
+	return out
+}
+
 // Stats returns a one-line summary per peer for the debug view.
 func (m *Manager) Stats() string {
 	m.mu.Lock()
