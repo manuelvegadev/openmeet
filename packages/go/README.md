@@ -25,7 +25,7 @@ packages/go/openmeet                      # the home screen; --room standup goes
 ```
 
 `--input-device` / `--output-device` match a substring of the name; `--no-voice-gate`
-transmits continuously; `--audio-kbps` sets the one encoder (64 mono by default);
+transmits continuously; the Audio Send setting (128 kbps by default) is the one encoder's bitrate and `--audio-kbps` overrides it for a run;
 `--opus-complexity` its CPU lever (10 by default). Build with `-tags nolibopusfile` on a
 machine without libopusfile; the client never uses it.
 

@@ -622,6 +622,14 @@ func (e *Engine) statsLoop() {
 				if rtt, ok := rtts[id]; ok {
 					p.prevRTT = rtt
 				}
+				if e.debug {
+					for _, r := range []*video.Receiver{p.screen, p.webcam} {
+						if r != nil {
+							pk, fr := r.Stats()
+							e.logf("video in from %s (%s): %d packets, %d frames, window open %v", p.p.Username, r.Kind, pk, fr, r.IsOpen())
+						}
+					}
+				}
 				if p.prevRTT > 0 || st.Received > 0 {
 					jb := st.JitterMs * 2
 					if jb < 20 {

@@ -118,7 +118,7 @@ export const es: Copy = {
       pane: {
         title: 'ajustes · audio',
         rows: [
-          { k: 'Códec', v: 'Opus 48 kHz', tone: 'ok', note: '· 64 kbps, un codificador para la sala' },
+          { k: 'Códec', v: 'Opus 48 kHz', tone: 'ok', note: '· 128 kbps por defecto, ajustable; un codificador para la sala' },
           {
             k: 'Pérdidas',
             v: 'FEC en banda',

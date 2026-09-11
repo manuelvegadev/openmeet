@@ -78,5 +78,5 @@ export const STACK = [
 ];
 
 /** The one encoder's default, and the flag that moves it (`--audio-kbps` in packages/go). */
-export const AUDIO_KBPS_DEFAULT = 64;
+export const AUDIO_KBPS_DEFAULT = 128;
 export const AUDIO_KBPS_FLAG = `--audio-kbps ${AUDIO_KBPS_DEFAULT}`;

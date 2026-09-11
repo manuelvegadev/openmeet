@@ -397,7 +397,7 @@ func main() {
 		outDev   = flag.String("output-device", "", "output device name (skips the picker)")
 		listDevs = flag.Bool("list-devices", false, "list audio devices and exit")
 		noGate   = flag.Bool("no-voice-gate", false, "transmit continuously instead of only while speaking (saved)")
-		bitrate  = flag.Int("audio-kbps", 64, "Opus bitrate (mono)")
+		bitrate  = flag.Int("audio-kbps", 0, "Opus bitrate (mono); overrides the Audio Send setting for this run")
 		complex  = flag.Int("opus-complexity", 10, "Opus encoder complexity 0..10")
 		debug    = flag.Bool("debug", false, "start with the debug panel on")
 		profile  = flag.String("cpuprofile", "", "write a CPU profile here until exit")
@@ -536,10 +536,15 @@ func main() {
 			if !*noVPIO && !*vpBypass {
 				audio.NoVoiceProcessing = st.s.AudioProcessing == "raw"
 			}
+			// The Audio Send setting is the one encoder's bitrate; the flag is a one-run override.
+			audioBps := st.s.AudioSendKbps * 1000
+			if *bitrate > 0 {
+				audioBps = *bitrate * 1000
+			}
 			e := engine.New(a, engine.Options{
 				ServerURL: *server, Room: roomID, Name: name, Color: color,
 				Input: dev.find(input, false), Output: dev.find(output, true),
-				VoiceGate: st.s.VoiceGate, Bitrate: *bitrate * 1000, Complex: *complex, Debug: *debug,
+				VoiceGate: st.s.VoiceGate, Bitrate: audioBps, Complex: *complex, Debug: *debug,
 				VideoEnabled: videoEnabled, VideoDisabledWhy: videoWhy, WebcamEnabled: webcamEnabled,
 				ScreenSendKbps: st.s.ScreenSendKbps,
 			}, emit)

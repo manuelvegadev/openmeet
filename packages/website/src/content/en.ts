@@ -118,7 +118,7 @@ export const en: Copy = {
       pane: {
         title: 'settings · audio',
         rows: [
-          { k: 'Codec', v: 'Opus 48 kHz', tone: 'ok', note: '· 64 kbps, one encoder for the room' },
+          { k: 'Codec', v: 'Opus 48 kHz', tone: 'ok', note: '· 128 kbps by default, a setting; one encoder for the room' },
           { k: 'Loss', v: 'in-band FEC', tone: 'ok', note: '+ concealment — a lost packet is not a lost syllable' },
           { k: 'Voice gate', v: 'on', tone: 'ok', note: '— silence costs nothing' },
           { k: 'Processing', v: 'Apple', tone: 'ok', note: '(Voice Isolation, echo cancellation) · off' },

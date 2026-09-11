@@ -21,7 +21,7 @@ Client A <──WebRTC P2P──> Client B
 
 - **Topology**: P2P mesh — each client connects directly to every other client
 - **Signaling**: WebSocket for SDP/ICE exchange, chat messages, mute state, and screen share state
-- **Media (Go client)**: WebRTC with Opus audio (48 kHz, 20 ms frames, 64 kbps mono by default, in-band FEC, **one encoder whose packets go to every peer**) and H.264 video from the GPU encoder (webcam in the camera's own aspect ratio, height ≤ 720; screen in the screen's own aspect ratio, short side ≤ 1080 and long side ≤ 3840, 30 fps; one encoded stream per kind shared by every connection, budget 6000 kbps split by peers, floor 800). The retired Node client spoke stereo Opus with RED and VP8, so Node↔Go rooms carry audio and chat but no video
+- **Media (Go client)**: WebRTC with Opus audio (48 kHz, 20 ms frames, mono at the Audio Send setting — 128 kbps by default, `--audio-kbps` overrides — in-band FEC, **one encoder whose packets go to every peer**) and H.264 video from the GPU encoder (webcam in the camera's own aspect ratio, height ≤ 720; screen in the screen's own aspect ratio, short side ≤ 1080 and long side ≤ 3840, 30 fps; one encoded stream per kind shared by every connection, budget 6000 kbps split by peers, floor 800). The retired Node client spoke stereo Opus with RED and VP8, so Node↔Go rooms carry audio and chat but no video
 - **Screen sharing**: Simultaneous webcam + screen share via 3 transceivers per connection
 
 ## Tech Stack
