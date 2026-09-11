@@ -1,0 +1,56 @@
+name: go-client
+
+# The Go client: vet, test and build on a macOS runner — the only host that can build both
+# targets, since malgo/miniaudio links CoreAudio frameworks and Apple's SDK cannot be
+# redistributed, while the Windows build is a zig cross-compile from anywhere.
+# On a `v*` tag the binaries and the install scripts go to a GitHub Release.
+
+on:
+  push:
+    branches: [main, go-migration]
+    paths: ['packages/go/**', '.github/workflows/go-client.yml']
+    tags: ['v*']
+  pull_request:
+    paths: ['packages/go/**', '.github/workflows/go-client.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+          cache-dependency-path: packages/go/go.sum
+      - name: Toolchain (zig for the Windows cross-build, cmake for libopus)
+        run: brew install zig cmake pkg-config
+      - name: Vet and test
+        working-directory: packages/go
+        run: |
+          go vet ./...
+          go test ./...
+      - name: Build macOS (arm64)
+        run: packages/go/scripts/build.sh
+      - name: Build Windows (amd64)
+        run: packages/go/scripts/build-windows.sh
+      - name: Stage release files
+        run: |
+          mkdir -p out
+          cp packages/go/openmeet out/openmeet-darwin-arm64
+          cp packages/go/dist/windows-amd64/openmeet.exe out/openmeet-windows-amd64.exe
+          cp packages/go/scripts/install.sh packages/go/scripts/install.ps1 out/
+          cp packages/go/scripts/win/wt-profile.ps1 packages/go/scripts/win/create-shortcut.ps1 packages/go/scripts/win/openmeet.ico packages/go/scripts/win/openmeet.png out/
+          (cd out && shasum -a 256 openmeet-* > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openmeet-go
+          path: out/*
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
