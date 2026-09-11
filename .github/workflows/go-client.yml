@@ -27,6 +27,11 @@ jobs:
           cache-dependency-path: packages/go/go.sum
       - name: Toolchain (zig for the Windows cross-build, cmake for libopus)
         run: brew install zig cmake pkg-config
+      # A release is the tag and the VERSION file agreeing: the binary reports VERSION, and
+      # the updater compares that with the tag it downloads, so a mismatch would loop.
+      - name: The tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "v$(tr -d '[:space:]' < packages/go/VERSION)" = "${GITHUB_REF_NAME}"
       - name: Vet and test
         working-directory: packages/go
         run: |

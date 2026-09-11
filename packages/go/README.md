@@ -47,6 +47,39 @@ directions, the box sending continuously (`--no-voice-gate`) and decoding a tone
 The exe enumerates the Roland and NVIDIA Broadcast through WASAPI; audio ran over an SSH
 session, which on Windows is enough for sound (only screen capture needs the desktop).
 
+## Releasing
+
+One version number for every platform, in `VERSION`. A release is a tag:
+
+```bash
+echo 0.6.1 > packages/go/VERSION          # and whatever the release changes, committed
+git tag v0.6.1 && git push && git push --tags
+```
+
+`go-client.yml` refuses a tag that disagrees with `VERSION`, builds both binaries on a macOS
+runner (the only host that can link CoreAudio; Windows is a zig cross-build from there),
+and publishes `openmeet-darwin-arm64`, `openmeet-windows-amd64.exe`, the installers, the
+Windows Terminal scripts and `SHA256SUMS` to a GitHub Release. Nothing is signed or
+notarized yet: `install.sh` clears the quarantine flag, and Windows SmartScreen may ask once.
+
+Installing and staying current, from the user's side:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/go/scripts/install.sh | bash   # macOS
+irm https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/go/scripts/install.ps1 | iex           # Windows
+```
+
+The app then keeps itself current (`internal/update`): once a day it asks GitHub Releases,
+downloads the asset for this OS beside the binary, checks that the download runs
+(`--version`), and only then says so on the home screen — `→ v0.6.1` by the version,
+`Update downloaded. Restart to install.` and `r` to swap and start again; quitting installs
+it too. The swap is a rename, so it happens only once the process is about to exit (Windows
+will not replace a running exe: it is renamed to `.old.exe` and removed on the next start).
+The `Updates` setting turns it down to a notice, which prints the install command instead,
+or off; `--no-auto-update` does the same for one run. A Homebrew tap is the obvious next
+step for macOS and deliberately not done: the updater covers the same ground with no
+formula to keep in step.
+
 ## Shape
 
 | package | what |

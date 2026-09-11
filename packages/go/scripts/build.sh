@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build the Go client for this machine: packages/go/openmeet, stamped with the version in
-# packages/terminal/package.json so both clients report the one version.
+# packages/go/VERSION — the one number for every platform (see "Releasing" in the README).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$HERE/../terminal/package.json")"
+VERSION="$(tr -d '[:space:]' < "$HERE/VERSION")"
 CROSS="$HERE/.cross"
 OPUS_VER=1.5.2
 

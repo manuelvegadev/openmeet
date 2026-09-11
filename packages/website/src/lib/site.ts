@@ -8,7 +8,7 @@ export const SELF_HOST_URL = `${GITHUB_URL}#deployment`;
 export const CHANGELOG_URL = `${GITHUB_URL}/releases`;
 export const AUTHOR = { name: 'Manuel Vega', url: 'https://manuelvega.dev' };
 
-/** Injected by Vite from packages/terminal/package.json. */
+/** Injected by Vite from packages/go/VERSION. */
 export const APP_VERSION: string = __APP_VERSION__;
 
 /** Where each language lives. English is the root, so it is also the `x-default`. */

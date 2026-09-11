@@ -3,17 +3,15 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 /**
- * The version the page quotes is the terminal package's, read at build time, so a release
- * bump shows up on the site with the next deploy and nobody edits it by hand.
+ * The version the page quotes is the client's (`packages/go/VERSION`), read at build time, so
+ * a release bump shows up on the site with the next deploy and nobody edits it by hand.
  */
-const terminal = JSON.parse(readFileSync(new URL('../terminal/package.json', import.meta.url), 'utf8')) as {
-  version: string;
-};
+const version = readFileSync(new URL('../go/VERSION', import.meta.url), 'utf8').trim();
 
 export default defineConfig({
   plugins: [react()],
   define: {
-    __APP_VERSION__: JSON.stringify(terminal.version),
+    __APP_VERSION__: JSON.stringify(version),
   },
   build: {
     emptyOutDir: true,

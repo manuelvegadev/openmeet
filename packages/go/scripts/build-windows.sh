@@ -14,7 +14,7 @@ CROSS="$HERE/.cross"
 TARGET=x86_64-windows-gnu
 OPUS_VER=1.5.2
 OUT="$HERE/dist/windows-amd64/openmeet.exe"
-VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$HERE/../terminal/package.json")"
+VERSION="$(tr -d '[:space:]' < "$HERE/VERSION")"
 
 mkdir -p "$CROSS/bin" "$HERE/dist/windows-amd64"
 # zig as a drop-in C toolchain for the target; cmake wants single executables.
