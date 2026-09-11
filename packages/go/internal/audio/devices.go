@@ -170,13 +170,20 @@ type Pump struct {
 	priority string
 	path     string
 	reopens  int
+	// What the capture side delivered since the last look: frames, and the last RMS.
+	capFrames int
+	capRMS    float64
 	// OnEvent hears about reopens: a device changed its rate or the default moved.
 	OnEvent func(msg string)
 }
 
 func (e *Engine) StartPump(in, out *Device, onPCM func(pcm []int16), fill func(out []int16)) (*Pump, error) {
 	p := &Pump{engine: e, in: in, out: out, stop: make(chan struct{}), done: make(chan struct{}), ahead: SampleRate * PlayAheadMs / 1000}
+	// Watch before opening: a Bluetooth headset switches profile — and rate — *because* we
+	// open its microphone, so the change lands during the open and must not be missed.
+	p.watch()
 	if err := p.openStreams(); err != nil {
+		C.om_unwatch()
 		return nil, err
 	}
 	go p.run(onPCM, fill)
@@ -207,7 +214,6 @@ func (p *Pump) openStreams() error {
 			if VoiceProcessingBypass {
 				p.path = "Apple voice processing, bypassed (Voice Isolation only)"
 			}
-			p.watch()
 			return nil
 		} else if msg := C.GoString(C.om_duplex_error()); msg != "" && msg != "not on this platform" {
 			p.path = "miniaudio (voice processing unit refused: " + msg + ")"
@@ -226,7 +232,6 @@ func (p *Pump) openStreams() error {
 	if p.path == "" {
 		p.path = "miniaudio"
 	}
-	p.watch()
 	return nil
 }
 
@@ -243,7 +248,6 @@ func (p *Pump) watch() {
 }
 
 func (p *Pump) closeStreams() {
-	C.om_unwatch()
 	if p.dup != nil {
 		C.om_close_duplex(p.dup)
 		p.dup = nil
@@ -265,6 +269,7 @@ func (p *Pump) reopen() error {
 	if p.out != nil {
 		p.out = p.engine.findByName(true, p.out.Name)
 	}
+	p.watch()
 	return p.openStreams()
 }
 
@@ -311,9 +316,12 @@ func (p *Pump) run(onPCM func([]int16), fill func([]int16)) {
 			return
 		case now := <-t.C:
 			if C.om_devices_changed() != 0 {
-				// Let the change settle — a profile switch takes a moment — then follow it.
+				// Let the change settle — a profile switch takes a moment — then follow it, and
+				// let the reopen's own property changes pass without counting as another.
 				time.Sleep(300 * time.Millisecond)
 				err := p.reopen()
+				time.Sleep(200 * time.Millisecond)
+				C.om_devices_changed()
 				p.mu.Lock()
 				p.reopens++
 				p.mu.Unlock()
@@ -348,6 +356,10 @@ func (p *Pump) run(onPCM func([]int16), fill func([]int16)) {
 			p.mu.Unlock()
 			last = now
 			if n := p.capture.read(inBuf); n > 0 {
+				p.mu.Lock()
+				p.capFrames += n
+				p.capRMS = RMS(inBuf[:n])
+				p.mu.Unlock()
 				onPCM(inBuf[:n])
 			}
 			for ringFrames-p.playback.Available() < ahead {
@@ -389,6 +401,16 @@ func (p *Pump) Describe() string {
 // Path says which way the devices are open.
 func (p *Pump) Path() string { return p.path }
 
+// Captured says what the microphone side delivered since the last call: frames and the
+// last RMS. Frames per second at 48 kHz should read 48000; zero means a dead capture.
+func (p *Pump) Captured() (frames int, rms float64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	frames, rms = p.capFrames, p.capRMS
+	p.capFrames = 0
+	return
+}
+
 // Reopens is how often a device change made the pump open its devices again.
 func (p *Pump) Reopens() int {
 	p.mu.Lock()
@@ -403,4 +425,5 @@ func (p *Pump) Close() {
 	close(p.stop)
 	<-p.done
 	p.closeStreams()
+	C.om_unwatch()
 }

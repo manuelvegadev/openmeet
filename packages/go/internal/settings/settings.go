@@ -28,8 +28,9 @@ type App struct {
 	ScreenReceiveKbps  int     `json:"screenReceiveKbps"`
 	NoiseSuppression   bool    `json:"noiseSuppression"`
 	VoiceGate          bool    `json:"voiceGate"`
-	// macOS: "raw" (miniaudio, cheapest) or "apple" (the voice processing unit: Voice
-	// Isolation, echo cancellation, gain — at ~10% of a core, measured). Go client only.
+	// macOS: "apple" (the voice processing unit: Voice Isolation, echo cancellation, gain
+	// — at ~10% of a core, measured; the default, and what an empty value means) or "raw"
+	// (miniaudio, cheapest). Go client only.
 	AudioProcessing string  `json:"audioProcessing,omitempty"`
 	PauseRendering  string  `json:"pauseRendering"`
 	AutoUpdate      string  `json:"autoUpdate"`

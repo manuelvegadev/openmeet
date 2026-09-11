@@ -91,9 +91,10 @@ func (st *store) Rows() []tui.SettingsRow {
 		rows = append(rows, tui.SettingsRow{Label: "Camera", Value: cam})
 	}
 	if runtime.GOOS == "darwin" {
-		proc := "Off (raw devices, cheapest)"
-		if s.AudioProcessing == "apple" {
-			proc = "Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)"
+		// On unless turned off: every feature from the start, the cost in the row.
+		proc := "Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)"
+		if s.AudioProcessing == "raw" {
+			proc = "Off (raw devices, cheapest)"
 		}
 		rows = append(rows, tui.SettingsRow{Label: "Audio Processing", Value: proc})
 	}
@@ -157,10 +158,10 @@ func (st *store) Run(idx int) string {
 	case "Camera":
 		return "camera"
 	case "Audio Processing":
-		if s.AudioProcessing == "apple" {
-			s.AudioProcessing = "raw"
-		} else {
+		if s.AudioProcessing == "raw" {
 			s.AudioProcessing = "apple"
+		} else {
+			s.AudioProcessing = "raw"
 		}
 	case "Video Overlay":
 		s.VideoOverlay = !s.VideoOverlay
@@ -339,7 +340,7 @@ func main() {
 		Join: func(roomID, name, color, input, output string) (tui.Room, error) {
 			// The setting decides the macOS path unless a flag said otherwise for this run.
 			if !*noVPIO && !*vpBypass {
-				audio.NoVoiceProcessing = st.s.AudioProcessing != "apple"
+				audio.NoVoiceProcessing = st.s.AudioProcessing == "raw"
 			}
 			e := engine.New(a, engine.Options{
 				ServerURL: *server, Room: roomID, Name: name, Color: color,

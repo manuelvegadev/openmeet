@@ -314,7 +314,9 @@ func (e *Engine) statsLoop() {
 				e.logf("audio: %s", e.pump.Describe())
 			}
 			if e.debug {
-				e.logf("pump: %d late ticks, %d ms ahead, %d device underruns", e.pump.Late(), e.pump.AheadMs(), e.pump.Underruns())
+				frames, rms := e.pump.Captured()
+				e.logf("pump: %d late ticks, %d ms ahead, %d device underruns, capture %d frames/s rms %.0f, %d reopens",
+					e.pump.Late(), e.pump.AheadMs(), e.pump.Underruns(), frames/2, rms, e.pump.Reopens())
 			}
 			rtts := e.peers.RTTs()
 			e.mu.Lock()
