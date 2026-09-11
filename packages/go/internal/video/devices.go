@@ -60,13 +60,26 @@ func Screens() []Device {
 	return screensList
 }
 
-// Cameras lists the cameras avfoundation sees; macOS only.
+var (
+	camerasMu   sync.Mutex
+	camerasAt   time.Time
+	camerasList []Device
+)
+
+// Cameras lists the cameras avfoundation sees; macOS only. Cached a minute like the
+// screens, because it spawns ffmpeg and the settings screen asks on every frame it draws.
 func Cameras() []Device {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	cams, _ := avfoundationDevices()
-	return cams
+	camerasMu.Lock()
+	defer camerasMu.Unlock()
+	if time.Since(camerasAt) < time.Minute && camerasList != nil {
+		return camerasList
+	}
+	camerasList, _ = avfoundationDevices()
+	camerasAt = time.Now()
+	return camerasList
 }
 
 var avLine = regexp.MustCompile(`\[(\d+)\] (.+)$`)

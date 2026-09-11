@@ -69,6 +69,17 @@ func (st *store) SetCheck(at time.Time, latest string) {
 	_ = settings.Save(st.s)
 }
 
+// CameraID is the camera a share uses, "" for the system's first.
+func (st *store) CameraID() string { return settings.Str(st.s.VideoDeviceID) }
+
+func (st *store) SetCamera(id string) {
+	st.s.VideoDeviceID = nil
+	if id != "" {
+		st.s.VideoDeviceID = settings.Ptr(id)
+	}
+	_ = settings.Save(st.s)
+}
+
 func orDefault(s string) string {
 	if s == "" {
 		return "System Default"
@@ -110,6 +121,11 @@ func (st *store) Rows() []tui.SettingsRow {
 		cam := "Default (0)"
 		if v := settings.Str(s.VideoDeviceID); v != "" {
 			cam = "Device " + v
+			for _, c := range video.Cameras() {
+				if c.ID == v {
+					cam = c.Label()
+				}
+			}
 		}
 		rows = append(rows, tui.SettingsRow{Tab: "Video", Label: "Camera", Value: cam, Help: "Which camera a share uses."})
 	}
@@ -622,7 +638,8 @@ func main() {
 		Version: Version, Platform: name, Features: features,
 		Settings: st, Devices: dev,
 		InitialRoom: *room, InputFlag: *inDev, OutputFlag: *outDev,
-		Screens: func() []tui.VideoChoice { return choices(video.Screens()) },
+		Screens:    func() []tui.VideoChoice { return choices(video.Screens()) },
+		AllCameras: func() []tui.VideoChoice { return choices(video.Cameras()) },
 		Cameras: func() []tui.VideoChoice {
 			cams := video.Cameras()
 			// A camera named on the command line or in settings is the one, not a choice.

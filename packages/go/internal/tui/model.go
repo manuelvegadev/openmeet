@@ -50,9 +50,11 @@ type Host struct {
 	Devices  DeviceSource
 	// Join opens a room session; events arrive on the channel the host was given.
 	Join func(room, name, color, input, output string) (Room, error)
-	// The screens and cameras a share can pick from; nil where video is off.
-	Screens func() []VideoChoice
-	Cameras func() []VideoChoice
+	// The screens and cameras a share can pick from; nil where video is off. Cameras narrows
+	// to the chosen one — a share does not ask twice — so the settings ask AllCameras.
+	Screens    func() []VideoChoice
+	Cameras    func() []VideoChoice
+	AllCameras func() []VideoChoice
 	// `r` on the home screen once an update is downloaded: swap it in and start again.
 	RestartUpdate func()
 	// This launch is the first on a version that installed itself.
@@ -69,8 +71,11 @@ type SettingsStore interface {
 	SetIdentity(name, color string)
 	InputID() string
 	OutputID() string
+	CameraID() string
 	DevicesConfigured() bool
 	SetDevices(input, output string)
+	// The camera a share will use; "" is the system's first.
+	SetCamera(id string)
 	Rows() []SettingsRow
 	// Meters are the cost and quality bars for one tab, or none where they say nothing.
 	Meters(tab string) []Meter
@@ -175,6 +180,7 @@ type Model struct {
 	settingsTab    int
 	picker         string // "", "input", "output", "camera"
 	pickerItems    []string
+	pickerCams     []VideoChoice
 	pickerIdx      int
 	settingsLoaded bool
 
@@ -501,6 +507,12 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 				m.host.Settings.SetDevices(chosen, m.host.Settings.OutputID())
 			case "output":
 				m.host.Settings.SetDevices(m.host.Settings.InputID(), chosen)
+			case "camera":
+				id := ""
+				if i := m.pickerIdx - 1; i >= 0 && i < len(m.pickerCams) {
+					id = m.pickerCams[i].ID
+				}
+				m.host.Settings.SetCamera(id)
 			}
 			m.picker = ""
 		}
@@ -553,6 +565,7 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 				m.openPicker("output", m.host.Devices.Outputs(), m.host.Settings.OutputID())
 			case "camera":
 				m.openPicker("camera", nil, "")
+				return nil
 			}
 		}
 	}
@@ -562,8 +575,20 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 func (m *Model) openPicker(kind string, devices []string, saved string) {
 	m.picker = kind
 	if kind == "camera" {
+		m.pickerCams = nil
+		if m.host.AllCameras != nil {
+			m.pickerCams = m.host.AllCameras()
+		}
 		m.pickerItems = []string{"Default (0)"}
+		for _, cam := range m.pickerCams {
+			m.pickerItems = append(m.pickerItems, cam.Label)
+		}
 		m.pickerIdx = 0
+		for i, cam := range m.pickerCams {
+			if cam.ID != "" && cam.ID == m.host.Settings.CameraID() {
+				m.pickerIdx = i + 1
+			}
+		}
 		return
 	}
 	m.pickerItems = append([]string{"System Default"}, devices...)
