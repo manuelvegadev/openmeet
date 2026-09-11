@@ -100,9 +100,13 @@ func NewManager(o Options) (*Manager, error) {
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
+	se := webrtc.SettingEngine{}
+	if n, err := newQOSNet(); err == nil {
+		se.SetNet(n)
+	}
 	return &Manager{
 		myID:    o.MyID,
-		api:     webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithInterceptorRegistry(reg)),
+		api:     webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithInterceptorRegistry(reg), webrtc.WithSettingEngine(se)),
 		track:   track,
 		send:    o.Send,
 		onAudio: o.OnAudio,

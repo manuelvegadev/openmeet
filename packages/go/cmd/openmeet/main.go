@@ -263,6 +263,8 @@ func main() {
 		debug    = flag.Bool("debug", false, "start with the debug panel on")
 		profile  = flag.String("cpuprofile", "", "write a CPU profile here until exit")
 		version  = flag.Bool("version", false, "print the version and exit")
+		headless = flag.Bool("headless", false, "no interface: join --room, log to stdout, quit on ctrl-c (for measuring)")
+		noPrio   = flag.Bool("no-priority", false, "leave process and thread priorities alone (for measuring)")
 	)
 	flag.Parse()
 	if *version {
@@ -298,6 +300,7 @@ func main() {
 		return
 	}
 
+	audio.NoPriority = *noPrio
 	st := &store{s: settings.Load()}
 	if *noGate {
 		st.s.VoiceGate = false
@@ -329,6 +332,34 @@ func main() {
 		},
 	}
 
+	if *headless {
+		if *room == "" {
+			log.Fatal("--headless needs --room")
+		}
+		log.SetFlags(log.Ltime | log.Lmicroseconds)
+		go func() {
+			for msg := range events {
+				switch m := msg.(type) {
+				case tui.DebugLine:
+					log.Print(m.Text)
+				case tui.Line:
+					log.Printf("%s %s", m.Kind, m.Text)
+				}
+			}
+		}()
+		r, err := host.Join(*room, st.Name(), st.Color(), dev.Resolve(*inDev, dev.Inputs()), dev.Resolve(*outDev, dev.Outputs()))
+		if err != nil {
+			log.Fatal(err)
+		}
+		if !*debug {
+			log.Print("headless: use --debug for the pump and playout lines")
+		}
+		sigc := make(chan os.Signal, 1)
+		osSignal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+		<-sigc
+		r.Close()
+		return
+	}
 	model := tui.New(host)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	go func() {

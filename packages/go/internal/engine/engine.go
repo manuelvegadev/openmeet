@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -139,7 +140,15 @@ func (e *Engine) Start() error {
 	if err != nil {
 		return err
 	}
-	e.logf("audio: %s", e.pump.Describe())
+	// The call outranks whatever else the machine is doing: the process class here, the
+	// pump's own thread inside audio.Pump. Neither needs elevation.
+	if audio.NoPriority {
+		e.logf("process priority: left alone (asked)")
+	} else if err := audio.RaiseProcessPriority(); err != nil {
+		e.logf("process priority: not raised (%v)", err)
+	} else if runtime.GOOS == "windows" {
+		e.logf("process priority: high")
+	}
 	go e.loop()
 	go e.statsLoop()
 	return sig.Send(signal.Message{Type: "join-room", RoomID: e.opts.Room, Username: e.opts.Name, Color: e.opts.Color})
@@ -291,6 +300,7 @@ func (e *Engine) statsLoop() {
 	prevRecv := map[string]int64{}
 	prevLoss := map[string][2]int{}
 	last := time.Now()
+	described := false
 	for {
 		select {
 		case <-e.done:
@@ -298,6 +308,13 @@ func (e *Engine) statsLoop() {
 		case now := <-t.C:
 			dt := now.Sub(last).Seconds()
 			last = now
+			if !described {
+				described = true
+				e.logf("audio: %s", e.pump.Describe())
+			}
+			if e.debug {
+				e.logf("pump: %d late ticks, %d ms ahead, %d device underruns", e.pump.Late(), e.pump.AheadMs(), e.pump.Underruns())
+			}
 			rtts := e.peers.RTTs()
 			e.mu.Lock()
 			sent := e.sentBytes

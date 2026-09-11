@@ -12,7 +12,9 @@ import "C"
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 )
@@ -25,6 +27,10 @@ const (
 	FrameLen    = SampleRate * FrameMs / 1000 // 960 samples per channel
 	OutChannels = 2
 )
+
+// NoPriority leaves the pump's thread at the normal priority: for measuring what the
+// priority buys, never for a call.
+var NoPriority = false
 
 // PeriodMs is the device period. The rings are pumped every PumpMs from Go; the ring holds
 // RingMs so a late pump is a late pump and not a dropout.
@@ -110,7 +116,7 @@ func (e *Engine) open(playback bool, dev *Device, channels int) (*Stream, error)
 	if dev != nil {
 		idx = C.int(dev.Index)
 	}
-	s := C.om_open(pb, idx, C.int(channels), SampleRate, C.int(PeriodMs), C.int(RingMs))
+	s := C.om_open(pb, idx, C.int(channels), SampleRate, C.int(PeriodMs), C.int(RingMs), C.int(PlayAheadMs))
 	if s == nil {
 		kind := "capture"
 		if playback {
@@ -133,13 +139,23 @@ func (st *Stream) write(buf []int16) int {
 }
 
 // Pump moves audio between the device rings and the pipeline on a goroutine of our own:
-// every PumpMs it hands whatever the microphone captured to onPCM and keeps PlayAheadMs of
-// mixed audio in the playback ring. The audio threads never see Go.
+// every PumpMs it hands whatever the microphone captured to onPCM and keeps the playback
+// ring `ahead` full. The audio threads never see Go.
+//
+// The goroutine is locked to a thread of its own with the platform's audio priority: under
+// a game or a browser on a modest machine an ordinary thread's 20 ms tick arrives late, the
+// ring runs dry, and that is the stutter. And when it still runs dry, the pump gives the
+// ring more headroom — 20 ms at a time, up to the ring — so latency is only paid under
+// pressure, and only as much as the pressure needs.
 type Pump struct {
 	capture  *Stream
 	playback *Stream
 	stop     chan struct{}
 	done     chan struct{}
+	mu       sync.Mutex
+	ahead    int // frames kept in the playback ring
+	late     int // ticks that arrived more than a period late
+	priority string
 }
 
 func (e *Engine) StartPump(in, out *Device, onPCM func(pcm []int16), fill func(out []int16)) (*Pump, error) {
@@ -152,26 +168,59 @@ func (e *Engine) StartPump(in, out *Device, onPCM func(pcm []int16), fill func(o
 		capture.Close()
 		return nil, err
 	}
-	p := &Pump{capture: capture, playback: playback, stop: make(chan struct{}), done: make(chan struct{})}
+	p := &Pump{capture: capture, playback: playback, stop: make(chan struct{}), done: make(chan struct{}), ahead: SampleRate * PlayAheadMs / 1000}
 	go p.run(onPCM, fill)
 	return p, nil
 }
 
 func (p *Pump) run(onPCM func([]int16), fill func([]int16)) {
 	defer close(p.done)
+	runtime.LockOSThread()
+	if NoPriority {
+		p.mu.Lock()
+		p.priority = "normal (asked)"
+		p.mu.Unlock()
+	} else if err := RaiseAudioThread(); err != nil {
+		p.mu.Lock()
+		p.priority = "normal (" + err.Error() + ")"
+		p.mu.Unlock()
+	} else {
+		p.mu.Lock()
+		p.priority = "audio"
+		p.mu.Unlock()
+	}
 	inBuf := make([]int16, SampleRate*RingMs/1000)
 	// Playback is written in 10 ms pieces, so the ring is topped up rather than refilled.
 	piece := SampleRate * 10 / 1000 * OutChannels
 	outBuf := make([]int16, piece)
-	ahead := SampleRate * PlayAheadMs / 1000
 	ringFrames := SampleRate * RingMs / 1000
-	t := time.NewTicker(time.Duration(PumpMs) * time.Millisecond)
+	period := time.Duration(PumpMs) * time.Millisecond
+	t := time.NewTicker(period)
 	defer t.Stop()
+	last := time.Now()
+	lastUnderruns := p.playback.Underruns()
+	started := time.Now()
 	for {
 		select {
 		case <-p.stop:
 			return
-		case <-t.C:
+		case now := <-t.C:
+			p.mu.Lock()
+			if now.Sub(last) > 2*period {
+				p.late++
+			}
+			// The ring ran dry since the last tick: the machine is under pressure, so keep
+			// more audio ahead of the device. Up to the ring less one period. Not in the
+			// first second, which is the devices settling and says nothing about the machine.
+			if u := p.playback.Underruns(); u > lastUnderruns {
+				lastUnderruns = u
+				if step := SampleRate * 20 / 1000; now.Sub(started) > time.Second && p.ahead+step <= ringFrames-SampleRate*PeriodMs/1000 {
+					p.ahead += step
+				}
+			}
+			ahead := p.ahead
+			p.mu.Unlock()
+			last = now
 			if n := p.capture.read(inBuf); n > 0 {
 				onPCM(inBuf[:n])
 			}
@@ -185,9 +234,30 @@ func (p *Pump) run(onPCM func([]int16), fill func([]int16)) {
 	}
 }
 
-// Describe says what the devices are really running at.
+// Late is how many ticks came more than a period late; AheadMs the current headroom.
+func (p *Pump) Late() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.late
+}
+
+func (p *Pump) AheadMs() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ahead * 1000 / SampleRate
+}
+
+// Priority says what the pump's thread got: "audio", or "normal (why)".
+func (p *Pump) Priority() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.priority
+}
+
+// Describe says what the devices are really running at, and what the pump's thread got.
 func (p *Pump) Describe() string {
-	return fmt.Sprintf("capture %d Hz, playback %d Hz, ring %d ms, pump every %d ms", p.capture.Rate(), p.playback.Rate(), RingMs, PumpMs)
+	return fmt.Sprintf("capture %d Hz, playback %d Hz, ring %d ms, pump every %d ms, ahead %d ms, thread priority %s",
+		p.capture.Rate(), p.playback.Rate(), RingMs, PumpMs, p.AheadMs(), p.Priority())
 }
 
 // Underruns is how often the playback callback found the ring empty, plus capture overruns.

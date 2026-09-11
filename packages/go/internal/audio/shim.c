@@ -90,7 +90,7 @@ static void playback_cb(ma_device* dev, void* out, const void* in, ma_uint32 fra
   }
 }
 
-om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs) {
+om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs, int prefillMs) {
   om_stream* s = (om_stream*)calloc(1, sizeof(om_stream));
   if (!s) return NULL;
   s->channels = channels;
@@ -118,6 +118,19 @@ om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int pe
     ma_pcm_rb_uninit(&s->rb);
     free(s);
     return NULL;
+  }
+  if (playback && prefillMs > 0) {
+    // Silence ahead of the device before it starts, so its first callbacks find audio and
+    // the pump has a period or two to arrive: the underruns a call used to begin with.
+    ma_uint32 n = (ma_uint32)(rate * prefillMs / 1000);
+    while (n > 0) {
+      ma_uint32 got = n;
+      void* dst;
+      if (ma_pcm_rb_acquire_write(&s->rb, &got, &dst) != MA_SUCCESS || got == 0) break;
+      memset(dst, 0, (size_t)got * (size_t)channels * sizeof(ma_int16));
+      ma_pcm_rb_commit_write(&s->rb, got);
+      n -= got;
+    }
   }
   if (ma_device_start(&s->dev) != MA_SUCCESS) {
     ma_device_uninit(&s->dev);

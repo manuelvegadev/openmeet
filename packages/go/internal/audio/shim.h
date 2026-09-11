@@ -6,7 +6,7 @@ int om_init(void);
 int om_refresh(void);
 int om_device_count(int playback);
 int om_device_name(int playback, int index, char* buf, int len, int* isDefault);
-om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs);
+om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs, int prefillMs);
 int om_rate(om_stream* s);
 int om_available(om_stream* s);
 int om_underruns(om_stream* s);
