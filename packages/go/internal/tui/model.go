@@ -66,6 +66,9 @@ type DeviceSource interface {
 	Label(name string) string
 	// A Bluetooth headset: its microphone drops it to the hands-free profile.
 	IsBluetooth(name string) bool
+	// For a raw device whose effects live on a virtual sibling in the list (an Elgato Wave
+	// beside "Wave Link MicrophoneFX"), that sibling's name; "" otherwise.
+	EffectsSibling(name string, list []string) string
 	// The mic test: level polling and a tone.
 	StartMicTest(input, output string) (MicTest, error)
 	// A saved id resolved to a listed name, or "" when none matches.
@@ -853,7 +856,14 @@ func (m *Model) deviceHint() string {
 	if m.devStep != "output" && m.devStep != "test" {
 		return ""
 	}
-	if m.devInput == "" || !m.host.Devices.IsBluetooth(m.devInput) {
+	if m.devInput == "" {
+		return ""
+	}
+	// The raw side of a device whose effects live on a virtual sibling: say where they are.
+	if sibling := m.host.Devices.EffectsSibling(m.devInput, m.devInputs); sibling != "" {
+		return "The effects for this microphone are applied on \"" + sibling + "\", which is also in the list; this one is the signal before them."
+	}
+	if !m.host.Devices.IsBluetooth(m.devInput) {
 		return ""
 	}
 	if m.devStep == "output" || (m.devOutput != "" && m.host.Devices.IsBluetooth(m.devOutput)) {

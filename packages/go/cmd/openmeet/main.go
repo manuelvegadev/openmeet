@@ -235,6 +235,22 @@ func (d *devices) Label(name string) string {
 	return name
 }
 
+// EffectsSibling: Elgato's Wave microphones show up raw under their own name while Wave
+// Link puts the processed signal on "Wave Link MicrophoneFX"; choosing the raw one is how
+// "noise removal does nothing" happens on a Mac. Only when the sibling is actually listed.
+func (d *devices) EffectsSibling(name string, list []string) string {
+	l := strings.ToLower(name)
+	if !strings.Contains(l, "wave") || effects(name) != "" {
+		return ""
+	}
+	for _, n := range list {
+		if strings.Contains(strings.ToLower(n), "wave link microphonefx") {
+			return n
+		}
+	}
+	return ""
+}
+
 func (d *devices) IsBluetooth(name string) bool {
 	for _, playback := range []bool{false, true} {
 		if dev := d.find(name, playback); dev != nil && dev.Bluetooth {
