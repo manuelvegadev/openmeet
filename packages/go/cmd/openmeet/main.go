@@ -11,6 +11,8 @@ import (
 	osSignal "os/signal"
 	"runtime"
 	"runtime/pprof"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -79,56 +81,86 @@ func orDefault(s string) string {
 // Rendering had nothing behind them in this client — the fields stay in settings.json, and
 // what each would take is in docs/backlog.md, but a row that does nothing is worse than no
 // row, and this is where someone goes to understand why a call sounds the way it does.
+//
+// A row with a fixed set of values carries all of them, so the screen shows what a setting
+// could be and not only what it is. Nothing says "applies on next join": everything here
+// does, the dot beside the title says it once, and this screen is only reachable from the
+// home screen anyway.
 func (st *store) Rows() []tui.SettingsRow {
 	s := st.s
-	gate := "Off (always sending)"
-	if s.VoiceGate {
-		gate = "On (silence is not sent)"
-	}
-	updates := map[string]string{"auto": "install on exit", "notify": "tell me, do not install", "off": "do not check"}[s.AutoUpdate]
 	rows := []tui.SettingsRow{
-		{Tab: "Audio", Label: "Audio Input", Value: orDefault(st.InputID())},
-		{Tab: "Audio", Label: "Audio Output", Value: orDefault(st.OutputID())},
-		{Tab: "Audio", Label: "Audio Processing", Value: processingValue(s.AudioProcessing)},
-		{Tab: "Audio", Label: "Mic Level", Value: micLevelValue(s.MicLevel)},
-		{Tab: "Audio", Label: "Voice Gate", Value: gate},
-		{Tab: "Audio", Label: "Audio Send", Value: fmt.Sprintf("%d kbps (applies on next join)", s.AudioSendKbps)},
+		{Tab: "Audio", Label: "Audio Input", Value: orDefault(st.InputID()),
+			Help: "Where your voice is taken from. Devices that carry their own effects are offered first."},
+		{Tab: "Audio", Label: "Audio Output", Value: orDefault(st.OutputID()),
+			Help: "Where the room is played back."},
 	}
+	if proc := processingChoices(); proc != nil {
+		rows = append(rows, tui.SettingsRow{Tab: "Audio", Label: "Audio Processing",
+			Choices: proc, Choice: boolChoice(s.AudioProcessing != "raw"), Help: processingHelp()})
+	}
+	rows = append(rows,
+		tui.SettingsRow{Tab: "Audio", Label: "Mic Level", Choices: []string{"Auto", "Off"}, Choice: boolChoice(s.MicLevel != "off"),
+			Help: "Levels your voice, up to +18 dB, so you arrive as loud as everyone else. Ours, for the devices whose driver does none."},
+		tui.SettingsRow{Tab: "Audio", Label: "Voice Gate", Choices: []string{"On", "Off"}, Choice: boolChoice(s.VoiceGate),
+			Help: "While you are silent nothing is encoded, sent or decoded anywhere in the room — which is most of a call."},
+		tui.SettingsRow{Tab: "Audio", Label: "Audio Send", Choices: numbers(audioKbpsSteps), Choice: indexOf(audioKbpsSteps, s.AudioSendKbps), Suffix: "kbps",
+			Help: "What the one Opus encoder spends. It encodes once for the whole room, so this is the same whoever is in it."},
+	)
 	if runtime.GOOS == "darwin" {
 		cam := "Default (0)"
 		if v := settings.Str(s.VideoDeviceID); v != "" {
 			cam = "Device " + v
 		}
-		rows = append(rows, tui.SettingsRow{Tab: "Video", Label: "Camera", Value: cam})
+		rows = append(rows, tui.SettingsRow{Tab: "Video", Label: "Camera", Value: cam, Help: "Which camera a share uses."})
 	}
 	rows = append(rows,
-		tui.SettingsRow{Tab: "Video", Label: "Screen Send", Value: fmt.Sprintf("%d kbps per peer at 1080p (applies on next join)", s.ScreenSendKbps)},
-		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Value: fmt.Sprintf("%d of 10 (applies on next join)", complexityOf(s))},
-		tui.SettingsRow{Tab: "Other", Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color()},
-		tui.SettingsRow{Tab: "Other", Label: "Updates", Value: updates},
+		tui.SettingsRow{Tab: "Video", Label: "Screen Send", Choices: numbers(screenKbpsSteps), Choice: indexOf(screenKbpsSteps, s.ScreenSendKbps), Suffix: "kbps at 1080p, split between the people watching",
+			Help: "The ceiling for a screen share. It is encoded once too, on the GPU, whoever is watching."},
+		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Choices: numbers(complexitySteps), Choice: indexOf(complexitySteps, complexityOf(s)),
+			Help: "How hard the encoder works for the same bitrate: 10 is the best sound per kbps and the most CPU, 1 the cheapest. It never changes what is sent, only what it costs to make it."},
+		tui.SettingsRow{Tab: "Other", Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color(),
+			Help: "Your name and colour, as everyone in the room sees them."},
+		tui.SettingsRow{Tab: "Other", Label: "Updates", Choices: []string{"install on exit", "tell me", "do not check"}, Choice: indexOfString(updatePolicies, s.AutoUpdate),
+			Help: "A newer version is looked for once a day and downloaded before it is offered; the home screen says so when one is ready."},
 	)
 	return rows
 }
 
-// What the system's own voice processing is called on this platform, and what it is worth:
-// on macOS Apple's unit, which does the lot; on Windows the communications category, whose
-// content is the endpoint driver's — a lot on a laptop's own microphone, often nothing at
-// all on a USB interface, and Windows Studio Effects only on a machine with an NPU.
-func processingValue(v string) string {
-	if v == "raw" {
-		return "Off (raw devices, cheapest)"
+func boolChoice(on bool) int {
+	if on {
+		return 0
 	}
-	if runtime.GOOS == "windows" {
-		return "Windows (communications mode: whatever the device's driver adds)"
-	}
-	return "Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)"
+	return 1
 }
 
-func micLevelValue(v string) string {
-	if v == "off" {
-		return "Off (send the microphone as it is)"
+func numbers(list []int) []string {
+	out := make([]string, len(list))
+	for i, v := range list {
+		out[i] = strconv.Itoa(v)
 	}
-	return "Auto (level the voice, +18 dB at most)"
+	return out
+}
+
+func indexOf(list []int, v int) int             { return slices.Index(list, v) }
+func indexOfString(list []string, v string) int { return slices.Index(list, v) }
+
+// What the system's own voice processing is called here, and what it is worth. There is no
+// such thing on Linux, so there is no row there either.
+func processingChoices() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{"Apple", "Off"}
+	case "windows":
+		return []string{"Windows", "Off"}
+	}
+	return nil
+}
+
+func processingHelp() string {
+	if runtime.GOOS == "windows" {
+		return "Windows' communications mode: the echo cancellation, noise suppression and gain the device's own driver brings — a laptop microphone usually brings some, a USB interface often none."
+	}
+	return "Apple's voice processing unit: Voice Isolation, echo cancellation and gain, for about a tenth of a core."
 }
 
 func complexityOf(s settings.App) int {

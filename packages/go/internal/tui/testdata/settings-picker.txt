@@ -3,26 +3,26 @@
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │   Audio    Video    Advanced    Other                                                                                │
 ├──━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│   Audio Input        Roland: STREAM (BRIDGE CAST X V2-II)                                                            │
+│ ▸ Audio Input        Roland: STREAM (BRIDGE CAST X V2-II)                                                            │
 │   Audio Output       Roland: CHAT (BRIDGE CAST X V2-II)                                                              │
-│ ▸ Audio Processing    Apple   Off                                                                                    │
+│   Audio Processing    Apple   Off                                                                                    │
 │   Mic Level           Auto   Off                                                                                     │
 │   Voice Gate          On   Off                                                                                       │
 │   Audio Send          64   96   128   192   256  kbps                                                                │
+│                                  ╭────────────────────────────────────────────────╮                                  │
+│                                  │                                                │                                  │
+│                                  │  Audio Input                                   │                                  │
+│                                  │                                                │                                  │
+│                                  │    System Default                              │                                  │
+│                                  │    Wave Link MicrophoneFX — effects            │                                  │
+│                                  │  ▸ MIC (BRIDGE CAST X V2-II)                   │                                  │
+│                                  │                                                │                                  │
+│                                  │   ↑↓  navigate   enter  select   esc  cancel   │                                  │
+│                                  │                                                │                                  │
+│                                  ╰────────────────────────────────────────────────╯                                  │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│   Apple's voice processing unit: Voice Isolation, echo cancellation and gain, for about a tenth of a core.           │
+│   Where your voice is taken from. Devices that carry their own effects are offered first.                            │
 │                                                                                                                      │
 │ ● applies when you next join a room                                                                                  │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤

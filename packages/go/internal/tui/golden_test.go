@@ -55,17 +55,25 @@ func TestJoinMatchesNode(t *testing.T) {
 // capture of Ink. Everything else here is still Node's, cell for cell.
 func settingsPose() ([]SettingsRow, []Meter, []Meter) {
 	rows := []SettingsRow{
-		{Tab: "Audio", Label: "Audio Input", Value: "Roland: STREAM (BRIDGE CAST X V2-II)"},
-		{Tab: "Audio", Label: "Audio Output", Value: "Roland: CHAT (BRIDGE CAST X V2-II)"},
-		{Tab: "Audio", Label: "Audio Processing", Value: "Apple (Voice Isolation, echo cancellation, gain; ~+10% CPU)"},
-		{Tab: "Audio", Label: "Mic Level", Value: "Auto (level the voice, +18 dB at most)"},
-		{Tab: "Audio", Label: "Voice Gate", Value: "On (silence is not sent)"},
-		{Tab: "Audio", Label: "Audio Send", Value: "128 kbps (applies on next join)"},
-		{Tab: "Video", Label: "Camera", Value: "Default (0)"},
-		{Tab: "Video", Label: "Screen Send", Value: "2500 kbps per peer at 1080p (applies on next join)"},
-		{Tab: "Advanced", Label: "Opus Complexity", Value: "10 of 10 (applies on next join)"},
-		{Tab: "Other", Label: "Profile", Value: "[mvega]", ValueColor: "#A3E635"},
-		{Tab: "Other", Label: "Updates", Value: "install on exit"},
+		{Tab: "Audio", Label: "Audio Input", Value: "Roland: STREAM (BRIDGE CAST X V2-II)",
+			Help: "Where your voice is taken from. Devices that carry their own effects are offered first."},
+		{Tab: "Audio", Label: "Audio Output", Value: "Roland: CHAT (BRIDGE CAST X V2-II)", Help: "Where the room is played back."},
+		{Tab: "Audio", Label: "Audio Processing", Choices: []string{"Apple", "Off"}, Choice: 0,
+			Help: "Apple's voice processing unit: Voice Isolation, echo cancellation and gain, for about a tenth of a core."},
+		{Tab: "Audio", Label: "Mic Level", Choices: []string{"Auto", "Off"}, Choice: 0,
+			Help: "Levels your voice, up to +18 dB, so you arrive as loud as everyone else."},
+		{Tab: "Audio", Label: "Voice Gate", Choices: []string{"On", "Off"}, Choice: 0,
+			Help: "While you are silent nothing is encoded, sent or decoded anywhere in the room."},
+		{Tab: "Audio", Label: "Audio Send", Choices: []string{"64", "96", "128", "192", "256"}, Choice: 2, Suffix: "kbps",
+			Help: "What the one Opus encoder spends. It encodes once for the whole room."},
+		{Tab: "Video", Label: "Camera", Value: "Default (0)", Help: "Which camera a share uses."},
+		{Tab: "Video", Label: "Screen Send", Choices: []string{"1000", "1500", "2500", "4000", "6000", "10000"}, Choice: 2,
+			Suffix: "kbps at 1080p, split between the people watching", Help: "The ceiling for a screen share."},
+		{Tab: "Advanced", Label: "Opus Complexity", Choices: []string{"1", "3", "5", "8", "10"}, Choice: 4,
+			Help: "How hard the encoder works for the same bitrate: 10 is the best sound per kbps and the most CPU, 1 the cheapest."},
+		{Tab: "Other", Label: "Profile", Value: "[mvega]", ValueColor: "#A3E635", Help: "Your name and colour, as everyone in the room sees them."},
+		{Tab: "Other", Label: "Updates", Choices: []string{"install on exit", "tell me", "do not check"}, Choice: 0,
+			Help: "A newer version is looked for once a day and downloaded before it is offered."},
 	}
 	audio := []Meter{
 		{Label: "CPU", Fill: 0.68, Note: "Apple + level"},
@@ -88,6 +96,11 @@ func TestSettingsFrame(t *testing.T) {
 	c = NewCanvas(120, 34)
 	DrawSettings(c, SettingsState{Rows: rows, Selected: 6, Tabs: settingsTabs(rows), Tab: 1, Meters: videoMeters})
 	compare(t, "settings-video", c)
+	// The device pickers are a panel over the screen, not a screen instead of it.
+	c = NewCanvas(120, 34)
+	DrawSettings(c, SettingsState{Rows: rows, Selected: 0, Tabs: settingsTabs(rows), Tab: 0, Meters: audioMeters,
+		PickerTitle: "Audio Input", Picker: []string{"System Default", "Wave Link MicrophoneFX — effects", "MIC (BRIDGE CAST X V2-II)"}, PickerIdx: 2})
+	compare(t, "settings-picker", c)
 }
 
 func TestProfileMatchesNode(t *testing.T) {
