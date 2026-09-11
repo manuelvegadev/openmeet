@@ -173,7 +173,72 @@ func (e *Engine) sendMute() {
 	_ = e.sig.Send(signal.Message{Type: "mute-state", FromID: e.myID, IsAudioMuted: &m, IsVideoMuted: &noCam})
 }
 
+// loop reads signaling until the connection drops, then reconnects and joins again — as a
+// newcomer, with fresh peer connections, because the server hands a rejoining client a new
+// id and every peer builds a new connection towards it. Backoff from a second to thirty;
+// only a deliberate Close ends it.
 func (e *Engine) loop() {
+	for {
+		e.readAll()
+		e.mu.Lock()
+		e.connected = false
+		e.mu.Unlock()
+		e.snapshot()
+		select {
+		case <-e.done:
+			e.Emit(tui.Left{Reason: "left"})
+			return
+		default:
+		}
+		e.notice(tui.KindInfo, "", "", "Connection to the server lost; reconnecting…")
+		if !e.reconnect() {
+			e.Emit(tui.Left{Reason: "connection closed"})
+			return
+		}
+	}
+}
+
+// reconnect tears the room down and dials again until it gets in or Close is called.
+func (e *Engine) reconnect() bool {
+	e.mu.Lock()
+	ids := make([]string, 0, len(e.people))
+	for id := range e.people {
+		ids = append(ids, id)
+	}
+	e.people = map[string]*peerInfo{}
+	e.mu.Unlock()
+	for _, id := range ids {
+		e.play.RemovePeer(id)
+	}
+	e.peers.CloseAll()
+	delay := time.Second
+	for attempt := 1; ; attempt++ {
+		select {
+		case <-e.done:
+			return false
+		case <-time.After(delay):
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		sig, err := signal.Dial(ctx, e.opts.ServerURL)
+		cancel()
+		if err == nil {
+			e.sig = sig
+			e.peers.SetSend(sig.Send)
+			if err = sig.Send(signal.Message{Type: "join-room", RoomID: e.opts.Room, Username: e.opts.Name, Color: e.opts.Color}); err == nil {
+				e.notice(tui.KindInfo, "", "", fmt.Sprintf("Reconnected after %d attempt(s)", attempt))
+				return true
+			}
+			sig.Close()
+		}
+		e.logf("reconnect attempt %d failed: %v", attempt, err)
+		if delay < 30*time.Second {
+			delay *= 2
+		}
+	}
+}
+
+// readAll drains one connection's messages until it closes.
+func (e *Engine) readAll() {
 	for msg := range e.sig.Incoming {
 		switch msg.Type {
 		case "room-joined":
@@ -181,7 +246,10 @@ func (e *Engine) loop() {
 			e.peers.SetMyID(e.myID)
 			e.mu.Lock()
 			e.connected = true
-			e.joined = time.Now()
+			e.errMsg = ""
+			if e.joined.IsZero() {
+				e.joined = time.Now()
+			}
 			for _, p := range msg.Participants {
 				e.people[p.ID] = &peerInfo{p: p, volume: 1, recvKbps: -1, latency: -1}
 			}
@@ -261,11 +329,6 @@ func (e *Engine) loop() {
 			e.snapshot()
 		}
 	}
-	e.mu.Lock()
-	e.connected = false
-	e.mu.Unlock()
-	e.snapshot()
-	e.Emit(tui.Left{Reason: "connection closed"})
 }
 
 // snapshot sends the room's state as the interface draws it.

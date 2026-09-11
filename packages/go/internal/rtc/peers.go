@@ -119,6 +119,13 @@ func NewManager(o Options) (*Manager, error) {
 
 func (m *Manager) SetMyID(id string) { m.myID = id }
 
+// SetSend points signaling at a new connection, after a reconnect.
+func (m *Manager) SetSend(send func(signal.Message) error) {
+	m.mu.Lock()
+	m.send = send
+	m.mu.Unlock()
+}
+
 // Write sends one encoded frame to every connected peer. The sequence number is ours and
 // runs across talkspurts; the timestamp is the capture clock.
 func (m *Manager) Write(p audio.Packet) error {
