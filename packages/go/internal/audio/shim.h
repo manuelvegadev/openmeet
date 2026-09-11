@@ -7,6 +7,9 @@ int om_init(void);
 int om_refresh(void);
 int om_device_count(int playback);
 int om_device_name(int playback, int index, char* buf, int len, int* isDefault);
+// How the device is attached, where the platform says: "blue" for Bluetooth on macOS
+// (CoreAudio's transport type as four characters), empty elsewhere.
+int om_device_transport(int playback, int index, char* buf, int len);
 om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs, int prefillMs);
 int om_rate(om_stream* s);
 int om_available(om_stream* s);

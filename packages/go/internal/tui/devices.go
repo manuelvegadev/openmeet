@@ -74,6 +74,11 @@ func DrawDevices(c *Canvas, s DevicesState) {
 		c.PutSpans(area.X, area.Y+1, []Span{{"Output: ", Plain}, {s.Output, Style{Bold: true}}}, area.X+area.W)
 		c.Put(area.X, area.Y+2, "Mic level:", Style{Bold: true}, area.X+area.W)
 		DrawMicBar(c, area.X, area.Y+3, s.Level)
+		if s.Hint != "" {
+			for i, line := range Wrap([]Span{{s.Hint, Style{FG: ThemeInfo}}}, area.W) {
+				c.PutSpans(area.X, area.Y+5+i, line, area.X+area.W)
+			}
+		}
 		return
 	}
 	hints := []KeyHint{{Key: "↑↓", Label: "navigate"}, {Key: "enter", Label: "select"}}
@@ -92,8 +97,9 @@ func DrawDevices(c *Canvas, s DevicesState) {
 	y++
 	n := DrawSelect(c, Rect{area.X, y, area.W, area.Y + area.H - y}, s.Items, s.Idx)
 	if s.Hint != "" {
+		// A blank row, then the note, as the Node client set its Broadcast hint.
 		for i, line := range Wrap([]Span{{s.Hint, Style{FG: ThemeInfo}}}, area.W) {
-			c.PutSpans(area.X, y+n+i, line, area.X+area.W)
+			c.PutSpans(area.X, y+n+1+i, line, area.X+area.W)
 		}
 	}
 }

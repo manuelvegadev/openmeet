@@ -21,6 +21,12 @@
 #define SAMPLE_RATE_DUPLEX 48000
 static ma_context ctx;
 static int ctxReady = 0;
+// A device stopped or rerouted under us (miniaudio's notification): the pump reopens.
+static volatile int deviceEvent = 0;
+
+static void on_notification(const ma_device_notification* n) {
+  if (n->type == ma_device_notification_type_stopped || n->type == ma_device_notification_type_rerouted) deviceEvent = 1;
+}
 static ma_device_info* playbackInfos = NULL;
 static ma_device_info* captureInfos = NULL;
 static ma_uint32 playbackCount = 0, captureCount = 0;
@@ -55,6 +61,9 @@ int om_device_uid(int playback, int index, char* buf, int len) {
   return 0;
 }
 
+// Stopped-or-rerouted, from miniaudio, for the macOS watcher to fold into its own answer.
+int om_device_event(void) { int e = deviceEvent; deviceEvent = 0; return e; }
+
 om_stream* om_stream_ring(int playback, int channels, int rate, int ringMs) {
   om_stream* s = (om_stream*)calloc(1, sizeof(om_stream));
   if (!s) return NULL;
@@ -80,9 +89,10 @@ om_duplex* om_open_duplex(int inIndex, int outIndex, int rate, int ringMs, int p
   return NULL;
 }
 void om_close_duplex(om_duplex* d) { (void)d; }
-int om_watch(int inIndex, int outIndex) { (void)inIndex; (void)outIndex; return -1; }
+int om_watch(int inIndex, int outIndex) { (void)inIndex; (void)outIndex; deviceEvent = 0; return -1; }
 void om_unwatch(void) {}
-int om_devices_changed(void) { return 0; }
+int om_devices_changed(void) { int e = deviceEvent; deviceEvent = 0; return e; }
+int om_device_transport(int playback, int index, char* buf, int len) { (void)playback; (void)index; if (len > 0) buf[0] = 0; return 0; }
 const char* om_duplex_error(void) { return "not on this platform"; }
 #endif
 
@@ -141,6 +151,7 @@ om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int pe
   }
   ma_device_config cfg = ma_device_config_init(playback ? ma_device_type_playback : ma_device_type_capture);
   cfg.sampleRate = (ma_uint32)rate;
+  cfg.notificationCallback = on_notification;
   cfg.periodSizeInMilliseconds = (ma_uint32)periodMs;
   cfg.pUserData = s;
   if (playback) {

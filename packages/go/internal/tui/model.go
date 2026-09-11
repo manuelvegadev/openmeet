@@ -58,8 +58,14 @@ type SettingsStore interface {
 }
 
 type DeviceSource interface {
+	// Names, in the order a picker shows them: the ones that carry effects first.
 	Inputs() []string
 	Outputs() []string
+	// How a device reads in a picker: its name, and what it does for you when it does
+	// something ("— GPU noise removal + echo cancellation").
+	Label(name string) string
+	// A Bluetooth headset: its microphone drops it to the hands-free profile.
+	IsBluetooth(name string) bool
 	// The mic test: level polling and a tone.
 	StartMicTest(input, output string) (MicTest, error)
 	// A saved id resolved to a listed name, or "" when none matches.
@@ -803,7 +809,7 @@ func (m *Model) View() string {
 		st := SettingsState{Rows: m.host.Settings.Rows(), Selected: m.settingsIdx}
 		if m.picker != "" {
 			st.PickerTitle = map[string]string{"input": "Audio Input", "output": "Audio Output", "camera": "Camera"}[m.picker]
-			st.Picker, st.PickerIdx = m.pickerItems, m.pickerIdx
+			st.Picker, st.PickerIdx = m.labels(m.pickerItems), m.pickerIdx
 		}
 		DrawSettings(c, st)
 	case screenDevices:
@@ -814,7 +820,7 @@ func (m *Model) View() string {
 		if out == "" {
 			out = "System Default"
 		}
-		DrawDevices(c, DevicesState{Title: m.devTitle, Step: m.devStep, Items: m.devItems, Idx: m.devIdx, Input: in, Output: out, Level: m.micLevel})
+		DrawDevices(c, DevicesState{Title: m.devTitle, Step: m.devStep, Items: m.labels(m.devItems), Idx: m.devIdx, Input: in, Output: out, Level: m.micLevel, Hint: m.deviceHint()})
 	case screenRoom:
 		rs := m.rs
 		rs.Now = time.Now()
@@ -825,4 +831,33 @@ func (m *Model) View() string {
 		DrawRoom(c, rs)
 	}
 	return c.Render()
+}
+
+// labels turns picker names into what the rows say; the first entry is the system default.
+func (m *Model) labels(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		if i == 0 || n == "System Default" || n == "Default (0)" {
+			out[i] = n
+		} else {
+			out[i] = m.host.Devices.Label(n)
+		}
+	}
+	return out
+}
+
+// deviceHint is the line under a picker: the Bluetooth note once the chosen microphone and
+// speaker are the same headset — its microphone drops it to the hands-free profile, and the
+// computer's microphone would keep it in full quality.
+func (m *Model) deviceHint() string {
+	if m.devStep != "output" && m.devStep != "test" {
+		return ""
+	}
+	if m.devInput == "" || !m.host.Devices.IsBluetooth(m.devInput) {
+		return ""
+	}
+	if m.devStep == "output" || (m.devOutput != "" && m.host.Devices.IsBluetooth(m.devOutput)) {
+		return "A Bluetooth headset's microphone puts it in the hands-free profile: mono, 16 kHz, both ways. This computer's own microphone as the input keeps the headset in full quality."
+	}
+	return ""
 }

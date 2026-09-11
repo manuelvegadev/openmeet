@@ -19,4 +19,5 @@ struct om_stream {
 om_stream* om_stream_ring(int playback, int channels, int rate, int ringMs);
 void om_stream_free_ring(om_stream* s);
 int om_device_uid(int playback, int index, char* buf, int len);
+int om_device_event(void);
 #endif

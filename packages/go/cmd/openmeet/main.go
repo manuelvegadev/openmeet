@@ -198,8 +198,51 @@ func names(list []audio.Device) []string {
 	return out
 }
 
-func (d *devices) Inputs() []string  { l, _ := d.a.Inputs(); return names(l) }
+// Effects a device carries, by name. These are the devices someone chose on purpose —
+// NVIDIA Broadcast, Elgato's Wave Link — and whose processed audio lives on a virtual
+// endpoint beside the raw one; picking the raw one is how the effects go missing.
+func effects(name string) string {
+	l := strings.ToLower(name)
+	switch {
+	case strings.Contains(l, "nvidia broadcast"):
+		return "GPU noise removal + echo cancellation"
+	case strings.Contains(l, "wave link microphonefx"):
+		return "Elgato Wave Link effects applied"
+	}
+	return ""
+}
+
+// preferEffects puts the devices that carry effects first, keeping the rest in order.
+func preferEffects(list []audio.Device) []audio.Device {
+	var first, rest []audio.Device
+	for _, d := range list {
+		if effects(d.Name) != "" {
+			first = append(first, d)
+		} else {
+			rest = append(rest, d)
+		}
+	}
+	return append(first, rest...)
+}
+
+func (d *devices) Inputs() []string  { l, _ := d.a.Inputs(); return names(preferEffects(l)) }
 func (d *devices) Outputs() []string { l, _ := d.a.Outputs(); return names(l) }
+
+func (d *devices) Label(name string) string {
+	if e := effects(name); e != "" {
+		return name + " — " + e
+	}
+	return name
+}
+
+func (d *devices) IsBluetooth(name string) bool {
+	for _, playback := range []bool{false, true} {
+		if dev := d.find(name, playback); dev != nil && dev.Bluetooth {
+			return true
+		}
+	}
+	return false
+}
 
 // Resolve matches a saved id to a listed name: exactly, then as the tail of a name the
 // Node client's RtAudio backend prefixed ("Roland: STREAM (…)" is "STREAM (…)" here), then

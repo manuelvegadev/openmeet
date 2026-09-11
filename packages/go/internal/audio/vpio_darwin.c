@@ -215,7 +215,20 @@ void om_unwatch(void) {
   watching = 0;
 }
 
-int om_devices_changed(void) { return atomic_exchange(&devicesChanged, 0); }
+int om_devices_changed(void) { return atomic_exchange(&devicesChanged, 0) | om_device_event(); }
+
+int om_device_transport(int playback, int index, char* buf, int len) {
+  char uid[256];
+  if (len > 0) buf[0] = 0;
+  if (om_device_uid(playback, index, uid, sizeof uid) != 0) return -1;
+  AudioDeviceID id = device_for_uid(uid);
+  if (id == kAudioObjectUnknown) return -1;
+  UInt32 tt = 0, sz = sizeof tt;
+  AudioObjectPropertyAddress a = { kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+  if (AudioObjectGetPropertyData(id, &a, 0, NULL, &sz, &tt) != noErr || len < 5) return -1;
+  buf[0] = (char)(tt >> 24); buf[1] = (char)(tt >> 16); buf[2] = (char)(tt >> 8); buf[3] = (char)tt; buf[4] = 0;
+  return 0;
+}
 
 void om_close_duplex(om_duplex* d) {
   if (!d) return;

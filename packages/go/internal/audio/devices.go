@@ -62,6 +62,9 @@ type Device struct {
 	Name    string
 	Index   int
 	Default bool
+	// Bluetooth is what the platform says (macOS) or what the name says (Windows lists a
+	// headset's hands-free endpoint as such). It is what makes the picker warn.
+	Bluetooth bool
 }
 
 func NewEngine() (*Engine, error) {
@@ -87,7 +90,14 @@ func (e *Engine) list(playback bool) ([]Device, error) {
 		if C.om_device_name(pb, C.int(i), buf, 256, &def) != 0 {
 			continue
 		}
-		out = append(out, Device{Name: C.GoString(buf), Index: i, Default: def != 0})
+		name := C.GoString(buf)
+		tbuf := (*C.char)(C.malloc(8))
+		C.om_device_transport(pb, C.int(i), tbuf, 8)
+		transport := C.GoString(tbuf)
+		C.free(unsafe.Pointer(tbuf))
+		lname := strings.ToLower(name)
+		bt := transport == "blue" || strings.Contains(lname, "hands-free") || strings.Contains(lname, "bluetooth")
+		out = append(out, Device{Name: name, Index: i, Default: def != 0, Bluetooth: bt})
 	}
 	return out, nil
 }
@@ -173,6 +183,8 @@ type Pump struct {
 	// What the capture side delivered since the last look: frames, and the last RMS.
 	capFrames int
 	capRMS    float64
+	// A chosen device that was not there at the last reopen: the default took its place.
+	gone string
 	// OnEvent hears about reopens: a device changed its rate or the default moved.
 	OnEvent func(msg string)
 }
@@ -263,11 +275,22 @@ func (p *Pump) closeStreams() {
 func (p *Pump) reopen() error {
 	p.closeStreams()
 	C.om_refresh()
+	p.gone = ""
 	if p.in != nil {
-		p.in = p.engine.findByName(false, p.in.Name)
+		if d := p.engine.findByName(false, p.in.Name); d != nil {
+			p.in = d
+		} else {
+			p.gone = p.in.Name
+			p.in = nil
+		}
 	}
 	if p.out != nil {
-		p.out = p.engine.findByName(true, p.out.Name)
+		if d := p.engine.findByName(true, p.out.Name); d != nil {
+			p.out = d
+		} else {
+			p.gone = p.out.Name
+			p.out = nil
+		}
 	}
 	p.watch()
 	return p.openStreams()
@@ -328,6 +351,8 @@ func (p *Pump) run(onPCM func([]int16), fill func([]int16)) {
 				if p.OnEvent != nil {
 					if err != nil {
 						p.OnEvent("audio device changed and could not be reopened: " + err.Error())
+					} else if p.gone != "" {
+						p.OnEvent(p.gone + " is gone; using the system default (" + p.path + ")")
 					} else {
 						p.OnEvent("audio device changed; reopened (" + p.path + ")")
 					}
