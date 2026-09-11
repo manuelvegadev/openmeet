@@ -142,13 +142,16 @@ static void playback_cb(ma_device* dev, void* out, const void* in, ma_uint32 fra
 
 // rate 0 opens the device at its own rate — no resampling in miniaudio, whose converter
 // is linear interpolation — and om_rate says what that was; the caller converts.
-om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs, int prefillMs) {
+om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs, int prefillMs, int voice) {
   om_stream* s = (om_stream*)calloc(1, sizeof(om_stream));
   if (!s) return NULL;
   s->channels = channels;
   s->playback = playback;
   ma_device_config cfg = ma_device_config_init(playback ? ma_device_type_playback : ma_device_type_capture);
   cfg.sampleRate = (ma_uint32)rate;
+  // Only the capture side: on the playback side the category is what makes Windows duck
+  // every other application, which is not ours to decide for the machine.
+  cfg.wasapi.voiceCommunications = (ma_bool8)(voice && !playback);
   cfg.notificationCallback = on_notification;
   cfg.periodSizeInMilliseconds = (ma_uint32)periodMs;
   cfg.pUserData = s;

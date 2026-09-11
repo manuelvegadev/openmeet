@@ -32,7 +32,7 @@ const (
 // priority buys, never for a call.
 var NoPriority = false
 
-// NoVoiceProcessing keeps macOS on miniaudio's raw devices instead of Apple's voice
+// NoVoiceProcessing keeps the devices raw instead of asking the system for its voice
 // processing unit: for comparing, and as the way out if the unit misbehaves on a machine.
 var NoVoiceProcessing = false
 
@@ -142,7 +142,11 @@ func (e *Engine) open(playback bool, dev *Device, channels int) (*Stream, error)
 	if dev != nil {
 		idx = C.int(dev.Index)
 	}
-	s := C.om_open(pb, idx, C.int(channels), 0, C.int(PeriodMs), C.int(RingMs), C.int(PlayAheadMs))
+	voice := C.int(0)
+	if !NoVoiceProcessing {
+		voice = 1
+	}
+	s := C.om_open(pb, idx, C.int(channels), 0, C.int(PeriodMs), C.int(RingMs), C.int(PlayAheadMs), voice)
 	if s == nil {
 		kind := "capture"
 		if playback {
@@ -305,7 +309,14 @@ func (p *Pump) openStreams() error {
 	}
 	p.capture, p.playback = capture, playback
 	if p.path == "" {
-		p.path = "miniaudio"
+		p.path = "miniaudio (raw devices)"
+		if !NoVoiceProcessing && runtime.GOOS == "windows" {
+			// What this is worth depends entirely on the endpoint: a laptop's microphone
+			// usually brings an APO with echo cancellation and noise suppression, a USB
+			// interface often brings nothing at all, and Windows Studio Effects needs a
+			// machine with an NPU. Windows does not tell us which of those happened.
+			p.path = "Windows communications mode (whatever the device's driver provides)"
+		}
 	}
 	return nil
 }

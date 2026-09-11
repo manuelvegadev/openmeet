@@ -11,7 +11,10 @@ int om_device_name(int playback, int index, char* buf, int len, int* isDefault);
 // (CoreAudio's transport type as four characters), empty elsewhere.
 int om_device_transport(int playback, int index, char* buf, int len);
 // rate 0: the device's own rate (read it back with om_rate; the ring is sized at it).
-om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs, int prefillMs);
+// voice (capture, Windows): open the stream in the communications category, which is how
+// Windows and the endpoint's driver are asked for their voice processing — the nearest
+// counterpart to Apple's unit below. Ignored elsewhere.
+om_stream* om_open(int playback, int deviceIndex, int channels, int rate, int periodMs, int ringMs, int prefillMs, int voice);
 int om_rate(om_stream* s);
 int om_available(om_stream* s);
 int om_underruns(om_stream* s);

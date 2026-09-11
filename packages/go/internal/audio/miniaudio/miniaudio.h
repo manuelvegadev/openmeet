@@ -7144,6 +7144,7 @@ struct ma_device_config
         ma_bool8 noDefaultQualitySRC;       /* When set to true, disables the use of AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY. */
         ma_bool8 noAutoStreamRouting;       /* Disables automatic stream routing. */
         ma_bool8 noHardwareOffloading;      /* Disables WASAPI's hardware offloading feature. */
+        ma_bool8 voiceCommunications;       /* OpenMeet patch: opens the stream in AudioCategory_Communications, which is how Windows and the endpoint's driver are asked for their voice processing (AEC, noise suppression, gain), and Windows Studio Effects where the machine has them. It is only settable before IAudioClient::Initialize, which is why it cannot be done from outside miniaudio. */
         ma_uint32 loopbackProcessID;        /* The process ID to include or exclude for loopback mode. Set to 0 to capture audio from all processes. Ignored when an explicit device ID is specified. */
         ma_bool8 loopbackProcessExclude;    /* When set to true, excludes the process specified by loopbackProcessID. By default, the process will be included. */
     } wasapi;
@@ -7894,6 +7895,7 @@ struct ma_device
             ma_bool8 noAutoConvertSRC;                              /* When set to true, disables the use of AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM. */
             ma_bool8 noDefaultQualitySRC;                           /* When set to true, disables the use of AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY. */
             ma_bool8 noHardwareOffloading;
+            ma_bool8 voiceCommunications;   /* OpenMeet patch. */
             ma_bool8 allowCaptureAutoStreamRouting;
             ma_bool8 allowPlaybackAutoStreamRouting;
             ma_bool8 isDetachedPlayback;
@@ -21846,7 +21848,8 @@ typedef enum
 
 typedef enum
 {
-    MA_AudioCategory_Other = 0  /* <-- miniaudio is only caring about Other. */
+    MA_AudioCategory_Other = 0, /* <-- miniaudio is only caring about Other. */
+    MA_AudioCategory_Communications = 3 /* OpenMeet patch: see wasapi.voiceCommunications. */
 } MA_AUDIO_STREAM_CATEGORY;
 
 typedef enum
@@ -23605,6 +23608,7 @@ typedef struct
     ma_bool32 noAutoConvertSRC;
     ma_bool32 noDefaultQualitySRC;
     ma_bool32 noHardwareOffloading;
+    ma_bool32 voiceCommunications;  /* OpenMeet patch. */
     ma_uint32 loopbackProcessID;
     ma_bool32 loopbackProcessExclude;
 
@@ -23669,6 +23673,22 @@ static ma_result ma_device_init_internal__wasapi(ma_context* pContext, ma_device
     }
 
     MA_ZERO_OBJECT(&wf);
+
+    /* OpenMeet patch: the stream's category, which is how Windows is told this is a call.
+    The driver's communications processing — and Windows Studio Effects on a machine with an
+    NPU — hang off it, and it can only be set before Initialize. */
+    if (pData->voiceCommunications) {
+        ma_IAudioClient2* pAudioClient2Voice = NULL;
+        hr = ma_IAudioClient_QueryInterface(pData->pAudioClient, &MA_IID_IAudioClient2, (void**)&pAudioClient2Voice);
+        if (SUCCEEDED(hr)) {
+            ma_AudioClientProperties clientProperties;
+            MA_ZERO_OBJECT(&clientProperties);
+            clientProperties.cbSize = sizeof(clientProperties);
+            clientProperties.eCategory = MA_AudioCategory_Communications;
+            ma_IAudioClient2_SetClientProperties(pAudioClient2Voice, &clientProperties);
+            pAudioClient2Voice->lpVtbl->Release(pAudioClient2Voice);
+        }
+    }
 
     /* Try enabling hardware offloading. */
     if (!pData->noHardwareOffloading) {
@@ -24173,6 +24193,7 @@ static ma_result ma_device_reinit__wasapi(ma_device* pDevice, ma_device_type dev
     data.noAutoConvertSRC           = pDevice->wasapi.noAutoConvertSRC;
     data.noDefaultQualitySRC        = pDevice->wasapi.noDefaultQualitySRC;
     data.noHardwareOffloading       = pDevice->wasapi.noHardwareOffloading;
+    data.voiceCommunications        = pDevice->wasapi.voiceCommunications;  /* OpenMeet patch. */
     data.loopbackProcessID          = pDevice->wasapi.loopbackProcessID;
     data.loopbackProcessExclude     = pDevice->wasapi.loopbackProcessExclude;
     result = ma_device_init_internal__wasapi(pDevice->pContext, deviceType, NULL, &data);
@@ -24242,6 +24263,7 @@ static ma_result ma_device_init__wasapi(ma_device* pDevice, const ma_device_conf
     pDevice->wasapi.noAutoConvertSRC       = pConfig->wasapi.noAutoConvertSRC;
     pDevice->wasapi.noDefaultQualitySRC    = pConfig->wasapi.noDefaultQualitySRC;
     pDevice->wasapi.noHardwareOffloading   = pConfig->wasapi.noHardwareOffloading;
+    pDevice->wasapi.voiceCommunications    = pConfig->wasapi.voiceCommunications;  /* OpenMeet patch. */
     pDevice->wasapi.loopbackProcessID      = pConfig->wasapi.loopbackProcessID;
     pDevice->wasapi.loopbackProcessExclude = pConfig->wasapi.loopbackProcessExclude;
 
@@ -24264,6 +24286,7 @@ static ma_result ma_device_init__wasapi(ma_device* pDevice, const ma_device_conf
         data.noAutoConvertSRC           = pConfig->wasapi.noAutoConvertSRC;
         data.noDefaultQualitySRC        = pConfig->wasapi.noDefaultQualitySRC;
         data.noHardwareOffloading       = pConfig->wasapi.noHardwareOffloading;
+        data.voiceCommunications        = pConfig->wasapi.voiceCommunications;  /* OpenMeet patch. */
         data.loopbackProcessID          = pConfig->wasapi.loopbackProcessID;
         data.loopbackProcessExclude     = pConfig->wasapi.loopbackProcessExclude;
 
@@ -24330,6 +24353,7 @@ static ma_result ma_device_init__wasapi(ma_device* pDevice, const ma_device_conf
         data.noAutoConvertSRC           = pConfig->wasapi.noAutoConvertSRC;
         data.noDefaultQualitySRC        = pConfig->wasapi.noDefaultQualitySRC;
         data.noHardwareOffloading       = pConfig->wasapi.noHardwareOffloading;
+        data.voiceCommunications        = pConfig->wasapi.voiceCommunications;  /* OpenMeet patch. */
         data.loopbackProcessID          = pConfig->wasapi.loopbackProcessID;
         data.loopbackProcessExclude     = pConfig->wasapi.loopbackProcessExclude;
 
