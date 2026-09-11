@@ -2,19 +2,12 @@ import wrtc from '@roamhq/wrtc';
 import type { AudioBackend, AudioDeviceSelection } from './backend.js';
 import { createAudioBackend } from './backend.js';
 import { type InputChannelPolicy, InputConditioner } from './channels.js';
-import {
-  CHANNELS,
-  computeRMS,
-  FRAME_SAMPLES,
-  FRAME_SIZE,
-  followLevel,
-  SAMPLE_RATE,
-  SPEAKING_RMS_THRESHOLD,
-} from './constants.js';
+import { CHANNELS, computeRMS, FRAME_SAMPLES, FRAME_SIZE, SAMPLE_RATE, SPEAKING_RMS_THRESHOLD } from './constants.js';
 import { FrameMixer, PeerPlayoutBuffer } from './mixer.js';
 import { PcmDump } from './pcm-dump.js';
 import { type CaptureProcessor, CaptureProcessorChain } from './processors.js';
 import { ToneGenerator } from './tone.js';
+import { VoiceGate } from './voice-gate.js';
 
 const { RTCAudioSink } = wrtc.nonstandard;
 
@@ -46,7 +39,7 @@ interface RemotePeer {
 /**
  * Backend-agnostic audio pipeline:
  *
- *   device ──▶ backend.onCapture ──▶ [mute] ──▶ processors ──▶ RTCAudioSource
+ *   device ──▶ backend.onCapture ──▶ [mute] ──▶ processors ──▶ [voice gate] ──▶ RTCAudioSource
  *   RTCAudioSink (per peer) ──▶ PeerPlayoutBuffer ──▶ FrameMixer ──▶ backend.onPlayback ──▶ device
  *
  * The backend clocks both directions; this class never schedules audio itself.
@@ -59,6 +52,11 @@ export class AudioManager {
   private readonly peers = new Map<string, RemotePeer>();
   private readonly mixer = new FrameMixer();
   private readonly processors = new CaptureProcessorChain();
+  /** What decides whether we are on the air at all; see `voice-gate.ts`. */
+  private readonly gate = new VoiceGate();
+  private readonly gateEnabled: boolean;
+  /** Reused so the ungated path allocates no more than the gated one. */
+  private readonly ungated: Int16Array[] = [new Int16Array(0)];
   private _isMuted = false;
   // Diagnostics (see pcm-dump.ts): OPENMEET_DUMP_DIR records each stage; OPENMEET_TEST_TONE=1
   // replaces the microphone with a 440 Hz tone so the far end can judge the transport alone.
@@ -73,8 +71,6 @@ export class AudioManager {
   private onSpeaking: SpeakingCallback | null = null;
   private readonly speakingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly speakingStates = new Map<string, boolean>();
-  private readonly audioLevels = new Map<string, number>();
-  private readonly silence = new Int16Array(FRAME_SAMPLES);
   private _readyResolve: (() => void) | null = null;
   private readonly _ready: Promise<void>;
   private _isReady = false;
@@ -83,19 +79,25 @@ export class AudioManager {
   constructor(
     audioSource: AudioSource,
     selection: AudioDeviceSelection,
-    options?: { onDebug?: (msg: string) => void; inputChannels?: InputChannelPolicy; inputGainDb?: number },
+    options?: {
+      onDebug?: (msg: string) => void;
+      inputChannels?: InputChannelPolicy;
+      inputGainDb?: number;
+      voiceGate?: boolean;
+    },
   ) {
     this.audioSource = audioSource;
     this.selection = selection;
     this.onDebug = options?.onDebug;
     this.conditioner = new InputConditioner(options?.inputChannels ?? 'auto', options?.inputGainDb ?? 0);
+    this.gateEnabled = options?.voiceGate ?? true;
     this.conditioner.onDecision = (policy, detail) => this.onDebug?.(`Input channels: ${policy} (${detail})`);
     this._ready = new Promise<void>((resolve) => {
       this._readyResolve = resolve;
     });
   }
 
-  /** Resolves when the first capture frame has been pushed to WebRTC. */
+  /** Resolves when the device has delivered its first capture frame. */
   get ready(): Promise<void> {
     return this._ready;
   }
@@ -139,8 +141,10 @@ export class AudioManager {
   private async openBackend(): Promise<void> {
     if (this.opening) return;
     this.opening = true;
-    // A new device (or pair) may be mono-in-L where the previous one was stereo.
+    // A new device (or pair) may be mono-in-L where the previous one was stereo, and it is
+    // certainly a different noise floor.
     this.conditioner.reset();
+    this.gate.reset();
     try {
       const backend = this.backend ?? (await createAudioBackend());
       this.backend = backend;
@@ -203,7 +207,6 @@ export class AudioManager {
     if (localTimer) clearTimeout(localTimer);
     this.speakingTimers.clear();
     this.speakingStates.clear();
-    this.audioLevels.clear();
     this.processors.dispose();
   }
 
@@ -215,12 +218,40 @@ export class AudioManager {
     // skipped while muted since the frame is replaced by silence anyway.
     if (!this._isMuted) this.conditioner.process(samples);
 
+    // Capture is ready the moment the device delivers, not the moment we transmit: with the
+    // gate shut a silent room would otherwise never report itself started.
+    if (!this._isReady) {
+      this._isReady = true;
+      this._readyResolve?.();
+      this._readyResolve = null;
+      this.onDebug?.('Audio capture ready (first frame)');
+    }
+    // Frames flowing means the last (re)start worked; refill the restart budget.
+    if (this.restarts > 0 && !this.restartTimer) this.restarts = 0;
+
+    if (this._isMuted) {
+      // Muted holds the gate shut without feeding it: silence is not a noise floor, and a
+      // muted participant should cost every peer exactly nothing.
+      if (this.gate.isOpen) this.gate.close();
+      this.setSpeaking(LOCAL_ID, false);
+      return;
+    }
+
     const rms = computeRMS(samples);
-    this.updateSpeaking(LOCAL_ID, rms);
-    this.audioLevels.set(LOCAL_ID, followLevel(this.audioLevels.get(LOCAL_ID) ?? 0, rms));
+    const frame = this.processors.isEmpty ? samples : this.processors.process(samples);
+    let outgoing: readonly Int16Array[];
+    if (this.gateEnabled) {
+      outgoing = this.gate.step(frame, rms, performance.now());
+    } else {
+      this.ungated[0] = frame;
+      outgoing = this.ungated;
+    }
+    for (const out of outgoing) this.transmit(out);
+    this.setSpeaking(LOCAL_ID, this.gateEnabled ? this.gate.isOpen : rms > SPEAKING_RMS_THRESHOLD);
+  }
 
-    const frame = this._isMuted ? this.silence : this.processors.isEmpty ? samples : this.processors.process(samples);
-
+  /** One frame to WebRTC. The dump records what we actually send, so it shows the gate too. */
+  private transmit(frame: Int16Array): void {
     // RTCAudioSource.onData requires an ArrayBuffer whose byteLength matches the frame
     // exactly, so hand it a dedicated copy rather than a view into a reused buffer.
     const owned = new Int16Array(FRAME_SAMPLES);
@@ -233,15 +264,6 @@ export class AudioManager {
       channelCount: CHANNELS,
       numberOfFrames: FRAME_SIZE,
     });
-
-    if (!this._isReady) {
-      this._isReady = true;
-      this._readyResolve?.();
-      this._readyResolve = null;
-      this.onDebug?.('Audio capture ready (first frame)');
-    }
-    // Frames flowing means the last (re)start worked; refill the restart budget.
-    if (this.restarts > 0 && !this.restartTimer) this.restarts = 0;
   }
 
   get isMuted(): boolean {
@@ -278,9 +300,7 @@ export class AudioManager {
       this.peers.set(peerId, peer);
       sink.ondata = (data: any) => {
         const samples: Int16Array = data.samples;
-        const rms = computeRMS(samples);
-        this.updateSpeaking(peerId, rms);
-        this.audioLevels.set(peerId, followLevel(this.audioLevels.get(peerId) ?? 0, rms));
+        this.updateSpeaking(peerId, computeRMS(samples));
         // The addon may reuse the underlying buffer; the ring copies on push.
         peer.buffer.push(samples, data.numberOfFrames);
         peer.dump?.write(samples);
@@ -308,7 +328,6 @@ export class AudioManager {
     if (timer) clearTimeout(timer);
     this.speakingTimers.delete(peerId);
     this.speakingStates.delete(peerId);
-    this.audioLevels.delete(peerId);
   }
 
   /** Clamps to 0..1 and returns the value applied (1 when the peer is unknown). */
@@ -319,13 +338,18 @@ export class AudioManager {
     return peer ? clamped : 1;
   }
 
-  // ─── Levels / speaking ───────────────────────────────────────────────
+  // ─── Speaking ────────────────────────────────────────────────────────
 
-  /** The meter levels: per-frame RMS with the meter's ballistics applied (`followLevel`), not the raw RMS. */
-  getAllAudioLevels(): Record<string, number> {
-    const levels: Record<string, number> = {};
-    for (const [peerId, level] of this.audioLevels) levels[peerId] = level;
-    return levels;
+  /** The gate's own state, with no threshold of ours on top: it already has hysteresis and a hold. */
+  private setSpeaking(id: string, speaking: boolean): void {
+    const timer = this.speakingTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.speakingTimers.delete(id);
+    }
+    if ((this.speakingStates.get(id) ?? false) === speaking) return;
+    this.speakingStates.set(id, speaking);
+    this.onSpeaking?.(id, speaking);
   }
 
   private updateSpeaking(id: string, rms: number): void {

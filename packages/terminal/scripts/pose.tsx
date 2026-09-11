@@ -79,8 +79,6 @@ const SCRIPT: Line[] = [
   { who: 'me', text: 'one more pass on the docs and I will tag it' },
 ];
 
-/** Fixed levels, so the meters are photogenic instead of whatever the last frame caught. */
-const LEVELS = { __local__: 2600, sofia: 6400, diego: 1400, amara: 0 };
 const LATENCIES = { sofia: 38, diego: 96, amara: 155 };
 
 const startedAt = Date.now() - CALL_MINUTES * 60_000;
@@ -187,7 +185,6 @@ function Pose() {
               peerVideoOpen={{ diego: true }}
               peerScreenOpen={{ sofia: true }}
               speakingStates={{ sofia: true }}
-              audioLevels={LEVELS}
               peerVolumes={{ sofia: 1, diego: 1, amara: 0.7 }}
               selectedPeerIdx={0}
               connectionStats={{

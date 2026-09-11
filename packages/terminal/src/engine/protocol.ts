@@ -45,9 +45,12 @@ export interface RoomState {
   remoteMuteStates: Record<string, boolean>;
   remoteVideoMuteStates: Record<string, boolean>;
   remoteScreenShareStates: Record<string, boolean>;
+  /**
+   * Who is on the air. It is the voice gate on each side — ours directly, a peer's through
+   * the audio they send — so it changes when someone starts or stops talking and not ten
+   * times a second, which is what keeps the TUI from repainting for a living.
+   */
   speakingStates: Record<string, boolean>;
-  /** Quantized to the VU meter resolution so snapshots only change when a bar changes. */
-  audioLevels: Record<string, number>;
   peerVolumes: Record<string, number>;
   peerVideoOpen: Record<string, boolean>;
   peerScreenOpen: Record<string, boolean>;
@@ -76,7 +79,6 @@ export function initialRoomState(): RoomState {
     remoteVideoMuteStates: {},
     remoteScreenShareStates: {},
     speakingStates: {},
-    audioLevels: {},
     peerVolumes: {},
     peerVideoOpen: {},
     peerScreenOpen: {},
@@ -98,6 +100,8 @@ export function initialRoomState(): RoomState {
 export interface InputOptions {
   channels: InputChannelPolicy;
   gainDb: number;
+  /** Transmit only while the voice gate is open. The engine never reads settings itself. */
+  voiceGate: boolean;
 }
 
 /** Ceilings in kbps: Opus each way, and the screen share each way (see `sdp.ts`). */

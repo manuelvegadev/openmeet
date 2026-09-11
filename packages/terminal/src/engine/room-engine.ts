@@ -2,7 +2,6 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { constants, setPriority } from 'node:os';
 import { join } from 'node:path';
 import type { Participant, WSMessage } from '@openmeet/shared';
-import { VU_LEVEL_STEPS, VU_MAX_RMS } from '../lib/audio/constants.js';
 import { type AudioDeviceSelection, AudioManager } from '../lib/audio/index.js';
 import { createNoiseSuppressor } from '../lib/audio/noise-suppression.js';
 import { isBroadcastDevice } from '../lib/audio/nvidia-broadcast.js';
@@ -29,7 +28,6 @@ import {
 const MAX_CAMERA_RETRIES = 1;
 
 /** Levels are quantized to the VU meter's resolution so snapshots only change per visible step. */
-const LEVEL_STEP = VU_MAX_RMS / VU_LEVEL_STEPS;
 /** Snapshots are coalesced: at most one every SNAPSHOT_INTERVAL_MS. */
 const SNAPSHOT_INTERVAL_MS = 100;
 
@@ -73,7 +71,6 @@ export class RoomEngine {
 
   private logFile: string | null = null;
   private readonly fileOnlyLog = fileLoggingEnabled();
-  private levelTimer: ReturnType<typeof setInterval> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private statsPolls = 0;
   private visible = true;
@@ -192,6 +189,7 @@ export class RoomEngine {
       onDebug: debugFn,
       inputChannels: options.input.channels,
       inputGainDb: options.input.gainDb,
+      voiceGate: options.input.voiceGate,
     });
 
     if (options.noiseSuppression && isBroadcastDevice(options.deviceSelection.input)) {
@@ -296,10 +294,7 @@ export class RoomEngine {
     });
 
     ws.connect();
-    if (this.visible) {
-      this.startLevelPolling();
-      this.startStatsPolling();
-    }
+    if (this.visible) this.startStatsPolling();
     this.startDiagnostics();
     this.flushSnapshot();
   }
@@ -332,8 +327,7 @@ export class RoomEngine {
   }
 
   private stopPolling(): void {
-    for (const t of [this.levelTimer, this.statsTimer]) if (t) clearInterval(t);
-    this.levelTimer = null;
+    if (this.statsTimer) clearInterval(this.statsTimer);
     this.statsTimer = null;
   }
 
@@ -656,15 +650,14 @@ export class RoomEngine {
   }
 
   /**
-   * Nobody is looking: stop the polls that only feed the display (VU levels, stats). Audio
-   * and signaling are untouched. On return, resume and push a fresh snapshot.
+   * Nobody is looking: stop the poll that only feeds the display (stats). Audio and
+   * signaling are untouched. On return, resume and push a fresh snapshot.
    */
   setVisible(visible: boolean): void {
     if (visible === this.visible) return;
     this.visible = visible;
     if (!this.options) return;
     if (visible) {
-      this.startLevelPolling();
       this.startStatsPolling();
       this.flushSnapshot();
     } else {
@@ -685,25 +678,6 @@ export class RoomEngine {
   }
 
   // ─── Periodic work ───────────────────────────────────────────────────
-
-  private startLevelPolling(): void {
-    if (this.levelTimer) return;
-    this.levelTimer = setInterval(() => {
-      const am = this.audioManager;
-      if (!am) return;
-      // Quantized so a snapshot only goes out when a VU bar actually changes.
-      const raw = am.getAllAudioLevels();
-      const next: Record<string, number> = {};
-      for (const [id, rms] of Object.entries(raw)) {
-        next[id] = Math.min(Math.round(rms / LEVEL_STEP), VU_LEVEL_STEPS) * LEVEL_STEP;
-      }
-      const prev = this.state.audioLevels;
-      const prevKeys = Object.keys(prev);
-      const nextKeys = Object.keys(next);
-      if (prevKeys.length === nextKeys.length && nextKeys.every((k) => prev[k] === next[k])) return;
-      this.patch({ audioLevels: next });
-    }, 100);
-  }
 
   private startDiagnostics(): void {
     if (!diagnosticsEnabled(this.state.debugMode)) return;

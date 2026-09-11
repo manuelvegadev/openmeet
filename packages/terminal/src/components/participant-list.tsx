@@ -3,10 +3,8 @@ import { Box } from 'ink';
 import type { ReactNode } from 'react';
 import stringWidth from 'string-width';
 import type { ConnectionStats } from '../hooks/use-room.js';
-import { VU_BAR_COUNT } from '../lib/audio/constants.js';
 import { NAME_MAX_CELLS } from '../lib/identity.js';
 import { theme } from '../lib/theme.js';
-import { VuMeter } from './level-bar.js';
 import { Name } from './name.js';
 import { Divider, POINTER, Pointer, Rule, Text } from './text.js';
 
@@ -14,6 +12,8 @@ import { Divider, POINTER, Pointer, Rule, Text } from './text.js';
  * The column's width, from the widest line it can ever hold, so nothing wraps and the chat
  * — the flexible side — never reflows when a tag appears. The widest is a remote peer with
  * every tag, a name at `NAME_MAX_CELLS`, three-digit numbers and a volume other than 100%.
+ * It follows the rule rather than a number, so dropping the meter gave the chat its ten
+ * cells back on its own.
  * Measured with the same `string-width` Ink lays text out with, so a wide character counts
  * its two cells.
  */
@@ -33,10 +33,9 @@ function Tag({ letter, color, watching = false }: { letter: string; color: strin
 }
 
 const LONGEST_NAME = `[${'M'.repeat(NAME_MAX_CELLS)}]`;
-const METER = '█'.repeat(VU_BAR_COUNT);
 const ALL_TAGS = `${TAG.muted}${TAG.cam}${TAG.scr}`;
-const WIDEST_PEER_LINE = `○ ${POINTER} ${LONGEST_NAME} ${ALL_TAGS} ↓999k ~999ms 60% ${METER}`;
-const WIDEST_LOCAL_LINE = `○ ${LONGEST_NAME} ${ALL_TAGS} ↑999k ${METER}`;
+const WIDEST_PEER_LINE = `○ ${POINTER} ${LONGEST_NAME} ${ALL_TAGS} ↓999k ~999ms 60%`;
+const WIDEST_LOCAL_LINE = `○ ${LONGEST_NAME} ${ALL_TAGS} ↑999k`;
 const PADDING = 1;
 export const PARTICIPANTS_WIDTH = Math.max(stringWidth(WIDEST_PEER_LINE), stringWidth(WIDEST_LOCAL_LINE)) + 2 * PADDING;
 
@@ -54,7 +53,6 @@ interface ParticipantListProps {
   peerVideoOpen: Record<string, boolean>;
   peerScreenOpen: Record<string, boolean>;
   speakingStates: Record<string, boolean>;
-  audioLevels: Record<string, number>;
   peerVolumes: Record<string, number>;
   selectedPeerIdx: number;
   connectionStats: ConnectionStats | null;
@@ -64,9 +62,16 @@ interface ParticipantListProps {
 
 /**
  * The participants column, one line per person: speaking dot, selection marker, name and
- * tags on the left; numbers and the meter on the right, meter last so they line up down the
- * column. You come first, set apart by a blank line, with no "(you)" — being first and
- * having no marker is the tell.
+ * tags on the left; numbers on the right, lined up down the column. You come first, set
+ * apart by a blank line, with no "(you)" — being first and having no marker is the tell.
+ *
+ * The dot is the whole of the audio display, and it is the voice gate: filled while that
+ * person is on the air, hollow while they are not. There used to be a ten-cell VU meter
+ * beside it, redrawn ten times a second, which in a terminal means rebuilding and
+ * reserialising the entire frame ten times a second — measured at 31 ms of CPU a frame, and
+ * the single largest thing the TUI did (docs/performance.md). A level meter is worth that
+ * while you are choosing a microphone, which is where it still lives; during a call the one
+ * thing worth a cell is whether your voice is reaching anyone.
  *
  * The tags carry two things at once: which state (the letter and its colour) and whether you
  * are watching that peer (its case). The bar below says what `w`/`e` would do to the selected
@@ -86,7 +91,6 @@ export function ParticipantList({
   peerVideoOpen,
   peerScreenOpen,
   speakingStates,
-  audioLevels,
   peerVolumes,
   selectedPeerIdx,
   connectionStats,
@@ -110,10 +114,7 @@ export function ParticipantList({
             {videoEnabled && !isVideoMuted && <Tag letter={TAG.cam} color={theme.accentAlt} />}
             {isScreenSharing && <Tag letter={TAG.scr} color={theme.info} />}
           </Text>
-          <Text>
-            {connectionStats && <Text dimColor>↑{connectionStats.sendBitrateKbps}k </Text>}
-            <VuMeter level={audioLevels.__local__ ?? 0} />
-          </Text>
+          {connectionStats && <Text dimColor>↑{connectionStats.sendBitrateKbps}k</Text>}
         </Box>
         {/* Inside the padding, so it groups your row with your keys rather than reading as a
             break across the room. */}
@@ -126,7 +127,6 @@ export function ParticipantList({
         {participants.map((p, idx) => {
           const speaking = speakingStates[p.id] && !remoteMuteStates[p.id];
           const isSelected = idx === selectedPeerIdx;
-          const level = audioLevels[p.id] ?? 0;
           const vol = peerVolumes[p.id] ?? 1;
           const peerRecvKbps = connectionStats?.peerRecvBitrateKbps[p.id];
           const latency = connectionStats?.peerLatencyMs[p.id];
@@ -152,11 +152,10 @@ export function ParticipantList({
                 {peerRecvKbps !== undefined && <Text dimColor>↓{peerRecvKbps}k </Text>}
                 {latency != null && (
                   <Text dimColor={latencyColor == null} color={latencyColor}>
-                    ~{latency}ms{' '}
+                    ~{latency}ms{vol !== 1 ? ' ' : ''}
                   </Text>
                 )}
-                {vol !== 1 && <Text dimColor>{Math.round(vol * 100)}% </Text>}
-                <VuMeter level={level} volume={vol} />
+                {vol !== 1 && <Text dimColor>{Math.round(vol * 100)}%</Text>}
               </Text>
             </Box>
           );

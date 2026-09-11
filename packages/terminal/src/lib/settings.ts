@@ -45,14 +45,14 @@ export interface AppSettings {
   screenReceiveKbps: number;
   /** RNNoise on the capture path. Opt-in: it is a taste call, and it costs ~0.2 ms a frame. */
   noiseSuppression: boolean;
+  /**
+   * Transmit only while the voice gate is open (see `audio/voice-gate.ts`). On by default:
+   * it is what keeps a silent participant from costing every peer an encode and a decode.
+   * Off sends continuously, which is what the app did before.
+   */
+  voiceGate: boolean;
   /** Pause TUI rendering when the window is minimized (default) or unfocused, or never. */
   pauseRendering: RenderPausePolicy;
-}
-
-const DEFAULTS: AppSettings = {
-  name: null,
-  color: null,
-  audioInputId: null,
   /** auto installs on the way out, notify only says so, off does not even ask the registry. */
   autoUpdate: UpdatePolicy;
   /** When we last asked the registry, so a launch does not (see lib/update.ts). */
@@ -61,6 +61,12 @@ const DEFAULTS: AppSettings = {
   latestSeen: string | null;
   /** The version that ran last, which is how a silent update gets to announce itself once. */
   lastRunVersion: string | null;
+}
+
+const DEFAULTS: AppSettings = {
+  name: null,
+  color: null,
+  audioInputId: null,
   audioOutputId: null,
   videoDeviceId: null,
   devicesConfigured: false,
@@ -73,7 +79,12 @@ const DEFAULTS: AppSettings = {
   screenSendKbps: DEFAULT_SCREEN_KBPS,
   screenReceiveKbps: DEFAULT_SCREEN_KBPS,
   noiseSuppression: false,
+  voiceGate: true,
   pauseRendering: 'minimized',
+  autoUpdate: 'auto',
+  lastUpdateCheck: 0,
+  latestSeen: null,
+  lastRunVersion: null,
 };
 
 let cache: AppSettings | null = null;
@@ -81,10 +92,6 @@ let cache: AppSettings | null = null;
 function readFromDisk(): AppSettings {
   try {
     // Strip a UTF-8 BOM: JSON.parse throws on it, and the catch below would then silently
-  autoUpdate: 'auto',
-  lastUpdateCheck: 0,
-  latestSeen: null,
-  lastRunVersion: null,
     // hand back DEFAULTS — every saved setting lost with nothing said. Windows puts one there
     // easily (Notepad, and PowerShell's `Set-Content -Encoding UTF8`), which is how this was
     // found. `wt-profile.cjs` already had to do the same for Windows Terminal's own file.

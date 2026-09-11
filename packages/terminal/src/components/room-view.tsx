@@ -401,7 +401,8 @@ export function RoomView({
       <Box paddingX={1} gap={1} justifyContent="space-between">
         <Box gap={1}>
           <Text bold color={theme.accent}>
-            OpenMeet <Text dimColor>v{version}</Text> <Text dimColor>({platformName})</Text>
+            OpenMeet <Text dimColor>v{version}</Text>
+            {update && <Text color={theme.accent}> → v{update.version}</Text>} <Text dimColor>({platformName})</Text>
           </Text>
           {/* `g` toggles the debug panel and is deliberately not drawn: it is for whoever is
               debugging the app, not for whoever is in the call. */}
@@ -493,7 +494,6 @@ export function RoomView({
               peerVideoOpen={room.peerVideoOpen}
               peerScreenOpen={room.peerScreenOpen}
               speakingStates={room.speakingStates}
-              audioLevels={room.audioLevels}
               peerVolumes={room.peerVolumes}
               selectedPeerIdx={selectedPeerIdx}
               connectionStats={room.connectionStats}

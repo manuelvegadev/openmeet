@@ -39,6 +39,7 @@ jobs:
         run: |
           pnpm --filter openmeet-terminal exec tsx scripts/resampler-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/channels-test.ts
+          pnpm --filter openmeet-terminal exec tsx scripts/voice-gate-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/sdp-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/nvidia-broadcast-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/share-probe.ts
@@ -47,8 +48,8 @@ jobs:
           pnpm --filter openmeet-terminal exec tsx scripts/chat-test.ts
           pnpm --filter openmeet-terminal exec tsx scripts/room-frame-test.tsx
           pnpm --filter openmeet-terminal exec tsx scripts/children-test.ts
-
           pnpm --filter openmeet-terminal exec tsx scripts/update-test.ts
+
       # audify links against PulseAudio on Linux; the runner image ships no libpulse.
       - name: Install Linux audio libraries
         if: runner.os == 'Linux'

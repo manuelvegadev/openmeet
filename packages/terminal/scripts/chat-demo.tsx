@@ -173,7 +173,6 @@ function Demo() {
             peerVideoOpen={{}}
             peerScreenOpen={{}}
             speakingStates={{ ana: true }}
-            audioLevels={{ __local__: 2400, ana: 5600, owl: 0, wil: 800 }}
             peerVolumes={{ ana: 1, owl: 1, wil: 0.7 }}
             selectedPeerIdx={0}
             connectionStats={{

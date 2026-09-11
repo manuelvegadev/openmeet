@@ -132,7 +132,7 @@ export function useRoom(options: UseRoomOptions): UseRoomReturn {
         username,
         color,
         deviceSelection,
-        input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
+        input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb, voiceGate: s.voiceGate },
         bitrate: {
           sendKbps: s.audioSendKbps,
           receiveKbps: s.audioReceiveKbps,

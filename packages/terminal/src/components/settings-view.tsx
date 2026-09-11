@@ -125,6 +125,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       disabled: broadcastActive,
     },
     {
+      key: 'voice-gate',
+      // The dot beside a name is this gate: on means that person is reaching the room.
+      label: 'Voice Gate',
+      value: settings.voiceGate ? 'On (silence is not sent)' : 'Off (always sending)',
+      run: () => update({ voiceGate: !settings.voiceGate }),
+    },
+    {
       key: 'send-kbps',
       label: 'Audio Send',
       value: `${settings.audioSendKbps} kbps (applies on next join)`,
@@ -149,13 +156,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       run: () => update({ screenReceiveKbps: cycleNumber(SCREEN_KBPS_STEPS, settings.screenReceiveKbps) }),
     },
     {
-      key: 'pause',
-      label: 'Pause Rendering',
-      value: `when ${settings.pauseRendering} (applies on next start)`,
-      run: () => update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) }),
-    },
-  ];
-    {
       key: 'auto-update',
       label: 'Updates',
       // The wording is what each one does, not what it is called: nobody should have to
@@ -167,6 +167,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       }[settings.autoUpdate],
       run: () => update({ autoUpdate: cycle(UPDATE_POLICIES, settings.autoUpdate) }),
     },
+    {
+      key: 'pause',
+      label: 'Pause Rendering',
+      value: `when ${settings.pauseRendering} (applies on next start)`,
+      run: () => update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) }),
+    },
+  ];
   const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
 
   /** The three device pickers: one screen, three tables. */

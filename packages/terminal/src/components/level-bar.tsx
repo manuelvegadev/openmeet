@@ -1,4 +1,4 @@
-import { VU_BAR_COUNT, VU_MAX_RMS, VU_SUBSTEPS } from '../lib/audio/constants.js';
+import { VU_MAX_RMS, VU_SUBSTEPS } from '../lib/audio/constants.js';
 import { theme } from '../lib/theme.js';
 import { Text } from './text.js';
 
@@ -6,6 +6,10 @@ import { Text } from './text.js';
  * Audio level → colour. The one place the meter's thresholds live: green up to 40%, amber to
  * 75%, red above. Deliberately not the accent colour — a meter that turns the same yellow as
  * the interface chrome stops reading as a meter.
+ *
+ * There is one meter left in the app, on the device picker, and this is why: choosing a
+ * microphone is the one moment a continuous level is worth a redraw. In the room the audio
+ * display is the speaking dot (see `participant-list.tsx`).
  */
 export function levelColor(level: number, volume = 1): string {
   const normalized = Math.min(level / VU_MAX_RMS, 1) * volume;
@@ -46,18 +50,4 @@ const MIC_BAR_WIDTH = 30;
 /** The mic-test meter: one solid bar, no per-peer volume. */
 export function MicBar({ level }: { level: number }) {
   return <Bar fraction={level / VU_MAX_RMS} width={MIC_BAR_WIDTH} color={levelColor(level)} />;
-}
-
-/**
- * The participant meter: the track is as long as that peer's volume allows, so the bare tail
- * after it shows how much headroom the volume keys gave away.
- */
-export function VuMeter({ level, volume = 1 }: { level: number; volume?: number }) {
-  const active = Math.round(volume * VU_BAR_COUNT);
-  return (
-    <Text>
-      <Bar fraction={level / VU_MAX_RMS} width={active} color={levelColor(level, volume)} />
-      {' '.repeat(VU_BAR_COUNT - active)}
-    </Text>
-  );
 }

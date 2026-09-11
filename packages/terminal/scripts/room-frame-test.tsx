@@ -100,7 +100,6 @@ const Room = ({ footer }: { footer?: React.ReactNode }) => (
             peerVideoOpen={{}}
             peerScreenOpen={{}}
             speakingStates={{}}
-            audioLevels={{}}
             peerVolumes={{}}
             selectedPeerIdx={0}
             connectionStats={null}

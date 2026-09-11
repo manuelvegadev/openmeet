@@ -4,7 +4,7 @@ A terminal-based client for [OpenMeet](https://openmeet.mvega.pro) — join vide
 
 No browser needed. Just your terminal, a mic, and speakers.
 
-![OpenMeet running in a terminal: the conversation on the left, the participants with their state tags and VU meters on the right](https://raw.githubusercontent.com/manuelvegadev/openmeet/main/docs/screenshot.png)
+![OpenMeet running in a terminal: the conversation on the left, the participants with their state tags and speaking dots on the right](https://raw.githubusercontent.com/manuelvegadev/openmeet/main/docs/screenshot.png)
 
 ## Features
 
@@ -14,7 +14,7 @@ No browser needed. Just your terminal, a mic, and speakers.
 - **Text messaging** — one conversation: messages and what happens in the room (joins, mutes, shares) folded into a single stream by time
 - **Device selection** — pick your mic, speakers, camera, and screen capture device
 - **Per-participant volume** — adjust volume for each remote peer independently
-- **Speaking indicators** — see who's talking with live VU meters
+- **Speaking indicators** — a dot beside each name, lit while that person's voice gate is open
 - **Connection stats** — real-time bitrate, RTT, packet loss, and estimated per-peer latency display
 - **Connection recovery** — automatic retry with exponential backoff on connection failure
 - **Room management** — create new rooms or join existing ones by room code
@@ -140,6 +140,7 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--noise-suppression` | RNNoise on the microphone; `--no-noise-suppression` turns it off (saved; also in Settings). Ignored when the input is the NVIDIA Broadcast mic, which already does it on the GPU | off |
 | `--pause-rendering <p>` | Pause TUI rendering (audio keeps running) when the window is `minimized`, when it is `unfocused`, or `never` (saved; also in Settings) | `minimized` |
 | `--no-auto-update` | Do not check for or install an update this run (saved setting: Updates) | |
+| `--no-voice-gate` | Transmit continuously instead of only while you speak (saved; also in Settings) | gate on |
 | `--no-video` | Disable video (audio-only mode; the webcam is macOS/Linux only either way) | |
 | `--video-device <id>` | Video capture device (e.g., `"0"`) | |
 | `--no-overlay` | Disable video overlay | |
@@ -207,7 +208,9 @@ There is no macOS equivalent to detect: Broadcast is Windows-only, and macOS Voi
 
 ## Pausing rendering in the background
 
-The audio engine runs in its own process and never pauses. The TUI, however, redraws whenever a VU meter or a stat changes, which costs a few percent of a core during a conversation. With `--pause-rendering minimized` (the default) it stops applying updates while the terminal window is minimized and catches up the moment it is restored; `unfocused` does the same whenever the window loses focus (handy on a single screen, wrong if you keep the app visible on a second monitor); `never` disables it.
+The audio engine runs in its own process and never pauses. The TUI redraws when something on
+screen changes — someone starts or stops talking, a stat moves — which is a few times a
+second rather than the ten a VU meter used to cost. With `--pause-rendering minimized` (the default) it stops applying updates while the terminal window is minimized and catches up the moment it is restored; `unfocused` does the same whenever the window loses focus (handy on a single screen, wrong if you keep the app visible on a second monitor); `never` disables it.
 
 How "minimized" is detected: on Windows the app asks the OS about the Windows Terminal (or console) window hosting it; on macOS it asks Terminal.app or iTerm2 through Apple Events, which triggers the Automation permission prompt once — deny it and rendering is simply never paused. Other macOS terminals (WezTerm, kitty, Ghostty…) have no such hook; use `unfocused` there if you want the saving.
 

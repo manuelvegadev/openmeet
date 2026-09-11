@@ -26,7 +26,7 @@ export class MicTester {
     engine.send({
       type: 'mic-test-start',
       selection,
-      input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb },
+      input: { channels: s.audioInputChannels, gainDb: s.audioInputGainDb, voiceGate: s.voiceGate },
     });
   }
 

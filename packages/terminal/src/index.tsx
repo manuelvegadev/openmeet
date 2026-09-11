@@ -122,13 +122,14 @@ const { values } = parseArgs({
     'screen-receive-kbps': { type: 'string' },
     'noise-suppression': { type: 'boolean' },
     'no-noise-suppression': { type: 'boolean' },
+    'no-voice-gate': { type: 'boolean' },
     'pause-rendering': { type: 'string' },
     'video-device': { type: 'string' },
     'no-overlay': { type: 'boolean', default: false },
-    'test-camera': { type: 'boolean', default: false },
     'no-auto-update': { type: 'boolean', default: false },
     // Internal, like --engine: the detached installer the app leaves behind when it exits.
     'apply-update': { type: 'string' },
+    'test-camera': { type: 'boolean', default: false },
     'test-screen': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h' },
     debug: { type: 'boolean', default: false },
@@ -164,12 +165,13 @@ Usage: openmeet [options]
   --screen-send-kbps <n>    Screen-share ceiling per peer at 1080p (default 2500, saved)
   --screen-receive-kbps <n> Screen-share ceiling we ask of each peer (default 2500, saved)
   --noise-suppression    Enable RNNoise on the mic (--no-noise-suppression to turn off, saved)
+  --no-voice-gate        Transmit continuously instead of only while you speak (saved)
   --pause-rendering <p>  minimized (default) | unfocused | never — when to pause TUI rendering (saved)
   --video-device <name>  Video capture device (e.g., "0" for macOS avfoundation)
   --no-overlay           Disable video overlay (name, stream type, resolution)
+  --no-auto-update       Do not install updates on exit (this run only; see Settings to keep it off)
   --test-camera          Test camera capture (opens ffplay preview, no room join)
   --test-screen          Test screen capture (lists screens, opens ffplay preview)
-  --no-auto-update       Do not install updates on exit (this run only; see Settings to keep it off)
   -h, --help             Show help
 `);
   process.exit(0);
@@ -307,6 +309,7 @@ Your terminal app needs microphone permission on macOS:
   }
   if (values['noise-suppression']) saveSettings({ noiseSuppression: true });
   if (values['no-noise-suppression']) saveSettings({ noiseSuppression: false });
+  if (values['no-voice-gate']) saveSettings({ voiceGate: false });
   if (values['pause-rendering'] !== undefined) {
     const policy = parsePausePolicyFlag(values['pause-rendering']);
     if (policy === null) {
@@ -344,20 +347,20 @@ Your terminal app needs microphone permission on macOS:
   const stopWatcher = pausePolicy === 'minimized' ? startMinimizedWatcher(engineLog) : () => {};
   const stdinForInk = pausePolicy === 'unfocused' ? createFocusFilteredStdin(process.stdin) : undefined;
 
-  const instance = render(
-    <App
-      serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
   // A silent update announces itself exactly once, by the version it left behind not being
   // the one now running. Written before the first render so a crash cannot repeat the tick.
   const justUpdated = settings.lastRunVersion !== null && settings.lastRunVersion !== APP_VERSION;
   if (settings.lastRunVersion !== APP_VERSION) saveSettings({ lastRunVersion: APP_VERSION });
 
+  const instance = render(
+    <App
+      serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
       version={APP_VERSION}
+      updatePolicy={values['no-auto-update'] ? 'off' : settings.autoUpdate}
+      justUpdated={justUpdated}
       initialRoom={values.room}
       inputDevice={values['input-device']}
       outputDevice={values['output-device']}
-      updatePolicy={values['no-auto-update'] ? 'off' : settings.autoUpdate}
-      justUpdated={justUpdated}
       videoEnabled={videoEnabled}
       videoDisabledReason={videoDisabledReason}
       webcamEnabled={videoEnabled && support.webcam}
@@ -383,17 +386,17 @@ Your terminal app needs microphone permission on macOS:
   // process and says nothing.
   instance.waitUntilExit().then(async () => {
     stopWatcher();
-    engine.dispose();
-    setTimeout(() => process.exit(0), 100);
-  });
-  process.on('exit', () => {
-    stopWatcher();
     await engine.dispose();
     const pending = pendingUpdate();
     if (pending) {
       if (restartWasRequested()) await updateAndRelaunch(pending);
       else installOnExit(pending);
     }
+    setTimeout(() => process.exit(0), 100);
+  });
+  process.on('exit', () => {
+    stopWatcher();
+    engine.dispose();
   });
   // A plain SIGTERM would skip the 'exit' handlers above.
   process.on('SIGTERM', () => process.exit(0));
