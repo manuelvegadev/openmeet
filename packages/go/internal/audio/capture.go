@@ -2,7 +2,6 @@ package audio
 
 import (
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,11 +22,10 @@ type Packet struct {
 // frames, runs the voice gate, encodes what passes — once, whatever the room size — and
 // hands the packets to Send. Mute holds the gate shut without feeding it.
 //
-// The audio callback only copies. A callback from a C thread enters Go through cgo on an
-// extra M every time, and the encoder and the UDP write done from there measured at half
-// the process's CPU; on a goroutine of our own they are a fraction of that. The channel is
-// deep enough for the goroutine to be late by a period or two and shallow enough that a
-// stalled one drops frames rather than building latency.
+// OnPCM runs on the pump goroutine (devices.go), never on an audio thread, so the encoder
+// and the UDP write happen right there: one wake per pump, no hand-off to a second
+// goroutine. Encoding and sending from inside miniaudio's own callback had measured at half
+// the process's CPU.
 type Capture struct {
 	send       func(Packet)
 	onSpeaking func(bool)
@@ -41,14 +39,14 @@ type Capture struct {
 	afterGap   bool
 	out        []byte
 	start      time.Time
-	frames_    chan []int16
-	pool       sync.Pool
-	Late       int
 }
 
 type CaptureOptions struct {
 	// Opus bitrate in bps for the one encoder. 64 kbps mono is transparent for speech.
 	Bitrate int
+	// Opus encoder complexity 0..10; libopus defaults to its maximum. The encoder is the
+	// one piece of pure CPU in the send path, and this is its lever.
+	Complexity int
 	// Transmit only while the gate is open. Off sends every frame.
 	VoiceGate bool
 }
@@ -60,6 +58,11 @@ func NewCapture(opts CaptureOptions, send func(Packet), onSpeaking func(bool)) (
 	}
 	if opts.Bitrate > 0 {
 		if err := enc.SetBitrate(opts.Bitrate); err != nil {
+			return nil, err
+		}
+	}
+	if opts.Complexity > 0 {
+		if err := enc.SetComplexity(opts.Complexity); err != nil {
 			return nil, err
 		}
 	}
@@ -77,37 +80,19 @@ func NewCapture(opts CaptureOptions, send func(Packet), onSpeaking func(bool)) (
 		out:        make([]byte, 1500),
 		afterGap:   true,
 		start:      time.Now(),
-		frames_:    make(chan []int16, 8),
 	}
-	c.pool.New = func() any { return make([]int16, FrameLen) }
-	go c.loop()
 	return c, nil
-}
-
-func (c *Capture) loop() {
-	for frame := range c.frames_ {
-		c.frame(frame)
-		c.pool.Put(frame)
-	}
 }
 
 func (c *Capture) SetMuted(m bool) { c.muted.Store(m) }
 func (c *Capture) Muted() bool     { return c.muted.Load() }
 
-// OnPCM takes a driver period of mono samples. Runs on the audio thread: it copies into a
-// frame and hands it over, nothing more.
+// OnPCM takes whatever the pump drained from the capture ring, in mono samples.
 func (c *Capture) OnPCM(pcm []int16) {
 	c.acc = append(c.acc, pcm...)
 	for len(c.acc) >= FrameLen {
-		frame := c.pool.Get().([]int16)
-		copy(frame, c.acc[:FrameLen])
+		c.frame(c.acc[:FrameLen])
 		c.acc = append(c.acc[:0], c.acc[FrameLen:]...)
-		select {
-		case c.frames_ <- frame:
-		default:
-			c.pool.Put(frame)
-			c.Late++
-		}
 	}
 }
 

@@ -218,8 +218,39 @@ The three questions the spike was to answer:
 3. **Does the cgo build hurt?** Not on macOS: `brew install opus` and `go build`. Windows and
    Linux are not yet built.
 
-One finding worth keeping: **the audio callback must only copy.** miniaudio calls into Go
-from a C thread, which enters the runtime on an extra M every time, and encoding and
-sending from inside it measured at half the process's CPU. On a goroutine of our own the same
-work is a fraction of that. The receive floor that remains (~4%) is libopus, miniaudio's own
-processing and pion's per-packet path, in that order per the profile.
+Second round, the same afternoon, after asking *why* the numbers were not lower:
+
+| Go client, one process | before | after |
+|---|---|---|
+| devices open, nobody in the room | 1.9% | **1.0%** |
+| receiving one continuous stream | 3.9% | **2.2%** |
+| both directions, continuous (complexity 10 / 5) | 7.8% | **5.5% / 4.4%** |
+
+What changed, and what each was worth:
+
+1. **The audio callback is not in Go at all any more.** The same two devices cost 0.3% in a
+   C process and 1.9% with malgo's Go callbacks — entering the runtime from a foreign thread
+   two hundred times a second. `internal/audio/shim.c` compiles miniaudio in and keeps the
+   callbacks in C, moving samples to and from lock-free rings; a Go goroutine pumps the rings
+   with plain cgo calls. malgo is gone.
+2. **One wake per 20 ms, not four per 10.** The profile of a client doing nothing but pumping
+   was mostly `findRunnable` → `kevent` → `pthread_cond_signal`: the Go scheduler waking a
+   thread costs ~100 µs on macOS, and there were a ticker, a capture hand-off goroutine and
+   the callbacks all waking things. Now there is the pump, and the encoder runs on it.
+3. **pion without NACK and TWCC** for audio (in-band FEC does the job): 1.2% → 0.9% on the
+   receive path alone.
+4. **Opus complexity** is a real lever: 10 → 5 saves 1.1 points in the duplex case. Left at
+   10 by default until someone listens to the difference at 64 kbps.
+
+What remains, in order: the UDP `sendto` (a quarter of the duplex profile — on macOS
+loopback the sender also does the receiver's delivery, so this is partly an artefact of
+measuring on one machine), the codec, and the one wake per pump. That last one is the price
+of Go; a native client's CoreAudio thread does the work in place and pays nothing for it.
+
+**What this means for the Discord comparison.** Discord's client is native: its audio
+callback works in place, its packet path is C++, it has one connection, and it sends
+nothing while you are silent. Of those, the Go client now has the last two, and pays about
+one point of a core for not having the first two. In a real two-person call — real network,
+people talking in turns — that puts it at one to two percent on this Mac, with 31 MB
+resident. The Node client cannot get there from where it is: its engine alone is 6–8% in
+the same states, before its TUI.

@@ -6,7 +6,6 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/coder/websocket v1.8.15
-	github.com/gen2brain/malgo v0.11.26
 	github.com/pion/interceptor v0.1.48
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.20

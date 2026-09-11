@@ -66,10 +66,14 @@ func main() {
 		listDevs = flag.Bool("list-devices", false, "list audio devices and exit")
 		noGate   = flag.Bool("no-voice-gate", false, "transmit continuously instead of only while speaking")
 		bitrate  = flag.Int("audio-kbps", 64, "Opus bitrate (mono)")
+		complex  = flag.Int("opus-complexity", 10, "Opus encoder complexity 0..10")
 		headless = flag.Bool("headless", false, "no TUI: log to stderr, quit on SIGINT")
 		debug    = flag.Bool("debug", false, "write the engine's log to stderr (TUI) / stdout (headless)")
 		profile  = flag.String("cpuprofile", "", "write a CPU profile here until exit")
 		muted    = flag.Bool("start-muted", false, "join muted")
+		noAudio  = flag.Bool("no-audio", false, "open no audio devices (measures the network path alone)")
+		period   = flag.Int("period-ms", 10, "audio device period in ms (experiment)")
+		fullRTP  = flag.Bool("full-interceptors", false, "pion with NACK and TWCC too (audio needs neither; experiment)")
 	)
 	flag.Parse()
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
@@ -82,6 +86,8 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	audio.PeriodMs = *period
+	rtc.LeanInterceptors = !*fullRTP
 	engine, err := audio.NewEngine()
 	if err != nil {
 		log.Fatal(err)
@@ -186,23 +192,22 @@ func main() {
 
 	// ── the microphone, encoded once ──────────────────────────────────────────
 	var myID string
-	capture, err := audio.NewCapture(audio.CaptureOptions{Bitrate: *bitrate * 1000, VoiceGate: gate},
+	capture, err := audio.NewCapture(audio.CaptureOptions{Bitrate: *bitrate * 1000, Complexity: *complex, VoiceGate: gate},
 		func(p audio.Packet) { _ = peers.Write(p) },
 		func(on bool) { emit(tui.Speaking{ID: myID, On: on}) })
 	if err != nil {
 		log.Fatal(err)
 	}
 	capture.SetMuted(*muted)
-	capStream, err := engine.OpenCapture(input, capture.OnPCM)
-	if err != nil {
-		log.Fatal(err)
+	var pump *audio.Pump
+	if !*noAudio {
+		pump, err = engine.StartPump(input, output, capture.OnPCM, playout.Fill)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer pump.Close()
+		logf("audio: %s", pump.Describe())
 	}
-	defer capStream.Close()
-	playStream, err := engine.OpenPlayback(output, playout.Fill)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer playStream.Close()
 
 	// ── the room ──────────────────────────────────────────────────────────────
 	var mu sync.Mutex
@@ -322,6 +327,9 @@ func main() {
 				for _, id := range ids {
 					u, d, c, depth, rx, ts := playout.Stats(id)
 					parts = append(parts, fmt.Sprintf("%s u%d d%d c%d q%d rx%d ts%d", rtcShort(id), u, d, c, depth, rx, ts))
+				}
+				if pump != nil {
+					parts = append(parts, fmt.Sprintf("dev-underruns %d", pump.Underruns()))
 				}
 				emit(tui.Stats(strings.Join(parts, "  ")))
 				if *headless && *debug {

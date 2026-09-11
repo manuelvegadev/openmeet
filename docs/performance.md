@@ -277,3 +277,23 @@ five encoders for one microphone, and no amount of care in our code changes that
 is a library that accepts a packet we already encoded — pion's `TrackLocalStaticRTP.WriteRTP`
 writes one RTP packet to every bound PeerConnection — which is the argument in
 [go-migration-analysis.md](go-migration-analysis.md).
+
+## The Go client, same afternoon (branch `go-migration`)
+
+Measured against real Node clients in the same room on this Mac; the full ledger and what
+each change was worth are in `docs/go-migration-analysis.md` ("Spike results") and
+`packages/go/README.md`. The headline numbers, one process with its TUI:
+
+| state | Go | Node engine, before its TUI |
+|---|---|---|
+| devices open, room empty | 1.0%, 22 MB | — |
+| receiving one continuous stream | 2.2%, 31 MB | 6.2%, 105 MB |
+| both directions, continuous | 5.5% (4.4% at Opus complexity 5), 31 MB | 8.1%, 109 MB |
+| three peers instead of one | no change | +two thirds |
+| written to the terminal | 139 B/s | 90–100 KB/s |
+
+Two measurement facts worth remembering when reading them: on macOS loopback, `sendto`
+does the receiver's delivery in the sender's context, so every sender here pays for its
+peer's kernel work; and a tone keeps the voice gate open, so "continuous" is a worst case a
+conversation never reaches. The floor of the two devices themselves, in a C process with
+callbacks that only copy, is 0.3% of a core.

@@ -1,11 +1,20 @@
 package audio
 
+/*
+#cgo CFLAGS: -O2
+#cgo darwin LDFLAGS: -framework CoreAudio -framework CoreFoundation -framework AudioToolbox -lpthread -lm
+#cgo windows LDFLAGS: -lole32 -lwinmm
+#cgo linux LDFLAGS: -lpthread -lm -ldl
+#include <stdlib.h>
+#include "shim.h"
+*/
+import "C"
+
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unsafe"
-
-	"github.com/gen2brain/malgo"
 )
 
 // Everything crosses this package at 48 kHz: capture as mono int16 in 20 ms frames (the
@@ -17,48 +26,63 @@ const (
 	OutChannels = 2
 )
 
-// Engine owns the miniaudio context, which is the one native dependency for audio I/O on
-// every platform (CoreAudio, WASAPI, ALSA/PulseAudio) and is statically linked.
-type Engine struct {
-	ctx *malgo.AllocatedContext
-}
+// PeriodMs is the device period. The rings are pumped every PumpMs from Go; the ring holds
+// RingMs so a late pump is a late pump and not a dropout.
+var (
+	PeriodMs = 10
+	// Every wake of a Go thread costs on the order of 100 µs on macOS (kevent, then a mach
+	// semaphore), and the profile of a client doing nothing but pumping was mostly that. So
+	// the pump runs at 20 ms, and everything periodic in the audio path rides on it.
+	PumpMs = 20
+	RingMs = 100
+	// PlayAheadMs is how much decoded audio the pump keeps in the playback ring: enough to
+	// cover a late tick, little enough not to add latency you can hear.
+	PlayAheadMs = 40
+)
+
+// Engine owns the miniaudio context — the one native dependency for audio I/O on every
+// platform (CoreAudio, WASAPI, ALSA/PulseAudio), compiled into the binary from shim.c.
+type Engine struct{}
 
 type Device struct {
 	Name    string
-	ID      malgo.DeviceID
+	Index   int
 	Default bool
 }
 
 func NewEngine() (*Engine, error) {
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("audio context: %w", err)
+	if C.om_init() != 0 {
+		return nil, fmt.Errorf("audio context: miniaudio failed to initialise")
 	}
-	return &Engine{ctx: ctx}, nil
+	return &Engine{}, nil
 }
 
-func (e *Engine) Close() {
-	_ = e.ctx.Uninit()
-	e.ctx.Free()
-}
+func (e *Engine) Close() {}
 
-func (e *Engine) list(kind malgo.DeviceType) ([]Device, error) {
-	infos, err := e.ctx.Devices(kind)
-	if err != nil {
-		return nil, err
+func (e *Engine) list(playback bool) ([]Device, error) {
+	pb := C.int(0)
+	if playback {
+		pb = 1
 	}
-	out := make([]Device, 0, len(infos))
-	for _, i := range infos {
-		out = append(out, Device{Name: i.Name(), ID: i.ID, Default: i.IsDefault != 0})
+	n := int(C.om_device_count(pb))
+	out := make([]Device, 0, n)
+	buf := (*C.char)(C.malloc(256))
+	defer C.free(unsafe.Pointer(buf))
+	for i := 0; i < n; i++ {
+		var def C.int
+		if C.om_device_name(pb, C.int(i), buf, 256, &def) != 0 {
+			continue
+		}
+		out = append(out, Device{Name: C.GoString(buf), Index: i, Default: def != 0})
 	}
 	return out, nil
 }
 
-func (e *Engine) Inputs() ([]Device, error)  { return e.list(malgo.Capture) }
-func (e *Engine) Outputs() ([]Device, error) { return e.list(malgo.Playback) }
+func (e *Engine) Inputs() ([]Device, error)  { return e.list(false) }
+func (e *Engine) Outputs() ([]Device, error) { return e.list(true) }
 
 // Find picks a device by a case-insensitive substring of its name, or the default when
-// name is empty. Returns nil for the default so the driver chooses.
+// name is empty (nil: the driver chooses).
 func Find(devices []Device, name string) (*Device, error) {
 	if name == "" {
 		return nil, nil
@@ -72,73 +96,106 @@ func Find(devices []Device, name string) (*Device, error) {
 	return nil, fmt.Errorf("no audio device matches %q", name)
 }
 
-// Stream is one open device, capture or playback.
+// Stream is one open device and its ring.
 type Stream struct {
-	dev *malgo.Device
+	s        *C.om_stream
+	channels int
 }
 
-func (s *Stream) Close() {
-	s.dev.Uninit()
-}
-
-// OpenCapture opens a mono 48 kHz capture stream; onPCM gets each driver period as int16.
-// The callback runs on the audio thread: do not block in it.
-func (e *Engine) OpenCapture(dev *Device, onPCM func(pcm []int16)) (*Stream, error) {
-	cfg := malgo.DefaultDeviceConfig(malgo.Capture)
-	cfg.Capture.Format = malgo.FormatS16
-	cfg.Capture.Channels = 1
-	cfg.SampleRate = SampleRate
-	cfg.PeriodSizeInMilliseconds = 10
+func (e *Engine) open(playback bool, dev *Device, channels int) (*Stream, error) {
+	pb, idx := C.int(0), C.int(-1)
+	if playback {
+		pb = 1
+	}
 	if dev != nil {
-		id := dev.ID
-		cfg.Capture.DeviceID = id.Pointer()
+		idx = C.int(dev.Index)
 	}
-	callbacks := malgo.DeviceCallbacks{
-		Data: func(_, in []byte, frames uint32) {
-			if frames == 0 {
-				return
-			}
-			onPCM(unsafe.Slice((*int16)(unsafe.Pointer(&in[0])), int(frames)))
-		},
+	s := C.om_open(pb, idx, C.int(channels), SampleRate, C.int(PeriodMs), C.int(RingMs))
+	if s == nil {
+		kind := "capture"
+		if playback {
+			kind = "playback"
+		}
+		return nil, fmt.Errorf("%s device: could not open", kind)
 	}
-	d, err := malgo.InitDevice(e.ctx.Context, cfg, callbacks)
-	if err != nil {
-		return nil, fmt.Errorf("capture device: %w", err)
-	}
-	if err := d.Start(); err != nil {
-		d.Uninit()
-		return nil, fmt.Errorf("capture start: %w", err)
-	}
-	return &Stream{dev: d}, nil
+	return &Stream{s: s, channels: channels}, nil
 }
 
-// OpenPlayback opens a stereo 48 kHz playback stream; fill is asked for interleaved
-// stereo int16 for each driver period. Same rule: it runs on the audio thread.
-func (e *Engine) OpenPlayback(dev *Device, fill func(out []int16)) (*Stream, error) {
-	cfg := malgo.DefaultDeviceConfig(malgo.Playback)
-	cfg.Playback.Format = malgo.FormatS16
-	cfg.Playback.Channels = OutChannels
-	cfg.SampleRate = SampleRate
-	cfg.PeriodSizeInMilliseconds = 10
-	if dev != nil {
-		id := dev.ID
-		cfg.Playback.DeviceID = id.Pointer()
-	}
-	callbacks := malgo.DeviceCallbacks{
-		Data: func(out, _ []byte, frames uint32) {
-			if frames == 0 {
-				return
-			}
-			fill(unsafe.Slice((*int16)(unsafe.Pointer(&out[0])), int(frames)*OutChannels))
-		},
-	}
-	d, err := malgo.InitDevice(e.ctx.Context, cfg, callbacks)
+func (st *Stream) Close()         { C.om_close(st.s) }
+func (st *Stream) Rate() int      { return int(C.om_rate(st.s)) }
+func (st *Stream) Available() int { return int(C.om_available(st.s)) }
+func (st *Stream) Underruns() int { return int(C.om_underruns(st.s)) }
+func (st *Stream) read(buf []int16) int {
+	return int(C.om_read(st.s, (*C.int16_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)/st.channels)))
+}
+func (st *Stream) write(buf []int16) int {
+	return int(C.om_write(st.s, (*C.int16_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)/st.channels)))
+}
+
+// Pump moves audio between the device rings and the pipeline on a goroutine of our own:
+// every PumpMs it hands whatever the microphone captured to onPCM and keeps PlayAheadMs of
+// mixed audio in the playback ring. The audio threads never see Go.
+type Pump struct {
+	capture  *Stream
+	playback *Stream
+	stop     chan struct{}
+	done     chan struct{}
+}
+
+func (e *Engine) StartPump(in, out *Device, onPCM func(pcm []int16), fill func(out []int16)) (*Pump, error) {
+	capture, err := e.open(false, in, 1)
 	if err != nil {
-		return nil, fmt.Errorf("playback device: %w", err)
+		return nil, err
 	}
-	if err := d.Start(); err != nil {
-		d.Uninit()
-		return nil, fmt.Errorf("playback start: %w", err)
+	playback, err := e.open(true, out, OutChannels)
+	if err != nil {
+		capture.Close()
+		return nil, err
 	}
-	return &Stream{dev: d}, nil
+	p := &Pump{capture: capture, playback: playback, stop: make(chan struct{}), done: make(chan struct{})}
+	go p.run(onPCM, fill)
+	return p, nil
+}
+
+func (p *Pump) run(onPCM func([]int16), fill func([]int16)) {
+	defer close(p.done)
+	inBuf := make([]int16, SampleRate*RingMs/1000)
+	// Playback is written in 10 ms pieces, so the ring is topped up rather than refilled.
+	piece := SampleRate * 10 / 1000 * OutChannels
+	outBuf := make([]int16, piece)
+	ahead := SampleRate * PlayAheadMs / 1000
+	ringFrames := SampleRate * RingMs / 1000
+	t := time.NewTicker(time.Duration(PumpMs) * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-p.stop:
+			return
+		case <-t.C:
+			if n := p.capture.read(inBuf); n > 0 {
+				onPCM(inBuf[:n])
+			}
+			for ringFrames-p.playback.Available() < ahead {
+				fill(outBuf)
+				if p.playback.write(outBuf) < len(outBuf)/OutChannels {
+					break
+				}
+			}
+		}
+	}
+}
+
+// Describe says what the devices are really running at.
+func (p *Pump) Describe() string {
+	return fmt.Sprintf("capture %d Hz, playback %d Hz, ring %d ms, pump every %d ms", p.capture.Rate(), p.playback.Rate(), RingMs, PumpMs)
+}
+
+// Underruns is how often the playback callback found the ring empty, plus capture overruns.
+func (p *Pump) Underruns() int { return p.playback.Underruns() + p.capture.Underruns() }
+
+func (p *Pump) Close() {
+	close(p.stop)
+	<-p.done
+	p.capture.Close()
+	p.playback.Close()
 }

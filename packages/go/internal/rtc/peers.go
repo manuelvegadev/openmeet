@@ -28,6 +28,10 @@ var iceServers = []webrtc.ICEServer{
 
 const maxRetries = 3
 
+// LeanInterceptors drops NACK and TWCC from the pion pipeline: an experiment knob for the
+// per-packet-cost question. Audio with in-band FEC has little use for either.
+var LeanInterceptors = false
+
 type conn struct {
 	pc          *webrtc.PeerConnection
 	makingOffer bool
@@ -79,7 +83,11 @@ func NewManager(o Options) (*Manager, error) {
 		return nil, err
 	}
 	reg := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(me, reg); err != nil {
+	if LeanInterceptors {
+		if err := webrtc.ConfigureRTCPReports(reg); err != nil {
+			return nil, err
+		}
+	} else if err := webrtc.RegisterDefaultInterceptors(me, reg); err != nil {
 		return nil, err
 	}
 	track, err := webrtc.NewTrackLocalStaticRTP(
