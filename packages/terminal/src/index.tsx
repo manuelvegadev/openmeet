@@ -29,6 +29,13 @@ import { AUDIO_KBPS_MAX, AUDIO_KBPS_MIN, parseKbpsFlag, SCREEN_KBPS_MAX, SCREEN_
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { findTool } from './lib/tool-path.js';
 import {
+  installOnExit,
+  pendingUpdate,
+  restartWasRequested,
+  runUpdateInstaller,
+  updateAndRelaunch,
+} from './lib/update.js';
+import {
   createFocusFilteredStdin,
   parsePausePolicyFlag,
   RENDER_PAUSE_POLICIES,
@@ -119,6 +126,9 @@ const { values } = parseArgs({
     'video-device': { type: 'string' },
     'no-overlay': { type: 'boolean', default: false },
     'test-camera': { type: 'boolean', default: false },
+    'no-auto-update': { type: 'boolean', default: false },
+    // Internal, like --engine: the detached installer the app leaves behind when it exits.
+    'apply-update': { type: 'string' },
     'test-screen': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h' },
     debug: { type: 'boolean', default: false },
@@ -128,7 +138,10 @@ const { values } = parseArgs({
 // ─── Engine process ───────────────────────────────────────────────────
 // Forked by the TUI (see engine/client.ts). Owns audio, WebRTC and signaling so the
 // 10 ms audio path never shares an event loop with terminal rendering.
-if (values.engine) {
+if (values['apply-update']) {
+  // Not the app: the process that replaces it, started detached by the run that just ended.
+  process.exit(await runUpdateInstaller(values['apply-update']));
+} else if (values.engine) {
   // The TUI passes the resolved backend name; runEngine() never resolves (the process
   // exits from inside when the TUI disconnects).
   setActiveBackendName(resolveBackendName(parseBackendFlag(values['audio-backend']) ?? 'auto'));
@@ -156,6 +169,7 @@ Usage: openmeet [options]
   --no-overlay           Disable video overlay (name, stream type, resolution)
   --test-camera          Test camera capture (opens ffplay preview, no room join)
   --test-screen          Test screen capture (lists screens, opens ffplay preview)
+  --no-auto-update       Do not install updates on exit (this run only; see Settings to keep it off)
   -h, --help             Show help
 `);
   process.exit(0);
@@ -323,7 +337,8 @@ Your terminal app needs microphone permission on macOS:
   // alternateScreen: Ink enters/leaves the alt buffer itself (like vim/htop).
   // Rendering pause policy (see lib/window-state.ts). The window title lets the OS-side
   // minimized watchers find our window; Windows Terminal's profile pins it anyway.
-  const pausePolicy = loadSettings().pauseRendering;
+  const settings = loadSettings();
+  const pausePolicy = settings.pauseRendering;
   setTerminalTitle(WINDOW_TITLE);
   const engineLog = (message: string) => engine.send({ type: 'log', message });
   const stopWatcher = pausePolicy === 'minimized' ? startMinimizedWatcher(engineLog) : () => {};
@@ -332,10 +347,17 @@ Your terminal app needs microphone permission on macOS:
   const instance = render(
     <App
       serverUrl={values.server ?? 'wss://openmeet.mvega.pro/ws'}
+  // A silent update announces itself exactly once, by the version it left behind not being
+  // the one now running. Written before the first render so a crash cannot repeat the tick.
+  const justUpdated = settings.lastRunVersion !== null && settings.lastRunVersion !== APP_VERSION;
+  if (settings.lastRunVersion !== APP_VERSION) saveSettings({ lastRunVersion: APP_VERSION });
+
       version={APP_VERSION}
       initialRoom={values.room}
       inputDevice={values['input-device']}
       outputDevice={values['output-device']}
+      updatePolicy={values['no-auto-update'] ? 'off' : settings.autoUpdate}
+      justUpdated={justUpdated}
       videoEnabled={videoEnabled}
       videoDisabledReason={videoDisabledReason}
       webcamEnabled={videoEnabled && support.webcam}
@@ -355,15 +377,23 @@ Your terminal app needs microphone permission on macOS:
     },
   );
 
-  // After Ink unmounts, stop the engine and exit
-  instance.waitUntilExit().then(() => {
+  // After Ink unmounts, stop the engine and exit — and this is the only moment an update can
+  // be installed: the alternate screen is gone, and so are the native modules npm has to
+  // overwrite. `r` waits for it with the terminal in view; quitting hands it to a detached
+  // process and says nothing.
+  instance.waitUntilExit().then(async () => {
     stopWatcher();
     engine.dispose();
     setTimeout(() => process.exit(0), 100);
   });
   process.on('exit', () => {
     stopWatcher();
-    engine.dispose();
+    await engine.dispose();
+    const pending = pendingUpdate();
+    if (pending) {
+      if (restartWasRequested()) await updateAndRelaunch(pending);
+      else installOnExit(pending);
+    }
   });
   // A plain SIGTERM would skip the 'exit' handlers above.
   process.on('SIGTERM', () => process.exit(0));

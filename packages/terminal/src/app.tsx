@@ -10,6 +10,7 @@ import { resolveBroadcastDefault } from './lib/audio/nvidia-broadcast.js';
 import type { Identity } from './lib/identity.js';
 import { loadIdentity, loadSettings, saveSettings } from './lib/settings.js';
 import { framedBorder, theme } from './lib/theme.js';
+import { checkForUpdate, requestRestartForUpdate, type UpdatePolicy, type UpdateStatus } from './lib/update.js';
 
 interface AppProps {
   serverUrl: string;
@@ -22,6 +23,10 @@ interface AppProps {
   videoDisabledReason?: string;
   webcamEnabled?: boolean;
   videoDevice?: string;
+  /** off skips the registry entirely; notify shows the version but installs nothing. */
+  updatePolicy?: UpdatePolicy;
+  /** True on the first launch after an update installed itself on the way out. */
+  justUpdated?: boolean;
   debug?: boolean;
 }
 
@@ -46,7 +51,7 @@ type Screen = 'profile' | 'home' | 'settings' | 'devices' | 'room';
  * nothing else is ever wider than the frame, while content taller than the terminal must not
  * scroll the alternate screen.
  */
-function FullScreen({ children, closeBottom = true }: { children: React.ReactNode; closeBottom?: boolean }) {
+export function FullScreen({ children, closeBottom = true }: { children: React.ReactNode; closeBottom?: boolean }) {
   const { rows } = useWindowSize();
 
   return (
@@ -74,6 +79,8 @@ export function App({
   videoDisabledReason,
   webcamEnabled,
   videoDevice,
+  updatePolicy = 'auto',
+  justUpdated = false,
   debug = false,
 }: AppProps) {
   const { exit } = useApp();
@@ -87,6 +94,19 @@ export function App({
   });
   const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [deviceSelection, setDeviceSelection] = useState<AudioDeviceSelection>({});
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+
+  // Registry check, then the download, both in the background: the notice appears only when
+  // restarting would really install something. Nothing here can delay a render (lib/update.ts).
+  useEffect(() => {
+    let live = true;
+    checkForUpdate(updatePolicy).then((status) => {
+      if (live) setUpdate(status);
+    });
+    return () => {
+      live = false;
+    };
+  }, [updatePolicy]);
 
   // Load audio devices
   useEffect(() => {
@@ -137,6 +157,12 @@ export function App({
     }
   }, [screen, inputDevice, outputDevice, devices, devicesLoaded, enterRoom]);
 
+  /** `r` on the home screen: leave, and let the CLI entry install and start us again. */
+  const onRestartUpdate = () => {
+    requestRestartForUpdate();
+    exit();
+  };
+
   const handleJoinRoom = (id: string) => {
     setRoomId(id);
     setScreen('devices');
@@ -157,8 +183,11 @@ export function App({
         <HomeScreen
           identity={identity}
           version={version}
+          update={update}
+          justUpdated={justUpdated}
           onJoinRoom={handleJoinRoom}
           onSettings={() => setScreen('settings')}
+          onRestartUpdate={onRestartUpdate}
           onQuit={() => exit()}
         />
       )}
@@ -193,6 +222,7 @@ export function App({
           roomId={roomId}
           identity={identity}
           version={version}
+          update={update}
           deviceSelection={deviceSelection}
           videoEnabled={videoEnabled}
           videoDisabledReason={videoDisabledReason}

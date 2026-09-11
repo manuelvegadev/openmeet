@@ -14,6 +14,7 @@ import type { Identity } from '../lib/identity.js';
 import { getPlatformSupport } from '../lib/platform.js';
 import { loadSettings, saveSettings } from '../lib/settings.js';
 import { theme } from '../lib/theme.js';
+import type { UpdateStatus } from '../lib/update.js';
 import { CameraPicker } from './camera-picker.js';
 import { ChatInput } from './chat-input.js';
 import { ChatLog, mergeChat } from './chat-log.js';
@@ -34,6 +35,8 @@ interface RoomViewProps {
   roomId: string;
   identity: Identity;
   version: string;
+  /** Only the arrow here: what to do about it belongs on the home screen. */
+  update?: UpdateStatus | null;
   deviceSelection: AudioDeviceSelection;
   videoEnabled?: boolean;
   videoDisabledReason?: string;
@@ -58,6 +61,7 @@ export function RoomView({
   roomId,
   identity,
   version,
+  update,
   deviceSelection,
   videoEnabled,
   videoDisabledReason,

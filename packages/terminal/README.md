@@ -84,6 +84,28 @@ irm https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/termi
 
 On Windows use [Windows Terminal](https://aka.ms/terminal) (the default on Windows 11); the legacy console host is not supported. The installer registers an "OpenMeet" Windows Terminal profile and a desktop shortcut that opens the app in its own window (app icon and title, no scrollbar, closes on exit). Windows Terminal cannot hide its new-tab buttons or change the taskbar icon; a bundled terminal emulator would be the next step for a fully branded window.
 
+## Updates
+
+OpenMeet keeps itself current. Once a day it asks npm whether there is a newer version; if
+there is, it downloads it in the background and the home screen says so next to the version:
+
+```
+🎥 OpenMeet Terminal v0.5.2 → v0.6.0
+
+   Update downloaded. Restart to install.
+    r  restart now
+```
+
+Pressing `r` installs it and starts the new version straight away. If you just quit instead,
+it installs itself after the app closes and is there the next time you run `openmeet`, which
+greets you with a green `✓ updated`. Nothing is ever installed while you are in a call — the
+audio engine is running from those very files.
+
+Settings → **Updates** turns that down to `tell me, do not install` or `do not check`, and
+`--no-auto-update` does it for one run. If your global npm directory belongs to root — a Node
+installed from nodejs.org, typically — the app cannot install anything itself and will show
+you the command to run instead.
+
 ## Usage
 
 ```bash
@@ -117,6 +139,7 @@ openmeet --input-device "MacBook Pro Microphone" --output-device "MacBook Pro Sp
 | `--screen-receive-kbps <n>` | Screen-share ceiling you ask each peer to respect towards you (saved; also in Settings) | `2500` |
 | `--noise-suppression` | RNNoise on the microphone; `--no-noise-suppression` turns it off (saved; also in Settings). Ignored when the input is the NVIDIA Broadcast mic, which already does it on the GPU | off |
 | `--pause-rendering <p>` | Pause TUI rendering (audio keeps running) when the window is `minimized`, when it is `unfocused`, or `never` (saved; also in Settings) | `minimized` |
+| `--no-auto-update` | Do not check for or install an update this run (saved setting: Updates) | |
 | `--no-video` | Disable video (audio-only mode; the webcam is macOS/Linux only either way) | |
 | `--video-device <id>` | Video capture device (e.g., `"0"`) | |
 | `--no-overlay` | Disable video overlay | |

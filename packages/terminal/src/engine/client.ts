@@ -82,11 +82,19 @@ export class EngineClient {
     });
   }
 
-  /** Stop the engine. Idempotent. */
-  dispose(): void {
+  /**
+   * Stop the engine. Idempotent, and resolves only once the process is really gone — an
+   * update installs over the very `.node` files it has loaded, which Windows would refuse
+   * while it lives (see lib/update.ts).
+   */
+  dispose(): Promise<void> {
     const child = this.child;
-    if (!child) return;
+    if (!child) return Promise.resolve();
     this.child = null;
+    const exited = new Promise<void>((res) => {
+      if (child.exitCode !== null || child.signalCode !== null) res();
+      child.once('exit', () => res());
+    });
     try {
       child.send({ type: 'shutdown' } satisfies EngineCommand);
     } catch {}
@@ -101,6 +109,7 @@ export class EngineClient {
     }, 1500);
     killer.unref();
     child.once('exit', () => clearTimeout(killer));
+    return exited;
   }
 }
 

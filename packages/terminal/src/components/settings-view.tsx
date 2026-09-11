@@ -9,6 +9,7 @@ import { getPlatformSupport } from '../lib/platform.js';
 import { AUDIO_KBPS_STEPS, SCREEN_KBPS_STEPS } from '../lib/sdp.js';
 import { type AppSettings, loadSettings, saveSettings } from '../lib/settings.js';
 import { theme } from '../lib/theme.js';
+import { UPDATE_POLICIES } from '../lib/update.js';
 import { RENDER_PAUSE_POLICIES } from '../lib/window-state.js';
 import { BroadcastHint, inputPickerItems, SYSTEM_DEFAULT_ITEM } from './broadcast.js';
 import type { KeyHint } from './key-hints.js';
@@ -154,6 +155,18 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       run: () => update({ pauseRendering: cycle(RENDER_PAUSE_POLICIES, settings.pauseRendering) }),
     },
   ];
+    {
+      key: 'auto-update',
+      label: 'Updates',
+      // The wording is what each one does, not what it is called: nobody should have to
+      // guess whether "auto" means it asks first.
+      value: {
+        auto: 'install on exit',
+        notify: 'tell me, do not install',
+        off: 'do not check',
+      }[settings.autoUpdate],
+      run: () => update({ autoUpdate: cycle(UPDATE_POLICIES, settings.autoUpdate) }),
+    },
   const rows = allRows.filter((row) => row.key !== 'camera' || webcamSupported);
 
   /** The three device pickers: one screen, three tables. */
