@@ -61,6 +61,7 @@ openmeet/
     ├── shared/               # @openmeet/shared - WS message types
     ├── server/               # @openmeet/server - Express + ws + in-memory Maps
     ├── terminal/             # openmeet-terminal - TUI client (npm package)
+    ├── go/                   # the Go client (migration target): audio-only spike, see packages/go/README.md
     └── website/              # @openmeet/website - openmeet.manuelvega.dev, static, en + es
 ```
 

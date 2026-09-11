@@ -193,3 +193,33 @@ audify + per-OS enumeration), so they are worth fixing there rather than twice.
    same thing seen from the other side: the virtual device exists only while the app runs,
    and `resolveBroadcastDefault` only names it when it is the *system* default at the moment
    we looked.
+
+## Spike results (11 September 2026, branch `go-migration`, `packages/go`)
+
+Audio only, against the real server and real Node clients in the same room, on this Mac.
+Go 1.25, pion 4.2.20, libopus 1.6 via cgo, miniaudio via malgo, Bubble Tea v1.
+
+| | Go client, one process with its TUI | Node engine, without its TUI |
+|---|---|---|
+| 1 peer, both directions | 7.8% of a core, 31 MB | 7.3%, 125 MB |
+| **3 peers, sending to all three** | **7.6–8.0%, 33 MB** | 11.4–12.3%, 130 MB |
+| receive only | 3.9–4.1%, 31 MB | 6.2% |
+| terminal output while idle | 139 B/s | 90–100 KB/s |
+
+The three questions the spike was to answer:
+
+1. **Does encoding once keep CPU flat with room size?** Yes: two more peers cost the Go
+   client nothing measurable; the Node engine sending to three rose by two thirds.
+2. **Does the playout sound right?** Audio flows both ways through the Node client's
+   own meters and the gate opens on it, so the decode and the mix are correct. Whether it
+   *sounds* right on a lossy link needs ears and a real network; the buffer converges to
+   ~80 ms and trims bursts by dropping a packet, which is audible and is the first thing to
+   replace (time-stretching).
+3. **Does the cgo build hurt?** Not on macOS: `brew install opus` and `go build`. Windows and
+   Linux are not yet built.
+
+One finding worth keeping: **the audio callback must only copy.** miniaudio calls into Go
+from a C thread, which enters the runtime on an extra M every time, and encoding and
+sending from inside it measured at half the process's CPU. On a goroutine of our own the same
+work is a fraction of that. The receive floor that remains (~4%) is libopus, miniaudio's own
+processing and pion's per-packet path, in that order per the profile.
