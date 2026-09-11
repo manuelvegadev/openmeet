@@ -26,11 +26,11 @@ Types used in this repo:
 | `test` | Tests and test tooling (smoke scripts) |
 | `chore` | Releases, housekeeping that fits nowhere else |
 
-Scopes are the package or area touched: `terminal`, `server`, `shared`, `deps`. Omit the scope when a change spans the whole repo.
+Scopes are the package or area touched: `go`, `server`, `shared`, `website`, `deps` (`terminal` for the retired Node client). Omit the scope when a change spans the whole repo.
 
 - Summary in imperative mood, lower case, no trailing period, under 72 characters.
 - Use `!` after the type/scope (and a `BREAKING CHANGE:` footer) for anything that breaks the signaling protocol or a published CLI flag.
-- Releases of the terminal package are `chore(terminal): release x.y.z` and are tagged `terminal-vx.y.z` (see CLAUDE.md, CI/CD).
+- A release is `chore(go): release x.y.z` bumping `packages/go/VERSION`, tagged `vx.y.z` (see "Releasing" in packages/go/README.md).
 
 ### Atomic commits
 
@@ -49,10 +49,10 @@ Work on a branch named after the change: `feat/windows-audio`, `fix/glare-retry`
 ## Before you push
 
 ```bash
-pnpm lint                                        # Biome
-pnpm build                                       # shared → server → terminal
-pnpm --filter openmeet-terminal exec tsc --noEmit
-pnpm --filter openmeet-terminal exec tsx scripts/audio-smoke.ts rtaudio 3   # on a machine with audio devices
+pnpm lint                                        # Biome, for the server, shared and website
+pnpm build                                       # shared → server
+(cd packages/go && gofmt -l . && go vet ./... && go test ./...)   # the client, golden frames included
+packages/go/scripts/build.sh && packages/go/openmeet --list-devices   # on a machine with audio devices
 ```
 
-For audio or WebRTC changes, also run a real two-client call (see the test rig notes in CLAUDE.md) and check the `debug.log` diagnostics: engine loop delay, capture gaps and playout drops must not regress.
+For audio or WebRTC changes, also run a real two-client call (see the test rig notes in CLAUDE.md) with `--debug`: late pump ticks, underruns and reopen counts in the debug panel must not regress.

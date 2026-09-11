@@ -1,5 +1,13 @@
 # openmeet-terminal
 
+> **Retired, September 2026.** OpenMeet is now a single 12 MB binary for macOS and Windows,
+> written in Go, installed with one line and kept current by itself — see
+> [openmeet.manuelvega.dev](https://openmeet.manuelvega.dev) or the
+> [project README](https://github.com/manuelvegadev/openmeet#install). No further versions of
+> this npm package will be published. What follows describes the last one, 0.5.2, which still
+> works against the same server (audio and chat with Go peers; video only with other Node
+> peers, since it has no H.264).
+
 A terminal-based client for [OpenMeet](https://openmeet.mvega.pro) — join video conferencing rooms right from your terminal with real-time audio chat and text messaging over WebRTC.
 
 No browser needed. Just your terminal, a mic, and speakers.

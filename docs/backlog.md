@@ -173,9 +173,14 @@ so the plumbing is short; the hard part is the capture/playback delay estimate.
 
 ## Chores
 
-- **Automated npm publishing is broken.** `NPM_TOKEN` expired and the account requires 2FA,
-  so 0.4.0 and 0.4.1 were published by hand. Needs a fresh automation token or npm trusted
-  publishing (OIDC).
+- **Deprecate `openmeet-terminal` on npm.** The package is retired (0.5.2 is the last
+  version) and its README says so, but npm itself does not yet: run
+  `npm deprecate openmeet-terminal "OpenMeet is now a single binary: https://openmeet.manuelvega.dev"`
+  once, logged in with 2FA. The publish workflow is gone, so nothing can be published by
+  accident.
+- **Sign and notarize the binaries.** `install.sh` clears the quarantine flag and SmartScreen
+  may ask once on Windows; a Developer ID and an Authenticode certificate would remove both
+  steps, and the updater would then verify a signature rather than only that `--version` runs.
 - **`scripts/av-bench.ts` reimplements the audio path** rather than driving `AudioManager`,
   which always constructs its own backend. Injecting an `AudioBackend` (the interface is just
   `onCapture`/`onPlayback` at 10 ms) would let the bench drive the real pipeline with a

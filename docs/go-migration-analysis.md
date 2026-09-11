@@ -1,7 +1,8 @@
 # Should OpenMeet leave Node.js? — Research and verdict
 
-Status: **decided, 11 September 2026** — the Node client gets two cheap corrections and then
-the client moves to Go + pion. The analysis below is from the first round; the section
+Status: **done, 11 September 2026** — the Node client got two cheap corrections, the client
+moved to Go + pion (`packages/go`), and the Node client is retired: `openmeet-terminal` 0.5.2
+is its last npm release and `packages/terminal` stays as the reference the Go one was drawn from. The analysis below is from the first round; the section
 [What the measurements added](#what-the-measurements-added-11-september-2026) is what settled
 it, and it changed the argument: the reason to leave is not performance in general, it is one
 specific thing `@roamhq/wrtc` cannot do.

@@ -4,7 +4,9 @@
 
 OpenMeet is a lightweight, terminal-first audio/video conferencing app. Users create/join rooms from a TUI to talk, share webcam and screen, and send text messages. P2P mesh topology (max 6 participants), WebSocket signaling, in-memory Maps (no database), no authentication (a name of up to 8 cells and a colour, chosen once at first start and kept in settings; both travel with `join-room` so everyone draws `[name]` the same way).
 
-**Platform priorities (decided Sept 2026)**: macOS and Windows first; Linux is paused (keep it compiling, don't invest). **Supported OS releases: Windows 11 and macOS 15 (Sequoia) or later**, on real hardware (`ssh win` for Windows, this Mac for macOS). Older releases run but are labelled untested on the home screen (`lib/platform.ts` `withOsNote` appends it to `features`, from `os.release()`: Darwin ≥ 24, NT 10.0 build ≥ 22000). Windows v1.0 scope is rooms + audio + chat; screen sharing works on Windows too (gdigrab), webcam stays macOS/Linux only for now. **Versioning**: one version number for the `openmeet-terminal` package on every platform (0.4.0 introduced Windows + the engine process); platform maturity is expressed by the support matrix in the README and the label next to the version in the TUI, not by per-platform versions. 1.0 = macOS/Windows feature parity. **Runtime (decided Sept 2026, after measuring)**: the Node client gets the cheap corrections and then the client moves to **Go + pion**; `docs/go-migration-analysis.md` holds the research and the argument, `docs/performance.md` the numbers. The short version: the codec is not the cost and JavaScript is not the cost — a full libwebrtc PeerConnection per peer is, and `@roamhq/wrtc` takes only PCM, so a mesh of six is five encoders for one microphone and no amount of care in our code changes that. pion accepts an RTP packet we already encoded and fans it out to every peer, which is the only way to keep the P2P mesh *and* stop paying for it. Constraints the migration inherits, and they are not negotiable: audio stays client-to-client and never passes through a server, and screen and camera stay on WebRTC for its congestion control.
+**The client is Go (decided and done 11 Sept 2026).** `packages/go` is one static binary per OS — pion/webrtc, libopus, miniaudio, Bubble Tea — released from GitHub Releases and kept current by its own updater. The Node/Ink client in `packages/terminal` is **retired**: `openmeet-terminal` 0.5.2 is its last npm version, no workflow can publish another, and the package stays in the tree only as the reference the Go interface was drawn from (its golden frames live in `packages/go/internal/tui/testdata`). Why: `docs/go-migration-analysis.md` and `docs/performance.md` ("Where an audio-only call spends its CPU") — the codec is not the cost and JavaScript is not the cost; a full libwebrtc PeerConnection per peer is, and `@roamhq/wrtc` takes only PCM, so a mesh of six was five encoders for one microphone. pion accepts an RTP packet we already encoded and fans it out to every peer, which keeps the P2P mesh *and* stops paying for it. **Constraints that are not negotiable**: audio stays client-to-client and never passes through a server; screen and camera stay on WebRTC for its congestion control. **Priorities, in order**: resource consumption, then audio quality, then screen and camera — anything that costs efficiency is a decision for the user, not a default.
+
+**Platform priorities (decided Sept 2026)**: macOS and Windows first; Linux is paused (keep it compiling, don't invest). **Supported OS releases: Windows 11 and macOS 15 (Sequoia) or later**, on real hardware (`ssh win` for Windows, this Mac for macOS). Windows scope is rooms + audio + chat + screen sharing (ddagrab/NVENC, gdigrab fallback); camera is macOS only for now. **Versioning**: one version number for every platform, in `packages/go/VERSION`; a release is the matching `vX.Y.Z` tag (`go-client.yml` refuses a tag that disagrees). Platform maturity is expressed by the support matrix in the README and the label next to the version on the home screen, not by per-platform versions. 1.0 = macOS/Windows feature parity.
 
 ## Architecture
 
@@ -19,14 +21,21 @@ Client A <──WebRTC P2P──> Client B
 
 - **Topology**: P2P mesh — each client connects directly to every other client
 - **Signaling**: WebSocket for SDP/ICE exchange, chat messages, mute state, and screen share state
-- **Media**: WebRTC with stereo Opus audio (48 kHz, 128 kbps per direction by default, RED-protected) and VP8/VP9 video (webcam in the camera's own aspect ratio, height ≤ 720 — a 4K camera goes out as 1280x720; screen share in the screen's own aspect ratio, short side ≤ 1080 and long side ≤ 3840 — an ultrawide goes out as 2580x1080 — capped at 2.5 Mbps and scaled down as the mesh grows)
+- **Media (Go client)**: WebRTC with Opus audio (48 kHz, 20 ms frames, 64 kbps mono by default, in-band FEC, **one encoder whose packets go to every peer**) and H.264 video from the GPU encoder (webcam in the camera's own aspect ratio, height ≤ 720; screen in the screen's own aspect ratio, short side ≤ 1080 and long side ≤ 3840, 30 fps; one encoded stream per kind shared by every connection, budget 6000 kbps split by peers, floor 800). The retired Node client spoke stereo Opus with RED and VP8, so Node↔Go rooms carry audio and chat but no video
 - **Screen sharing**: Simultaneous webcam + screen share via 3 transceivers per connection
 
 ## Tech Stack
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| Runtime | Node.js | >=22 |
+| **Client** | Go | 1.25 |
+| Client WebRTC | pion/webrtc | v4 |
+| Client audio codec | libopus via hraban/opus (cgo, linked statically) | 1.5 |
+| Client audio I/O | miniaudio compiled in (`shim.c`); Apple Voice Processing I/O unit on macOS | — |
+| Client TUI | Bubble Tea v1 + own cell canvas | — |
+| Client video | ffmpeg (VideoToolbox / NVENC / libx264) + ffplay | system |
+| Client cross-build | zig (Windows from macOS), cmake (libopus) | — |
+| Server runtime | Node.js | >=22 |
 | Package Manager | pnpm | latest (workspace monorepo) |
 | Server Framework | Express | v5 |
 | WebSocket | ws | v8 |
@@ -34,12 +43,10 @@ Client A <──WebRTC P2P──> Client B
 | IDs | nanoid | v5 |
 | Linting/Formatting | Biome | v2.5+ |
 | TypeScript | typescript | v6 |
-| Terminal TUI | Ink (React 19) | v7 |
-| Node WebRTC | @roamhq/wrtc (libwebrtc M106) | v0.10 |
-| Audio I/O | audify (RtAudio: CoreAudio / WASAPI) | v1.10 |
-| Audio I/O (legacy) | sox (rec/play) | system, macOS/Linux only |
-| Video I/O | ffmpeg / ffplay | system, macOS/Linux only |
-| Terminal Bundler | esbuild | v0.28 |
+| Retired Node client: TUI | Ink (React 19) | v7 |
+| Retired Node client: WebRTC | @roamhq/wrtc (libwebrtc M106) | v0.10 |
+| Retired Node client: audio I/O | audify (RtAudio) | v1.10 |
+| Retired Node client: bundler | esbuild | v0.28 |
 | CI/CD | GitHub Actions | — |
 
 ## Monorepo Structure
@@ -54,16 +61,35 @@ openmeet/
 ├── docker-compose.yml        # Single service, port 3001
 ├── docs/                     # Architecture docs
 ├── .github/workflows/        # CI/CD workflows
-│   ├── ci.yml                # lint/build/type-check + native-module smoke on ubuntu/macos/windows, website build
-│   ├── publish-terminal.yml  # npm publish on terminal-v* tags
+│   ├── go-client.yml         # vet/test/build both binaries on macOS; GitHub Release on v* tags
+│   ├── ci.yml                # Biome + shared/server build (ubuntu), website build on PRs
 │   └── deploy-website.yml    # GitHub Pages deploy of packages/website on push to main
 └── packages/
+    ├── go/                   # the client: cmd/openmeet + internal/*, VERSION, scripts/ (build, installers)
     ├── shared/               # @openmeet/shared - WS message types
     ├── server/               # @openmeet/server - Express + ws + in-memory Maps
-    ├── terminal/             # openmeet-terminal - TUI client (npm package)
-    ├── go/                   # the Go client (migration target): audio-only spike, see packages/go/README.md
+    ├── terminal/             # openmeet-terminal - the retired Node/Ink client, reference only
     └── website/              # @openmeet/website - openmeet.manuelvega.dev, static, en + es
 ```
+
+## Package: go (`packages/go`)
+
+The client. Module `github.com/manuelvegadev/openmeet/packages/go`, Go 1.25, cgo for libopus (static), miniaudio and the Apple audio unit. `scripts/build.sh` builds for this Mac (libopus once under `.cross/`, `PKG_CONFIG_PATH` absolute — a relative one fell back to Homebrew's dynamic opus), `scripts/build-windows.sh` cross-builds the exe with zig, both stamped from `VERSION`. `go test ./...` runs the unit tests and the golden frames. Full detail, measurements and the release procedure: `packages/go/README.md`.
+
+| Package | Purpose |
+|---|---|
+| `cmd/openmeet` | Flags (`--server`, `--room`, `--input-device`/`--output-device` by substring, `--list-devices`, `--no-voice-gate`, `--audio-kbps` 64, `--opus-complexity` 10, `--no-voice-processing`, `--voice-processing-bypass`, `--no-priority`, `--no-video`, `--video-device`, `--test-screen`/`--test-camera`, `--headless`, `--debug`, `--cpuprofile`, `--no-auto-update`, `--version`); the settings store and device source the TUI talks to (effects devices — Wave Link FX, NVIDIA Broadcast — labelled and first; a raw Wave mic points at its FX sibling; the Bluetooth note); the updater wiring; the Bubble Tea program fed through an events channel (never `program.Send` before `Run`: it deadlocks) |
+| `internal/signal` | The WebSocket protocol, field for field with `packages/shared/src/types.ts`; `Dial`, `Send`, `Incoming` |
+| `internal/rtc` | pion: one PeerConnection per peer, three transceivers in order on both offerer and answerer paths, `polite = myID < peerID`, retries, ICE RTTs; Opus PT 111 (`minptime=10;useinbandfec=1`), H.264 PT 102 (`42e01f`, packetization-mode 1); **one `TrackLocalStaticRTP` (audio) and two `TrackLocalStaticSample` (webcam, screen) bound to every connection** — encode once; `LeanInterceptors` (RTCP reports only); the `transport.Net` wrapper marking sockets DSCP EF / `SO_NET_SERVICE_TYPE` voice |
+| `internal/audio` | `shim.c` compiles miniaudio in with `MA_NO_*` trims; the device callbacks stay in C and copy into lock-free `ma_pcm_rb` rings — **no audio thread ever enters Go** (a Go callback cost 1.9% for the devices alone against 0.3% in C). `Pump` runs every 20 ms on a locked OS thread at audio priority: capture ring → voice gate (`gate.go`, a port of the Node one, same tests) → Opus (FEC on) → packets with capture-clock timestamps; playout (`playout.go`: per-peer RFC 3550 jitter target 2–6 frames, `DecodeFEC`, PLC, quiet-frame catch-up) → mixer → playback ring prefilled with silence. `vpio_darwin.c` is Apple's Voice Processing I/O unit (Voice Isolation, AEC, gain) as the default macOS path; the "Audio Processing" setting (`apple`/`off`) switches to plain miniaudio. `om_watch` installs CoreAudio listeners (nominal rate, default devices) **before** opening, miniaudio's stop/reroute notifications cover Windows; either → sleep 300 ms → reopen by name (default fallback) → drain duplicates — this is what keeps a Bluetooth profile switch (44.1 k → 16 k) from turning robotic. Adaptive playback headroom (+20 ms after late ticks, first second ignored). `priority_*.go`: `HIGH_PRIORITY_CLASS` + MMCSS Pro Audio on Windows, QoS user-interactive on macOS |
+| `internal/video` | ffmpeg captures and encodes H.264 with the hardware encoder (`-init_hw_device videotoolbox … hwupload,scale_vt` keeps scaling on the GPU: 29% of a core against 103–133% for the CPU chains; NVENC via `ddagrab` D3D11, gdigrab fallback), Annex-B with AUDs split into access units in Go, keyframe every second, 8 s silence watchdog; `Receiver` rebuilds frames with pion's `samplebuilder` and pipes to `ffplay -f h264`. Screens: avfoundation + `system_profiler` names on macOS, PowerShell `AllScreens` on Windows, cached 60 s. `Encoder()` picks videotoolbox / nvenc / amf / qsv / libx264 |
+| `internal/tui` | Ink's output, redrawn: `canvas.go` (cells, spans, wrap), `theme.go` (the palette from `theme.ts`, `ColorForName`), `chips.go`, `frame.go` (`Centered` with Ink's rounding — centred Text floors, chip rows ceil, an extra row in centred screens), one file per screen, `model.go` (every key the Node client had; the `Room` and `Host` interfaces), `golden_test.go` against `testdata/*.{txt,json}` captured from the Node app at 120x34 — text, colours and bold. Bubble Tea writes only changed lines: 139 B/s in a call |
+| `internal/engine` | The room session: dial, rejoin with backoff (1 s → 30 s) as a newcomer, message handling (screen state re-broadcast to joiners, `camOn` on mute-state), stats loop (kbps, RTT, loss, latency), snapshots for the TUI, screen budget |
+| `internal/settings` | The same `settings.json` as the Node client, field for field (+ `audioProcessing`), BOM-tolerant |
+| `internal/update` | GitHub Releases: daily check cached in settings, asset downloaded beside the exe as `openmeet.new[.exe]`, verified with `--version`, swapped by rename at exit (Windows: running exe → `.old.exe`, cleaned next start), `r` relaunches; `Newer()` compares versions |
+| `scripts/` | `build.sh`, `build-windows.sh`, `install.sh`, `install.ps1`, `win/` (Windows Terminal profile, shortcut, icons, rig launchers) |
+
+Learnt building it, worth not relearning: a talkspurt ending is not an underrun (count one only if packets resume within 200 ms); the runaway-buffer rule must be relative to the jitter target and sustained a second, then skip quiet frames, never loud ones; `go get golang.org/x/sys@latest` bumped `go.mod` to 1.26 (pinned v0.41.0; `THREAD_PRIORITY_TIME_CRITICAL` is our own const 15); the Apple unit costs 12.9%/6.1% against 2.9% and is on by default by the user's decision ("that cost lands on Apple's processes"); AEC was verified with a BlackHole echo loop (60 kbps → 5 kbps of gate-open audio); the Wave Link and Bluetooth behaviours follow the vendors' documentation, not yet a real friend's machine.
 
 ## Package: website (`packages/website`)
 
@@ -163,9 +189,9 @@ Displayed in participant list as `~Xms` with color coding: dim (≤80ms), yellow
 - **WebSocket `mute-state` messages**: Explicit mute state broadcast on join, toggle, and participant change
 - **Stream track check**: Fallback when no mute state has been received yet
 
-## Package: terminal (`packages/terminal`)
+## Package: terminal (`packages/terminal`) — retired, reference only
 
-Terminal UI (TUI) client for OpenMeet — join rooms, audio chat, video, screen share and text messaging from the terminal. Published to npm as `openmeet-terminal`.
+The Node/Ink client OpenMeet shipped until September 2026, published to npm as `openmeet-terminal` (last version 0.5.2; the publish workflow is gone). It stays in the tree because the Go client was drawn from it screen for screen and its scripts pin behaviour the Go one ports (`voice-gate-test.ts`, `chat-test.ts`, the SDP tests); nothing below is maintained. Everything that follows in this section, and the gotchas from 8 onwards, describe that client.
 
 ### Two processes: TUI and engine
 
@@ -319,13 +345,17 @@ Published to npm via GitHub Actions. See [CI/CD](#cicd) section.
 
 ## CI/CD
 
+### Workflow: `go-client.yml`
+
+On pushes and PRs touching `packages/go/**`, on a macOS runner (the only host that can link CoreAudio; Windows is a zig cross-build from there): `go vet`, `go test ./...`, `build.sh`, `build-windows.sh`, then `openmeet-darwin-arm64`, `openmeet-windows-amd64.exe`, the installers, the Windows Terminal scripts and `SHA256SUMS` as an artifact — and on a `v*` tag, after checking the tag equals `v$(cat packages/go/VERSION)`, a GitHub Release with generated notes (`softprops/action-gh-release`). The client's updater and the installers read `releases/latest`.
+
 ### Workflow: `ci.yml`
 
-On every push to `main` and every PR: `pnpm install`, lint, build, `tsc --noEmit` on the terminal, and a smoke script that loads `@roamhq/wrtc` and `audify` on ubuntu, macOS and Windows runners (runners have no audio devices; enumeration must simply not throw).
+On every push to `main` and every PR, on ubuntu: `pnpm install`, Biome, `pnpm build` (shared → server). The website job builds the landing page on pull requests. The Node client's three-OS native-module smoke and its script tests left with the client.
 
-### Workflow: `publish-terminal.yml`
+### Workflow: `publish-terminal.yml` (removed Sept 2026)
 
-Automates npm publishing of `openmeet-terminal` via GitHub Actions.
+Automated npm publishing of `openmeet-terminal` via GitHub Actions, kept here as the record of how it worked.
 
 - **Trigger**: Push tags matching `terminal-v*` (e.g. `terminal-v0.1.0`)
 - **Steps**: checkout → pnpm + Node 22 setup → install → build shared → build terminal → publish to npm → create GitHub Release
@@ -335,14 +365,14 @@ Automates npm publishing of `openmeet-terminal` via GitHub Actions.
 ### How to publish a new version
 
 ```bash
-# 1. Bump version in packages/terminal/package.json
-# 2. Commit and tag
-git add packages/terminal/package.json
-git commit -m "Release openmeet-terminal v0.2.0"
-git tag terminal-v0.2.0
+echo 0.6.1 > packages/go/VERSION
+git commit -am "chore(go): release 0.6.1"
+git tag v0.6.1
 git push && git push --tags
-# GitHub Actions builds, publishes to npm, creates a GitHub Release
+# go-client.yml builds both binaries and creates the GitHub Release; clients pick it up within a day
 ```
+
+The retired flow (`terminal-v*` tags → npm) no longer exists; `npm deprecate openmeet-terminal …` is a one-off in the backlog.
 
 ## Code Style & Conventions
 
@@ -358,9 +388,11 @@ git push && git push --tags
 | Command | Description |
 |---------|-------------|
 | `pnpm dev` | Start server (3001) + shared in watch mode |
-| `pnpm --filter openmeet-terminal dev` | Run the terminal client against `ws://localhost:3001/ws` |
-| `pnpm build` | Build shared → server → terminal (order matters) |
-| `pnpm --filter openmeet-terminal exec tsx scripts/audio-smoke.ts rtaudio 3` | Validate a machine's audio stack without joining a room |
+| `packages/go/scripts/build.sh && packages/go/openmeet --server ws://localhost:3001/ws` | Build and run the client against the local server |
+| `pnpm build` | Build shared → server (order matters) |
+| `cd packages/go && go test ./...` | The client's tests, golden frames included |
+| `packages/go/scripts/build-windows.sh` | Cross-build the Windows exe |
+| `packages/go/openmeet --list-devices` | Validate a machine's audio stack without joining a room |
 | `pnpm lint` | `biome check .` |
 | `pnpm lint:fix` | `biome check --write .` |
 | `pnpm format` | `biome format --write .` |
