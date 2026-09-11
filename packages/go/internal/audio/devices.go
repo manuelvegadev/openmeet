@@ -480,10 +480,21 @@ func (p *Pump) Priority() string {
 	return p.priority
 }
 
-// Describe says what the devices are really running at, and what the pump's thread got.
+// Describe says which devices are open, what they are really running at, and what the
+// pump's thread got. The names are in it because an interface with several buses — a
+// stream mix, a raw microphone, a chat bus — sounds like a different microphone depending
+// on which one is open, and two machines on the same hardware can easily be on different
+// ones without anybody noticing.
 func (p *Pump) Describe() string {
-	return fmt.Sprintf("%s; capture %s, playback %s, ring %d ms, pump every %d ms, ahead %d ms, thread priority %s",
-		p.path, p.capture.describe(), p.playback.describe(), RingMs, PumpMs, p.AheadMs(), p.Priority())
+	return fmt.Sprintf("%s; in %q, out %q; capture %s, playback %s, ring %d ms, pump every %d ms, ahead %d ms, thread priority %s",
+		p.path, deviceName(p.in), deviceName(p.out), p.capture.describe(), p.playback.describe(), RingMs, PumpMs, p.AheadMs(), p.Priority())
+}
+
+func deviceName(d *Device) string {
+	if d == nil {
+		return "system default"
+	}
+	return d.Name
 }
 
 func (st *Stream) describe() string {
