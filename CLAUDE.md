@@ -59,6 +59,8 @@ openmeet/
 ├── biome.json                # Shared Biome config
 ├── Dockerfile                # Multi-stage build (server only)
 ├── docker-compose.yml        # Single service, port 3001
+├── CHANGELOG.md              # Keep a Changelog 1.1.0; the GitHub releases copy its sections
+├── CONTRIBUTING.md           # Commits, branches, pre-push checks, and the release procedure
 ├── docs/                     # Architecture docs
 ├── .github/workflows/        # CI/CD workflows
 │   ├── go-client.yml         # vet/test/build both binaries on macOS; GitHub Release on v* tags
@@ -235,7 +237,24 @@ git commit -am "chore(go): release 0.6.1"
 git tag v0.6.1
 git push && git push --tags
 # go-client.yml builds both binaries and creates the GitHub Release; clients pick it up within a day
+gh release edit v0.6.1 --notes-file <(...)   # the last step: copy the section into the release
 ```
+
+**A release is not finished until `CHANGELOG.md` has its section and the GitHub release carries
+a copy of it.** The workflow leaves the release body empty on purpose — GitHub's generated notes
+list merged pull requests and this repository commits straight to `main`, so they arrive with
+nothing in them.
+
+`CHANGELOG.md` at the repository root is the record, in [Keep a Changelog
+1.1.0](https://keepachangelog.com/en/1.1.0/) form against SemVer: an `[Unreleased]` section that
+grows as work lands, the six headings (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`,
+`Security`), ISO dates, compare links at the bottom, and an entry for **every** version — 0.6.1
+shipped no changes and says so. Entries are prose written for someone using the app, symptom
+first where a bug is involved, never commit subjects; the material comes from the commit bodies,
+which already carry the symptom, the measurement and the reason. Because the client updates
+itself, anything touching a flag, a `settings.json` key or the signaling protocol must be called
+out explicitly with what to do about it. The full rules are in `CONTRIBUTING.md` under
+"Releases".
 
 The retired flow (`terminal-v*` tags → npm) no longer exists; `npm deprecate openmeet-terminal …` is a one-off in the backlog.
 
