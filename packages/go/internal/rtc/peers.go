@@ -86,8 +86,8 @@ func NewManager(o Options) (*Manager, error) {
 		return nil, err
 	}
 	// Video is H.264, because that is what the machine's hardware encoder makes and pion
-	// carries any codec it is handed — the door the Node client's binding kept shut
-	// (gotcha 28). Constrained baseline, packetization mode 1, as browsers offer it.
+	// carries any codec it is handed — the door the retired client's
+	// binding kept shut. Constrained baseline, packetization mode 1, as browsers offer it.
 	//
 	// The feedback list is what makes pion's NACK interceptors act on this stream: a lost
 	// video packet is retransmitted instead of breaking the frame and everything after it

@@ -1,7 +1,7 @@
 // Package video is screen and camera over WebRTC: ffmpeg captures and encodes H.264 on
 // the machine's hardware encoder, pion carries it, ffplay shows what peers send. Nothing
 // here decodes or scales a frame in Go — the Node client did, and paid for it on the
-// audio loop (gotcha 24b).
+// audio loop (gotcha 18).
 package video
 
 import (
@@ -14,7 +14,7 @@ import (
 )
 
 // Where a tool is, resolved once: the PATH first, then where winget and the installer put
-// ffmpeg on Windows (Explorer's PATH is stale, gotcha 31).
+// ffmpeg on Windows (Explorer's PATH is stale, gotcha 21).
 var (
 	toolsMu   sync.Mutex
 	toolPaths = map[string]string{}

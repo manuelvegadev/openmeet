@@ -82,7 +82,7 @@ func Load() App {
 	if err != nil {
 		return s
 	}
-	// Notepad and PowerShell write a UTF-8 BOM, which JSON refuses (gotcha 23).
+	// Notepad and PowerShell write a UTF-8 BOM, which JSON refuses (gotcha 19).
 	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 	_ = json.Unmarshal(data, &s)
 	return s

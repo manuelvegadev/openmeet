@@ -290,7 +290,7 @@ func (e *Engine) StopScreen() {
 }
 
 // StartCamera shares a camera; StopCamera releases it (a camera opens once on macOS,
-// gotcha 12b, so nothing holds it while it is off).
+// gotcha 14, so nothing holds it while it is off).
 func (e *Engine) StartCamera(d video.Device) error {
 	if !e.opts.WebcamEnabled {
 		return fmt.Errorf("camera is not available here")
@@ -487,7 +487,7 @@ func (e *Engine) readAll() {
 				_ = e.play.AddPeer(p.ID)
 				e.sendMute()
 				if e.ScreenSharing() {
-					e.sendScreenState() // a newcomer learns the share (gotcha 6)
+					e.sendScreenState() // a newcomer learns the share (gotcha 3)
 				}
 				e.notice(tui.KindJoin, p.Username, p.Color, "joined")
 				e.snapshot()
@@ -548,7 +548,7 @@ func (e *Engine) readAll() {
 				} else {
 					e.notice(tui.KindScreen, p.p.Username, p.p.Color, "stopped screen sharing")
 					if r != nil {
-						r.CloseWindow() // the window closes with the share (gotcha 14)
+						r.CloseWindow() // the window closes with the share (gotcha 3)
 					}
 				}
 			}

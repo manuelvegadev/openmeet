@@ -1,9 +1,8 @@
 # openmeet — the Go client
 
-The migration target: one static binary that speaks the same signaling server and the same
-WebRTC contract as `packages/terminal`, so the two share a room while this one grows. Why
-Go, and why now, is in [`docs/go-migration-analysis.md`](../../docs/go-migration-analysis.md);
-the numbers are in [`docs/performance.md`](../../docs/performance.md).
+One static binary per platform: the client. It speaks the repo's own signaling server and
+the WebRTC contract in [`docs/websocket-webrtc-architecture.md`](../../docs/websocket-webrtc-architecture.md);
+what it costs, and how to measure that again, is in [`docs/performance.md`](../../docs/performance.md).
 
 **Status: audio, screen and camera, with the full interface, September 2026.** Every screen the Node
 client has — first start, home, settings and its pickers, the audio setup with the mic test,

@@ -184,8 +184,8 @@ func macScreens() []Device {
 	return screens
 }
 
-// windowsScreens: Screen.AllScreens with DPI awareness, in physical pixels, the way the
-// Node client asked (gotcha 23). Index is the order DXGI uses on a single adapter.
+// windowsScreens: Screen.AllScreens with DPI awareness, in physical pixels. Index is the
+// order DXGI uses on a single adapter.
 func windowsScreens() []Device {
 	script := `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); ` +
 		`try { Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class DPI { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }'; [DPI]::SetProcessDPIAware() | Out-Null } catch {}; ` +

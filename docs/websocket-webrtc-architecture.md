@@ -1,8 +1,7 @@
-# WebSocket + WebRTC Architecture
+# Signaling and WebRTC
 
-This document explains how OpenMeet uses WebSocket signaling and WebRTC peer connections to deliver real-time audio, webcam and screen sharing between terminal clients.
-
-## High-Level Architecture
+How a room works: what the server does, what it never sees, and the contract both sides of a
+connection have to honour. The client is `packages/go`; the server is `packages/server`.
 
 ```
 Client A <──── WebRTC P2P (media) ────> Client B
@@ -11,183 +10,89 @@ Client A <──── WebRTC P2P (media) ────> Client B
    └──────────> Server <───────────────────┘
 ```
 
-- **WebSocket** carries signaling messages (SDP offers/answers, ICE candidates) and application-level messages (chat, mute state, screen share state).
-- **WebRTC** carries the actual media (audio, webcam video, screen video) directly between peers — the server never touches media data.
-- **Topology**: Full mesh — every client maintains a direct WebRTC connection to every other client. Capped at 6 participants.
+- **WebSocket** carries the handshake (SDP, ICE) and the room's own messages: chat, mute
+  state, screen-share state.
+- **WebRTC** carries the media, directly between peers. **The server never sees a byte of
+  it**, and that is a constraint on every future change, not an implementation detail.
+- **Topology**: a full mesh, every client connected to every other, capped at 6 people.
 
-## WebSocket Layer
+## The WebSocket layer
 
-### Client (`packages/terminal/src/lib/websocket.ts`)
+`internal/signal` is one connection (`coder/websocket`), a `Send`, and an `Incoming`
+channel. Reconnection lives a layer up, in `internal/engine`: on a drop it backs off from
+1 s to 30 s and rejoins as a newcomer, because the peers it had are gone with the link.
 
-`WebSocketClient` wraps a single `ws` connection.
+The server (`packages/server/src/signaling.ts`) routes:
 
-**Key features:**
-- **Auto-reconnect**: Exponential backoff, max 10 attempts.
-- **Pub/sub**: `subscribe(handler)` and `onConnectionChange(handler)` return unsubscribe functions.
-- **Disposed flag**: When `disconnect()` is called, `disposed = true` suppresses `close`/`error` handlers to prevent spurious reconnect attempts during intentional teardown.
-
-### Server (`packages/server/src/signaling.ts`)
-
-The WebSocket server at `/ws` handles message routing:
-
-| Message Type | Routing |
+| Message | Routing |
 |---|---|
-| `join-room` | Server processes (adds to room), responds with `room-joined`, broadcasts `participant-joined` |
-| `offer`, `answer`, `ice-candidate` | Forwarded to target peer by `toId` (1:1) |
-| `mute-state`, `screen-share-state` | Broadcast to all room members except sender |
-| `chat-message` | Broadcast as `chat-broadcast` to all room members |
+| `join-room` | adds to the room, answers `room-joined` (with `yourId` and who is already there), tells the others `participant-joined` |
+| `offer`, `answer`, `ice-candidate` | forwarded to `toId`, one to one |
+| `mute-state`, `screen-share-state` | broadcast to the rest of the room |
+| `chat-message` | broadcast as `chat-broadcast` |
 
-The server also pings all clients every 25 seconds to keep connections alive through reverse proxies.
+It pings every client every 25 s so reverse proxies do not time the connection out, keeps
+rooms in memory, and forgets a room when the last person leaves. The shapes are one
+discriminated union in `packages/shared/src/types.ts`, which the Go client mirrors field for
+field in `internal/signal`.
 
-### Message Types (`packages/shared/src/types.ts`)
+## The WebRTC layer
 
-All messages are a discriminated union (`WSMessage`) keyed by `type`. Key message interfaces:
+`internal/rtc` holds one `PeerConnection` per peer and, across all of them, **three tracks**:
 
-| Type | Direction | Purpose |
-|---|---|---|
-| `join-room` | Client → Server | Join a room with a username |
-| `room-joined` | Server → Client | Confirmation with `yourId` + existing participants |
-| `participant-joined` | Server → Clients | New peer notification |
-| `participant-left` | Server → Clients | Peer disconnected |
-| `offer` | Client → Client (via server) | SDP offer for WebRTC connection |
-| `answer` | Client → Client (via server) | SDP answer for WebRTC connection |
-| `ice-candidate` | Client → Client (via server) | ICE candidate for NAT traversal |
-| `mute-state` | Client → Clients (broadcast) | Audio/video mute state (`isAudioMuted`, `isVideoMuted`) |
-| `screen-share-state` | Client → Clients (broadcast) | Screen sharing on/off (`isScreenSharing`) |
-| `chat-message` | Client → Server | Chat text message |
-| `chat-broadcast` | Server → Clients | Delivered chat message |
-
-## WebRTC Layer
-
-### Connection Lifecycle
-
-```
-Newcomer (A) joins room with existing participant (B):
-
-1. Server sends room-joined to A (includes B in participants list)
-2. A creates PeerConnection for B (3 transceivers: audio, webcam, screen)
-3. A creates SDP offer → sends via WebSocket to B
-4. B receives offer → creates PeerConnection → sets remote description → creates answer
-5. B sends SDP answer via WebSocket to A
-6. A sets remote description
-7. Both exchange ICE candidates via WebSocket
-8. Direct P2P media flows between A and B
-```
-
-When B joins a room with multiple existing participants (A, C, D), B creates an offer to each. Existing participants do NOT create offers — they wait for the newcomer's offer.
-
-### 3-Transceiver Architecture
-
-Every peer connection creates exactly 3 transceivers in a fixed order:
-
-| Index | Kind | Purpose | Initial Direction |
-|---|---|---|---|
-| 0 | audio | Microphone | `sendrecv` (even without track, to ensure `ontrack` fires) |
-| 1 | video | Webcam | `sendrecv` (even without track, for late camera arrival) |
-| 2 | video | Screen share | `recvonly` (upgraded to `sendrecv` when sharing) |
-
-This fixed ordering is critical — both sides create transceivers in the same order so that after SDP exchange, `getTransceivers()` returns them in m-line order.
-
-### PeerConnectionManager (`packages/terminal/src/lib/webrtc.ts`)
-
-Manages all peer connections with `@roamhq/wrtc`.
-
-| Method | Purpose |
+| track | what |
 |---|---|
-| `createConnection(peerId)` | Offerer path: create PC with 3 transceivers, create offer, send via signaling |
-| `handleOffer(peerId, sdp)` | Answerer path: create PC via `addTrack`, set remote desc, force `sendrecv` directions, create answer |
-| `handleAnswer(peerId, sdp)` | Set remote description from answer |
-| `handleIceCandidate(peerId, candidate)` | Add ICE candidate |
-| `setVideoTrack(track)` | Attach webcam to transceiver 1 |
-| `setScreenTrack(track)` | Attach screen to transceiver 2, toggle direction, renegotiate |
-| `removeConnection(peerId)` | Close PC, cancel retries |
+| audio | `TrackLocalStaticRTP`, Opus, payload type 111 (`minptime=10;useinbandfec=1`) |
+| webcam | H.264, payload type 102 (`42e01f`, packetization-mode 1) |
+| screen | H.264, the same |
 
-**Answerer path detail:** only `addTrack`-created transceivers are eligible for m-line matching during `setRemoteDescription`, so the answerer pre-attaches audio with `addTrack` and lets `setRemoteDescription` create the two video transceivers. Those default to `recvonly`, so directions are explicitly set to `sendrecv` before `createAnswer()`.
+Three tracks, not three per peer: **the microphone is encoded once and the same RTP packet
+is written to every connection**, and a screen share is captured, encoded and packetised
+once for the whole room. That is the difference that keeps the client's CPU flat as the room
+grows ([performance.md](performance.md)), and it is why the codec is chosen by what the
+machine's hardware encoder produces rather than by what a browser would prefer.
 
-### Track Routing (ontrack handler)
+### The connection contract
 
-Incoming tracks are routed by arrival order: the audio track goes to the peer's audio sink, the first video track is the webcam, and the second video track is the screen share. Tracks are stored in refs and attached to `VideoManager` (ffplay windows) on demand when the user presses `w` or `e`.
+Both sides must end up with the same three transceivers in the same order — audio, webcam,
+screen — or the m-lines do not line up:
 
-### Screen Share Flow
+1. The **newcomer** offers. It creates three `sendrecv` transceivers from the tracks above,
+   in that order, and sends the offer.
+2. The **answerer** binds the same three tracks before answering, so `setRemoteDescription`
+   matches them in the same order.
+3. Audio is `sendrecv` even while muted, so the remote `OnTrack` fires and a peer's state is
+   known before they say anything.
 
-```
-User A starts screen sharing:
+### Glare, retries and state
 
-1. ffmpeg captures the screen → RTCVideoSource track
-2. setScreenTrack(track) on PeerConnectionManager:
-   - replaceTrack(screenTrack) on transceiver 2's sender
-   - Change transceiver 2 direction: recvonly → sendrecv
-   - Renegotiate (new offer/answer exchange, SDP munged to force a=sendrecv on the screen m-line)
-3. Broadcast screen-share-state { isScreenSharing: true } via WebSocket
+- **Glare**: two offers crossing are resolved by comparing ids — `polite = myID < peerID`.
+  The polite peer yields and answers; the impolite one ignores the incoming offer.
+- **Retries**: a failed connection is rebuilt with backoff, by the impolite peer only, so
+  both ends do not retry into each other.
+- **Screen share state** is a WebSocket broadcast, not an SDP change: a share starting or
+  stopping does not renegotiate anything, it flips a flag everyone already has a track for.
+  It is re-broadcast when the participant count changes, so a newcomer learns who is already
+  sharing. When it goes false, watchers close that peer's window.
+- **Mute state** carries the microphone and the camera (`isAudioMuted`, `camOn`); a muted
+  microphone stops at the gate, so a muted participant costs every peer nothing at all.
 
-User B receives:
-4. WebSocket message: screen-share-state → marks A as sharing
-5. WebRTC renegotiation → ontrack fires for screen video
-6. Pressing `e` on A opens an ffplay window with the screen track
+### Playout
 
-User A stops screen sharing:
-7. replaceTrack(null) on transceiver 2's sender
-8. Change transceiver 2 direction: sendrecv → recvonly
-9. Renegotiate
-10. Broadcast screen-share-state { isScreenSharing: false }
+pion delivers packets and stops there — there is no jitter buffer, no concealment, no clock
+correction in the library. `internal/audio/playout.go` is ours: per peer, an RTP reorder
+buffer whose depth follows the measured RFC 3550 jitter (two frames to six), Opus decode,
+a lost packet rebuilt from the **in-band FEC** of the packet after it where that has arrived
+and concealed by PLC where it has not, and a catch-up that skips frames nobody can hear when
+a sender's clock runs ahead of ours. Then one mixer across peers, into the playback ring.
 
-User B receives:
-11. WebSocket message: screen-share-state → closes A's screen window
-```
+Video takes the same shape with pion's `samplebuilder`: 400 packets or 200 ms of slack, so a
+NACK retransmission has time to land before a frame is given up on.
 
-### Glare Handling (perfect negotiation)
+## What the network sees
 
-If both peers send offers simultaneously, the peer with the lexicographically smaller ID is *polite* and yields; the other is *impolite* and ignores the incoming offer. `@roamhq/wrtc` does not support `setLocalDescription({ type: 'rollback' })`, so the polite peer closes its connection and recreates it as the answerer.
-
-### Connection Retry
-
-Failed connections are retried with exponential backoff (1s, 2s, 4s, max 3 attempts). Only the impolite peer retries, avoiding simultaneous retry storms.
-
-### SDP Modification
-
-`boostOpusQuality()` (`packages/terminal/src/lib/sdp.ts`) patches Opus `fmtp` lines to enable stereo at 256kbps:
-
-```
-a=fmtp:111 minptime=10;useinbandfec=1
-→ a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=256000
-```
-
-### Renegotiation
-
-Renegotiation (new offer/answer exchange on an existing connection) is triggered by screen share start/stop (transceiver 2 direction change). The `makingOffer` set prevents concurrent renegotiations with the same peer.
-
-## Room Orchestration (`packages/terminal/src/engine/room-engine.ts`)
-
-`RoomEngine` runs in a separate engine process (forked by the TUI, see `engine/client.ts`) and wires `WebSocketClient`, `PeerConnectionManager`, `AudioManager` and `VideoManager` together. It reports to the TUI over IPC as coalesced `RoomState` snapshots plus chat and room events; `hooks/use-room.ts` mirrors them into React state:
-
-- `participants` — room membership
-- `remoteMuteStates`, `remoteVideoMuteStates`, `remoteScreenShareStates` — per-peer media state from WebSocket broadcasts
-- `messages` — chat history
-- `stats` — bitrate, RTT, packet loss and per-peer latency estimates from the WebRTC stats loop
-
-## Mute/Video State Broadcasting
-
-Media state is broadcast via WebSocket (not WebRTC) for reliability:
-
-```typescript
-// Broadcast triggers: audio/video toggle, join, participant count change
-send({
-  type: 'mute-state',
-  fromId: myId,
-  isAudioMuted,
-  isVideoMuted,
-});
-```
-
-Re-broadcasting on `participants.length` change ensures newcomers immediately learn the mute/video and screen share state of all existing participants.
-
-## Connection Resilience
-
-| Mechanism | Implementation |
-|---|---|
-| WebSocket reconnect | Exponential backoff, max 10 attempts |
-| Re-join on reconnect | `connected` state change triggers `join-room` |
-| State re-broadcast | Mute/screen-share state re-sent when participants change |
-| Server keepalive | WebSocket ping every 25s |
-| Connection failure | `onconnectionstatechange` → retry with backoff (impolite peer only), then remove |
-| Disposed flag | Prevents reconnect storms during intentional teardown |
+Every UDP socket the client opens is marked as voice — DSCP EF, and on macOS the socket's
+service class too, which is what puts the packets in Wi-Fi's voice access category ahead of
+a browser's downloads. A router that honours it does the same; one that does not ignores the
+mark. Windows ignores `IP_TOS` without a machine-wide policy; doing it there needs the qWAVE
+API, which is in [backlog.md](backlog.md).

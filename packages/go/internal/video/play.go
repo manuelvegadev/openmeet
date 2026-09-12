@@ -14,7 +14,7 @@ import (
 
 // Player is one ffplay window showing one peer's stream: RTP in, access units out to
 // ffplay's stdin, which decodes and paints. The stream keeps its own resolution; the
-// window is capped at 1280x720 so a 1080p share does not open edge to edge (gotcha 17).
+// window is capped at 1280x720 so a 1080p share does not open edge to edge.
 type Player struct {
 	title string
 	cmd   *exec.Cmd

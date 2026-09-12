@@ -15,7 +15,7 @@ import (
 )
 
 // What a share goes out as. The screen keeps its own aspect ratio with the short side
-// capped at 1080 and the long side at 3840 (gotcha 17); the camera at 720 tall. The
+// capped at 1080 and the long side at 3840; the camera at 720 tall. The
 // encoder gets a keyframe every second so a newcomer waits at most that long: pion has
 // no way to ask ffmpeg for one on a PLI.
 const (
@@ -59,7 +59,7 @@ type Capture struct {
 }
 
 // outputSize is the share's shape: the screen's own aspect, short side capped at 1080,
-// long side at 3840, both even, never enlarged (gotcha 17). Zero when the size is unknown.
+// long side at 3840, both even, never enlarged. Zero when the size is unknown.
 func outputSize(w, h int, short, long int) (int, int) {
 	if w <= 0 || h <= 0 {
 		return 0, 0
@@ -87,9 +87,9 @@ func outputSize(w, h int, short, long int) (int, int) {
 //     VideoToolbox scales them there (`scale_vt`), so the CPU never touches a pixel.
 //     Measured on the M4 Pro at 3096x1296 → 2580x1080p30: 33% of a core against 103–133%
 //     for any chain that scales or converts on the CPU. `-r` because avfoundation ignores
-//     `-framerate` for screens (gotcha 16).
+//     `-framerate` for screens (gotcha 15).
 //   - Windows: ddagrab keeps frames in D3D11 with `dup_frames=false` so a still desktop
-//     costs nothing (gotcha 23); NVENC takes them as they are, unscaled, the other encoders
+//     costs nothing (gotcha 17); NVENC takes them as they are, unscaled, the other encoders
 //     need them downloaded. gdigrab is the fallback when DDA has no output (an RDP session).
 func screenArgs(d Device, fallback bool) []string {
 	fps := strconv.Itoa(ScreenFPS)
@@ -111,7 +111,7 @@ func screenArgs(d Device, fallback bool) []string {
 			args := []string{"-f", "lavfi", "-i", fmt.Sprintf("ddagrab=output_idx=%s:framerate=%d:dup_frames=false", d.ID, ScreenFPS)}
 			if Encoder() == "h264_nvenc" {
 				// The D3D11 frames go to NVENC as they are: nothing can scale them there
-				// (scale_cuda wants CUDA frames, hwmap to CUDA is ENOSYS — gotcha 28). So on
+				// (scale_cuda wants CUDA frames, hwmap to CUDA is ENOSYS — gotcha 17). So on
 				// this one path the screen keeps its own size rather than the capped one —
 				// an ultrawide goes out as 3440x1440 — and the same bitrate buys fewer bits
 				// per pixel than the rule assumes. Only a panel past ScreenUnscaledMax is
@@ -137,7 +137,7 @@ func cpuScale(ow, oh int) string {
 	return fmt.Sprintf(",scale=-2:'min(ih,%d)':flags=fast_bilinear", ScreenShort)
 }
 
-// cameraArgs: the camera opened at whatever it offers, never pinned to a size (gotcha 12),
+// cameraArgs: the camera opened at whatever it offers, never pinned to a size (gotcha 13),
 // paced to CameraFPS and scaled on the GPU to 720 tall.
 func cameraArgs(d Device) []string {
 	fps := strconv.Itoa(CameraFPS)

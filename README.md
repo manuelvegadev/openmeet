@@ -67,7 +67,7 @@ Client A <──WebRTC P2P──> Client B
 - **Media** — direct P2P connections between clients (no SFU/MCU); audio and video never touch the server
 - **Storage** — in-memory Maps for rooms and participants (ephemeral by design)
 
-See [docs/websocket-webrtc-architecture.md](docs/websocket-webrtc-architecture.md) for the full signaling and WebRTC flow, and [docs/go-migration-analysis.md](docs/go-migration-analysis.md) for why the client is Go.
+See [docs/websocket-webrtc-architecture.md](docs/websocket-webrtc-architecture.md) for the full signaling and WebRTC flow, and [docs/performance.md](docs/performance.md) for what the client costs and how those numbers were taken.
 
 ## Tech Stack
 
