@@ -18,7 +18,7 @@ OPUS_VER=1.5.2
 # has to run on a Mac without Homebrew. Built once with cmake and cached; the .pc points
 # pkg-config at a directory holding only the static archive, so that is what links.
 if [ ! -f "$CROSS/opus-host/lib/libopus.a" ]; then
-  echo "building libopus $OPUS_VER for this machine..."
+  echo "building libopus $OPUS_VER for this machine..." >&2
   mkdir -p "$CROSS"
   [ -f "$CROSS/opus-$OPUS_VER.tar.gz" ] || curl -sSL -o "$CROSS/opus-$OPUS_VER.tar.gz" "https://downloads.xiph.org/releases/opus/opus-$OPUS_VER.tar.gz"
   [ -d "$CROSS/opus-$OPUS_VER" ] || tar xzf "$CROSS/opus-$OPUS_VER.tar.gz" -C "$CROSS"
