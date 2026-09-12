@@ -2,7 +2,7 @@ import { App } from './app';
 import type { Lang } from './content/types';
 import { installCopyHandler } from './lib/copy';
 import { COPY, LANGS } from './lib/i18n';
-import { APP_VERSION, AUTHOR, GITHUB_URL, PATHS, RELEASES_URL, SITE_URL } from './lib/site';
+import { APP_VERSION, AUTHOR, GA_ID, GITHUB_URL, PATHS, RELEASES_URL, SITE_URL } from './lib/site';
 
 /**
  * Everything a crawler, a link unfurler or an answer engine reads before the body: title and
@@ -36,7 +36,7 @@ export function Head({ lang, noindex }: { lang: Lang; noindex?: boolean }) {
         offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
         downloadUrl: RELEASES_URL,
         installUrl: RELEASES_URL,
-        softwareHelp: { '@type': 'CreativeWork', url: `${GITHUB_URL}/blob/main/packages/terminal/README.md` },
+        softwareHelp: { '@type': 'CreativeWork', url: `${GITHUB_URL}/blob/main/packages/go/README.md` },
         featureList: c.meta.features,
         screenshot: { '@type': 'ImageObject', url: ogImage, caption: c.meta.ogAlt },
         author: { '@type': 'Person', name: AUTHOR.name, url: AUTHOR.url },
@@ -121,6 +121,16 @@ export function Document({ lang, noindex }: { lang: Lang; noindex?: boolean }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Head lang={lang} noindex={noindex} />
+        {/* Google Analytics, Google's own snippet. Here rather than in `Head` because `Head` is
+            what the dev server renders, and localhost is not a visitor. On the 404 too: a page
+            nobody can reach is worth knowing about. */}
+        <script async src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} />
+        <script
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: Google's snippet, with our own id
+          dangerouslySetInnerHTML={{
+            __html: `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','${GA_ID}');`,
+          }}
+        />
       </head>
       <body>
         <div id="root">

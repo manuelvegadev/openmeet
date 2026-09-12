@@ -10,6 +10,12 @@ export const SELF_HOST_URL = `${GITHUB_URL}#deployment`;
 export const CHANGELOG_URL = `${GITHUB_URL}/releases`;
 export const AUTHOR = { name: 'Manuel Vega', url: 'https://manuelvega.dev' };
 
+/**
+ * Google Analytics, on the published pages only. It lives in `Document`, which the dev server
+ * does not render, so `pnpm dev` never counts itself as a visitor.
+ */
+export const GA_ID = 'G-02S1FEV7RG';
+
 /** Injected by Vite from packages/go/VERSION. */
 export const APP_VERSION: string = __APP_VERSION__;
 
