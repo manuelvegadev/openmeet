@@ -60,21 +60,6 @@ importers:
       audify:
         specifier: ^1.10.1
         version: 1.10.1
-      ink:
-        specifier: ^7.1.1
-        version: 7.1.1(@types/react@19.2.18)(react@19.2.8)
-      ink-select-input:
-        specifier: ^6.2.0
-        version: 6.2.0(ink@7.1.1(@types/react@19.2.18)(react@19.2.8))(react@19.2.8)
-      nanoid:
-        specifier: ^6.0.1
-        version: 6.0.1
-      react:
-        specifier: ^19.2.8
-        version: 19.2.8
-      string-width:
-        specifier: ^8.2.2
-        version: 8.2.2
       ws:
         specifier: ^8.21.3
         version: 8.21.3
@@ -97,6 +82,21 @@ importers:
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
+      ink:
+        specifier: ^7.1.1
+        version: 7.1.1(@types/react@19.2.18)(react@19.2.8)
+      ink-select-input:
+        specifier: ^6.2.0
+        version: 6.2.0(ink@7.1.1(@types/react@19.2.18)(react@19.2.8))(react@19.2.8)
+      nanoid:
+        specifier: ^6.0.1
+        version: 6.0.1
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+      string-width:
+        specifier: ^8.2.2
+        version: 8.2.2
       strip-ansi:
         specifier: ^7.2.0
         version: 7.2.0

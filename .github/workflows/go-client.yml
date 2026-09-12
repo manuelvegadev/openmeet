@@ -32,11 +32,14 @@ jobs:
       - name: The tag matches VERSION
         if: startsWith(github.ref, 'refs/tags/v')
         run: test "v$(tr -d '[:space:]' < packages/go/VERSION)" = "${GITHUB_REF_NAME}"
+      # libopus first: vet and test compile cgo too, and the runner has no opus of its own.
+      - name: libopus
+        run: echo "PKG_CONFIG_PATH=$(packages/go/scripts/build.sh --deps)" >> "$GITHUB_ENV"
       - name: Vet and test
         working-directory: packages/go
         run: |
-          go vet ./...
-          go test ./...
+          go vet -tags nolibopusfile ./...
+          go test -tags nolibopusfile ./...
       - name: Build macOS (arm64)
         run: packages/go/scripts/build.sh
       - name: Build Windows (amd64)

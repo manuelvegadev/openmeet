@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Build the Go client for this machine: packages/go/openmeet, stamped with the version in
 # packages/go/VERSION — the one number for every platform (see "Releasing" in the README).
+#
+#   build.sh            build libopus if needed, then the binary
+#   build.sh --deps     only libopus and its .pc, and print PKG_CONFIG_PATH
+#
+# --deps is for anything that compiles the package without producing the binary — `go vet`
+# and `go test` need libopus as much as the build does, and a machine with none (a CI
+# runner) has to be given this one rather than Homebrew's.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(tr -d '[:space:]' < "$HERE/VERSION")"
@@ -31,6 +38,11 @@ Version: $OPUS_VER
 Cflags: -I\${includedir}/opus
 Libs: -L\${libdir} -lopus
 PC
+
+if [ "${1:-}" = "--deps" ]; then
+  echo "$CROSS/pkgconfig-host"
+  exit 0
+fi
 
 cd "$HERE"
 PKG_CONFIG_PATH="$CROSS/pkgconfig-host" go build -tags nolibopusfile -trimpath -ldflags "-s -w -X main.Version=$VERSION" -o openmeet ./cmd/openmeet
