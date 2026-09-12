@@ -27,6 +27,11 @@ here.
 - **The video overlay.** With compressed H.264 going to ffplay there is nothing to burn text
   into, so a peer's name lives in the window title. Worth a line in the settings if the row
   ever comes back.
+- **Choosing which terminal opens it.** The installers deliberately register nothing with
+  the system, because a Start Menu entry or a desktop shortcut has to name a terminal and
+  that is the user's choice, not ours. The way to have both would be to *ask*: the installer
+  offering to register a shortcut against a terminal you name, and a setting in the app to
+  change it later. Worth doing only with the asking part, never by picking a default.
 - **Settings from inside a room.** Today it is reachable only from the home screen, which is
   why every row can say "applies when you next join". Opening it in a call would make that
   mark mean something: what changes live (devices, volume) against what waits.

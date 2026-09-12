@@ -22,11 +22,17 @@ curl -fsSL https://openmeet.manuelvega.dev/install | bash
 ```
 
 ```powershell
-# Windows 11 (PowerShell) — also registers a Windows Terminal profile and a desktop shortcut
+# Windows 11 (PowerShell)
 irm https://openmeet.manuelvega.dev/install.ps1 | iex
 ```
 
 Both are redirects to the installer in the latest release, so the URL never changes.
+
+The installers put a binary on your PATH and stop there: no Start Menu entry, no desktop
+shortcut, no terminal profile written for you. Which terminal this runs in is yours to pick,
+and a shortcut would pick one for you. Windows ships two optional scripts beside the binary
+for anyone who does want a Windows Terminal profile and a shortcut; the installer prints the
+two lines to run them.
 
 Then `openmeet`. Nothing else is needed for a call; screen and camera sharing need [ffmpeg](https://ffmpeg.org) (`brew install ffmpeg` / `winget install Gyan.FFmpeg`, which the Windows installer does). The app keeps itself current from GitHub Releases: a newer version downloads in the background and the home screen offers `r` to restart into it. The binaries are also on the [releases page](https://github.com/manuelvegadev/openmeet/releases) with their SHA-256 sums.
 

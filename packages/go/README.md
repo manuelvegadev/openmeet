@@ -58,7 +58,8 @@ git tag v0.6.1 && git push && git push --tags
 `go-client.yml` refuses a tag that disagrees with `VERSION`, builds both binaries on a macOS
 runner (the only host that can link CoreAudio; Windows is a zig cross-build from there),
 and publishes `openmeet-darwin-arm64`, `openmeet-windows-amd64.exe`, the installers, the
-Windows Terminal scripts and `SHA256SUMS` to a GitHub Release. Nothing is signed or
+optional Windows Terminal scripts, the icon (the site's own favicon: brackets and the
+speaking dot) and `SHA256SUMS` to a GitHub Release. Nothing is signed or
 notarized yet: `install.sh` clears the quarantine flag, and Windows SmartScreen may ask once.
 
 Installing and staying current, from the user's side:

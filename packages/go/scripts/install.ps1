@@ -1,6 +1,6 @@
 # OpenMeet for Windows, one binary: the latest release into %LOCALAPPDATA%\openmeet, on the
-# PATH, with a Windows Terminal profile and a desktop shortcut. ffmpeg (for screen sharing)
-# through winget when it is missing.
+# PATH. ffmpeg (for screen sharing) through winget when it is missing. Nothing is registered
+# with the system — see the note at the end.
 #   irm https://raw.githubusercontent.com/manuelvegadev/openmeet/main/packages/go/scripts/install.ps1 | iex
 $ErrorActionPreference = 'Stop'
 $repo = 'manuelvegadev/openmeet'
@@ -23,6 +23,11 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
   Write-Host "ffmpeg not found: installing Gyan.FFmpeg with winget (screen sharing needs it)"
   try { winget install -e --id Gyan.FFmpeg --accept-source-agreements --accept-package-agreements | Out-Null } catch { Write-Host "  winget failed; install ffmpeg by hand for screen sharing" }
 }
-if (Test-Path (Join-Path $dir 'wt-profile.ps1')) { & (Join-Path $dir 'wt-profile.ps1') -Command (Join-Path $dir 'openmeet.exe') -Icon (Join-Path $dir 'openmeet.png') }
-if (Test-Path (Join-Path $dir 'create-shortcut.ps1')) { & (Join-Path $dir 'create-shortcut.ps1') -Icon (Join-Path $dir 'openmeet.ico') }
-Write-Host "installed $(& (Join-Path $dir 'openmeet.exe') --version) at $dir — run: openmeet, or the desktop shortcut"
+# Deliberately nothing else: no Start Menu entry, no desktop shortcut, no terminal profile
+# written behind your back. This is a terminal application, and which terminal is the user's
+# to choose — a shortcut would pick one for them. The two scripts are there for anyone who
+# wants Windows Terminal set up that way, and they are theirs to run.
+Write-Host "installed $(& (Join-Path $dir 'openmeet.exe') --version) at $dir — run: openmeet"
+Write-Host "optional, for a Windows Terminal profile and a desktop shortcut:"
+Write-Host "  & '$dir\wt-profile.ps1' -Command '$dir\openmeet.exe' -Icon '$dir\openmeet.png'"
+Write-Host "  & '$dir\create-shortcut.ps1' -Icon '$dir\openmeet.ico'"
