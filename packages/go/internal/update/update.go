@@ -258,9 +258,11 @@ func Relaunch() error {
 	return cmd.Start()
 }
 
+// What to tell someone whose policy says do not install: the same line the site shows, which
+// redirects to the installer in the latest release rather than naming a path in the repo.
 func installCommand() string {
 	if runtime.GOOS == "windows" {
-		return "irm https://raw.githubusercontent.com/" + repo + "/main/packages/go/scripts/install.ps1 | iex"
+		return "irm https://openmeet.manuelvega.dev/install.ps1 | iex"
 	}
-	return "curl -fsSL https://raw.githubusercontent.com/" + repo + "/main/packages/go/scripts/install.sh | bash"
+	return "curl -fsSL https://openmeet.manuelvega.dev/install | bash"
 }
