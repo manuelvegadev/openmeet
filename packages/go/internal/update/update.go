@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -248,6 +249,13 @@ func Apply() error {
 }
 
 // Relaunch starts the (new) binary with the same arguments and returns; the caller exits.
+// Relaunch starts the installed version in this terminal and stays until it is done.
+//
+// The waiting is the point. A shell decides a command has finished when the process it
+// started exits, and prints its prompt there and then — so a parent that starts the new
+// version and leaves hands the terminal back while the child is painting on it, and the
+// prompt lands in the middle of the room. Holding the console until the child is done costs
+// an idle process and keeps the terminal one program's.
 func Relaunch() error {
 	exe, err := Exe()
 	if err != nil {
@@ -255,7 +263,13 @@ func Relaunch() error {
 	}
 	cmd := exec.Command(exe, os.Args[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// The child owns the keyboard now, ctrl-c included.
+	signal.Ignore(os.Interrupt)
+	_ = cmd.Wait()
+	return nil
 }
 
 // What to tell someone whose policy says do not install: the same line the site shows, which
