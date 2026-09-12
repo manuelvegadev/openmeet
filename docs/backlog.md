@@ -148,22 +148,56 @@ warnings and the `NSKVONotifying_AVCaptureScreenInput` noise.
 
 ## Bigger bets, in rough order of appeal
 
+### An SFU for the screen share, and only if it can stay private (asked for 11 Sept 2026)
+The mesh's remaining cost is the **upload**, and only the sender's: the Go client already
+encodes once and writes the same packets to everyone, and measuring 0, 1 and 2 real
+receivers moved its CPU 5.88% → 5.08% → 5.84% of a core, which is the noise. So an SFU
+would buy exactly one thing — one copy out of your link instead of one per viewer. At the
+per-viewer rate the settings now use, five people watching a 2500 kbps share is 12.5 Mbps
+up; through an SFU it would be 2500 kbps, whoever is watching, which is how Discord and
+Twitch stay flat.
+
+The reason we do not have one is not difficulty, it is that an ordinary SFU terminates
+DTLS-SRTP: it decrypts every frame to forward it, so the server can watch the call. That is
+the one thing this app promises not to do. **What to research is whether that is avoidable,
+because it looks like it is.**
+
+The route, in the order it should be derisked:
+
+- **SFrame (RFC 9605).** Encrypt the media frame with a key the server never has, *before*
+  packetisation; the SFU sees RTP headers — enough to forward, to drop, to answer NACK and
+  PLI — and never the payload. Our own code is unusually ready for it: `videoTrack.write`
+  in `internal/rtc/peers.go` already packetises access units itself, so encryption is one
+  call on the way in and its mirror before `samplebuilder` on the way out. The cipher is
+  AES-GCM, which is what SRTP already runs on every packet today without showing up in a
+  profile: both target machines do it in hardware (AES-NI, ARMv8 crypto), around a GB/s per
+  core against a 2500 kbps stream. Cheap is not the hard part.
+- **Getting the key to the room without the server.** This is the hard part, and we are in a
+  good position for it: **audio stays peer to peer whatever happens**, so every participant
+  already has an authenticated DTLS channel to every other one. A room key handed over those
+  connections never touches the server. Rotation on join and leave is the messy bit (MLS,
+  RFC 9420, is the grown-up answer); a shared passphrase is the cheap one worth prototyping
+  first to see whether the rest holds.
+- **What E2EE does not hide.** The server still sees who is in which room, when, and how much
+  each of them sends. Media stays private; the shape of the call does not.
+- **Congestion control becomes ours.** In a mesh each connection adapts to its own peer. Behind
+  an SFU with one encoding, the slowest viewer sets nothing and simply loses packets; doing it
+  properly means simulcast or SVC, and simulcast means several encoders again — which is the
+  cost an SFU was supposed to remove. Worth measuring before assuming.
+- **Operations.** ~9 GB/hour of server traffic for a 5-person room, a UDP port range in Docker,
+  and Cloudflare proxies no UDP (media needs a DNS-only record, which exposes the origin IP).
+  A minimal forwarder in Go with pion is plausible — we already own the packet path — and with
+  SFrame it does not even need the keys.
+
+Scope it to **video and the screen share only**. Audio is 128 kbps per peer, 640 kbps with the
+room full: it costs nothing to keep in the mesh and everything to give away.
+
 ### Take video off WebRTC and encode with NVENC
 Measured on the Windows box: `ddagrab` → `h264_nvenc` straight from D3D11 costs **1% of a
 core**, against 65% for the software path. It would also encode **once** regardless of peer
-count, which fixes the mesh's ×(N−1) CPU without an SFU. The cost is everything WebRTC gives
-away for free: congestion control, pacing, keyframes on request, and a DataChannel in
-unreliable/unordered mode. A mini video protocol — but the right architecture if the app
-becomes "share a screen with audio" more than "a video call".
-
-### An SFU
-One upload instead of N−1, and one encoder instead of N−1; `@roamhq/wrtc` already offers
-simulcast (`a=rid:l/m/h`, verified), which is useless in a mesh and the whole point with an
-SFU. mediasoup 3.12+ ships a prebuilt worker, so it installs without a compiler. The real
-obstacles: Cloudflare proxies no UDP (media needs a DNS-only record, which exposes the origin
-IP), a UDP port range in Docker, ~9 GB/hour of server traffic for a 5-person room, no
-end-to-end encryption any more, and `mediasoup-client` has no official handler for
-`@roamhq/wrtc` — `mediasoup-client-node` is a third party and is the piece to derisk first.
+count — which the Go client now does anyway, through pion, while keeping congestion control,
+pacing, keyframes on request and everything else WebRTC gives away for free. Left here as the
+record of the measurement; the reason to revisit it would be latency, not CPU.
 
 ### Echo cancellation
 Deferred everywhere except Windows + RTX, headphones-first. We push PCM through
