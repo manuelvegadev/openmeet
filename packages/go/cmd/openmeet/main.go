@@ -28,7 +28,7 @@ import (
 )
 
 // Version is set at build time (-ldflags "-X main.Version=…"); the scripts read it from
-// packages/terminal/package.json so both clients report the one version.
+// packages/go/VERSION, which a release tag has to match — see CONTRIBUTING.md.
 var Version = "dev"
 
 func platformSupport() (name, features string) {

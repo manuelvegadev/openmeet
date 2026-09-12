@@ -1,6 +1,6 @@
 // Package signal speaks the server's WebSocket protocol — the same JSON the Node client
 // sends, so a Go client and a Node client can share a room while the migration runs.
-// The shapes mirror packages/shared/src/types.ts; keep them in step by hand.
+// The shapes mirror packages/server/src/protocol.ts; keep them in step by hand.
 package signal
 
 import (

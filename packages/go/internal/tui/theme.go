@@ -1,6 +1,7 @@
 package tui
 
-// The palette, copied value for value from packages/terminal/src/lib/theme.ts — every
+// The palette, copied value for value from the retired Node client's src/lib/theme.ts (git
+// show terminal-v0.5.2:packages/terminal/src/lib/theme.ts) — every
 // colour a 24-bit hex, for the reasons written there: a named ANSI colour is a palette
 // index and renders as a different hue in every terminal.
 const (

@@ -26,7 +26,7 @@ Types used in this repo:
 | `test` | Tests and test tooling (smoke scripts) |
 | `chore` | Releases, housekeeping that fits nowhere else |
 
-Scopes are the package or area touched: `go`, `server`, `shared`, `website`, `deps` (`terminal` for the retired Node client). Omit the scope when a change spans the whole repo.
+Scopes are the package or area touched: `go`, `server`, `website`, `deps`. Omit the scope when a change spans the whole repo.
 
 - Summary in imperative mood, lower case, no trailing period, under 72 characters.
 - Use `!` after the type/scope (and a `BREAKING CHANGE:` footer) for anything that breaks the signaling protocol or a published CLI flag.
@@ -49,8 +49,8 @@ Work on a branch named after the change: `feat/windows-audio`, `fix/glare-retry`
 ## Before you push
 
 ```bash
-pnpm lint                                        # Biome, for the server, shared and website
-pnpm build                                       # shared → server
+pnpm lint                                        # Biome, for the server and the website
+pnpm build                                       # the server
 (cd packages/go && gofmt -l . && go vet ./... && go test ./...)   # the client, golden frames included
 packages/go/scripts/build.sh && packages/go/openmeet --list-devices   # on a machine with audio devices
 ```

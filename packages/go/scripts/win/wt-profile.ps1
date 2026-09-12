@@ -1,6 +1,7 @@
 # An "OpenMeet" profile in Windows Terminal, so the app opens in its own window: the app's
 # icon and name in the title row, tab row and padding in the app's black, no scrollbar,
-# closes when the app exits. The port of packages/terminal/windows/wt-profile.cjs, with no
+# closes when the app exits. The port of the retired Node client's windows/wt-profile.cjs
+# (at terminal-v0.5.2), with no
 # Node on the machine. Idempotent; keeps a backup of settings.json next to it.
 #   powershell -ExecutionPolicy Bypass -File wt-profile.ps1 [-Command <what to run>] [-Icon <png>]
 param(

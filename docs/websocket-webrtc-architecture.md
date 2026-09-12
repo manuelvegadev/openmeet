@@ -33,7 +33,7 @@ The server (`packages/server/src/signaling.ts`) routes:
 
 It pings every client every 25 s so reverse proxies do not time the connection out, keeps
 rooms in memory, and forgets a room when the last person leaves. The shapes are one
-discriminated union in `packages/shared/src/types.ts`, which the Go client mirrors field for
+discriminated union in `packages/server/src/protocol.ts`, which the Go client mirrors field for
 field in `internal/signal`.
 
 ## The WebRTC layer

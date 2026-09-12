@@ -160,7 +160,7 @@ NODE_ENV=production node packages/server/dist/index.js
 
 ## The Node client
 
-`openmeet-terminal` on npm was the client until September 2026 and is retired: no further versions are published, and [`packages/terminal`](packages/terminal/README.md) stays in the tree only as the reference the Go client was drawn from, cell for cell. Its last version still works against the same server, without video towards Go peers (it has no H.264).
+`openmeet-terminal` on npm was the client until September 2026 and is retired: no further versions are published, and its source left this tree in September 2026. Git keeps all of it at the `terminal-v0.5.2` tag — `git show terminal-v0.5.2:packages/terminal/README.md` — and npm still serves its page. Its last version still works against the same server, without video towards Go peers (it has no H.264).
 
 ## License
 

@@ -1,5 +1,6 @@
 # A desktop shortcut that opens OpenMeet in its own Windows Terminal window (the profile
-# from wt-profile.ps1). The port of packages/terminal/windows/create-shortcut.ps1.
+# from wt-profile.ps1). The port of the retired client's windows/create-shortcut.ps1
+# (at terminal-v0.5.2).
 #   powershell -ExecutionPolicy Bypass -File create-shortcut.ps1 [-Icon <path.ico>]
 param([string]$Icon = (Join-Path $env:LOCALAPPDATA 'openmeet\openmeet.ico'))
 $wt = Get-Command wt.exe -ErrorAction SilentlyContinue

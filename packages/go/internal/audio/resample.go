@@ -3,7 +3,7 @@ package audio
 import "math"
 
 // Resampler is a streaming polyphase sample-rate converter for interleaved int16 audio,
-// a port of the Node client's (`packages/terminal/src/lib/audio/resampler.ts`, ≈90 dB
+// a port of the retired Node client's (`src/lib/audio/resampler.ts` at terminal-v0.5.2, ≈90 dB
 // SNR). Devices run at whatever rate they like — 44.1 kHz USB mixers, 96 kHz interfaces,
 // 16 kHz Bluetooth headsets — and the pipeline is always 48 kHz; converting here keeps
 // the driver's resampler out of the path. miniaudio's is linear interpolation behind a

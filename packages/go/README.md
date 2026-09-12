@@ -87,15 +87,16 @@ formula to keep in step.
 
 | package | what |
 |---|---|
-| `internal/signal` | The WebSocket protocol, field for field with `packages/shared/src/types.ts` |
+| `internal/signal` | The WebSocket protocol, field for field with `packages/server/src/protocol.ts` |
 | `internal/rtc` | pion: one PeerConnection per peer, the three-transceiver contract, `polite = myID < peerID`, and **one `TrackLocalStaticRTP` bound to every connection** — the encode-once fan-out |
 | `internal/audio` | miniaudio compiled in from `shim.c`, its callbacks in C feeding lock-free rings; a Go pump every 20 ms does capture → voice gate → Opus and keeps the playback ring fed from the playout (per-peer jitter buffer, Opus decode with PLC, mixer). No audio thread ever enters Go |
 | `internal/tui` | The interface: a cell canvas drawn the way Ink drew it (`canvas.go`), the palette (`theme.go`), the chrome (`frame.go`, `chips.go`), one file per screen, and the Bubble Tea model with every key the Node client has (`model.go`). Bubble Tea writes only the lines that changed |
 | `internal/engine` | The room session: signaling, the mesh, the pump, the stats, and the snapshots the interface draws from |
 | `internal/settings` | The same `settings.json` the Node client keeps, field for field |
 
-The voice gate is a port of `packages/terminal/src/lib/audio/voice-gate.ts`, constant for
-constant, with the same tests (`go test ./...`).
+The voice gate is a port of the retired Node client's `src/lib/audio/voice-gate.ts`, constant
+for constant, with the same tests (`go test ./...`). That client is no longer in the tree; git
+keeps it at `terminal-v0.5.2`.
 
 ## What the spike measured (this Mac, M4 Pro, one Node peer sending a tone)
 
