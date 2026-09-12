@@ -24,9 +24,11 @@ import (
 )
 
 const (
-	repo         = "manuelvegadev/openmeet"
-	checkEvery   = 24 * time.Hour
-	checkTimeout = 3 * time.Second
+	repo = "manuelvegadev/openmeet"
+	// Long enough not to ask twice when the app starts twice in a row, short enough that
+	// opening it is how you find out there is a new version.
+	askAgainAfter = 5 * time.Minute
+	checkTimeout  = 3 * time.Second
 )
 
 // Status is what the home screen shows: a newer version, and whether it is ready to install.
@@ -127,19 +129,43 @@ func parse(v string) []int {
 // package's tag — and a client that cached that string went a whole day comparing its version
 // against something unreadable, which reads as "no update" and hides every release until the
 // cache expires.
-// cachedLatest is today's answer if there is one and it reads as a version.
+// cachedLatest is the last answer, when it is recent enough and reads as a version.
 func cachedLatest(st Store) string {
 	seen := st.LatestSeen()
-	if parse(seen) != nil && time.Since(st.LastCheck()) < checkEvery {
+	if parse(seen) != nil && time.Since(st.LastCheck()) < askAgainAfter {
 		return seen
 	}
 	return ""
 }
 
-func Latest(ctx context.Context, st Store) (string, error) {
-	if seen := cachedLatest(st); seen != "" {
+// Latest is the newest released version: asked of GitHub on every start, which is the point
+// of having an updater at all. The stored answer is a floor against asking twice in the same
+// breath — a relaunch after an update, mostly — and a fallback for a machine with no network,
+// not a daily budget: the request is a kilobyte with a three-second deadline on a goroutine
+// nobody is waiting for.
+//
+// It refuses an answer that is not a version, and has to: `releases/latest` gives whatever
+// release is newest in the repository, which is not necessarily this client's. Before the
+// first binary went out it answered `terminal-v0.5.2`, the retired npm package's tag, and a
+// client that believed it compared its version against something unreadable — which reads as
+// "no update" and hid every release for as long as the answer was kept.
+func Latest(ctx context.Context, st Store, mode Mode) (string, error) {
+	if seen := cachedLatest(st); mode == Startup && seen != "" {
 		return seen, nil
 	}
+	latest, err := fetchLatest(ctx)
+	if err != nil {
+		// No network, or GitHub is unhappy: the last answer we could read beats none.
+		if seen := st.LatestSeen(); parse(seen) != nil {
+			return seen, nil
+		}
+		return "", err
+	}
+	st.SetCheck(time.Now(), latest)
+	return latest, nil
+}
+
+func fetchLatest(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/repos/"+repo+"/releases/latest", nil)
@@ -165,17 +191,24 @@ func Latest(ctx context.Context, st Store) (string, error) {
 	if parse(latest) == nil {
 		return "", fmt.Errorf("releases: latest is %q, which is not this client's", rel.Tag)
 	}
-	st.SetCheck(time.Now(), latest)
 	return latest, nil
 }
 
 // Check runs the whole policy: nothing for "off" or a dev build; for "notify" the version
 // and the command; for "auto" the download, verified, and then the version as ready.
-func Check(ctx context.Context, policy, current string, st Store, log func(string, ...any)) *Status {
+// Mode says whether the floor applies: a start honours it, a person asking does not.
+type Mode int
+
+const (
+	Startup Mode = iota
+	Asked
+)
+
+func Check(ctx context.Context, policy, current string, st Store, mode Mode, log func(string, ...any)) *Status {
 	if policy == "off" || parse(current) == nil || AssetName() == "" {
 		return nil
 	}
-	latest, err := Latest(ctx, st)
+	latest, err := Latest(ctx, st, mode)
 	if err != nil {
 		log("update check: %v", err)
 		return nil

@@ -57,6 +57,8 @@ type Host struct {
 	AllCameras func() []VideoChoice
 	// `r` on the home screen once an update is downloaded: swap it in and start again.
 	RestartUpdate func()
+	// `u`: ask now, whatever the last answer was. Answers with UpdateAvailable or UpToDate.
+	CheckUpdate func()
 	// This launch is the first on a version that installed itself.
 	JustUpdated bool
 	// Where to start: the room to join straight away, if the CLI said so.
@@ -168,6 +170,8 @@ type Model struct {
 	escArmed  bool
 	update    *UpdateInfo
 	showTick  bool
+	checking  bool
+	upToDate  bool
 
 	// profile
 	profile      ProfileState
@@ -239,6 +243,7 @@ func (m *Model) Init() tea.Cmd {
 }
 
 type tickDoneMsg struct{}
+type upToDateDoneMsg struct{}
 
 func (m *Model) tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -313,6 +318,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateAvailable:
 		u := UpdateInfo(msg)
 		m.update = &u
+		m.checking, m.upToDate = false, false
+		return m, nil
+	case UpToDate:
+		m.checking, m.upToDate = false, true
+		return m, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return upToDateDoneMsg{} })
+	case upToDateDoneMsg:
+		m.upToDate = false
 		return m, nil
 	case Left:
 		if m.screen == screenRoom {
@@ -419,6 +431,9 @@ func (m *Model) keyHome(msg tea.KeyMsg) tea.Cmd {
 		m.screen = screenSettings
 		m.settingsIdx = 0
 		m.picker = ""
+	case isRune(msg, "u") && m.update == nil && !m.checking && m.host.CheckUpdate != nil:
+		m.checking, m.upToDate = true, false
+		go m.host.CheckUpdate()
 	case isRune(msg, "r") && m.update != nil && m.update.Ready && m.host.RestartUpdate != nil:
 		m.quit = true
 		m.host.RestartUpdate()
@@ -962,7 +977,7 @@ func (m *Model) View() string {
 			Version: m.host.Version, Platform: m.host.Platform, Features: m.host.Features,
 			Name: m.host.Settings.Name(), Color: m.host.Settings.Color(),
 			Joining: m.joining, JoinCode: m.joinField.value, Cursor: m.blinkOn, EscArmed: m.escArmed,
-			Update: m.update, JustUpdated: m.showTick,
+			Update: m.update, JustUpdated: m.showTick, Checking: m.checking, UpToDate: m.upToDate,
 		})
 	case screenSettings:
 		rows := m.host.Settings.Rows()

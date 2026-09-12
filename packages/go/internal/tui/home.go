@@ -17,6 +17,11 @@ type HomeState struct {
 	Update *UpdateInfo
 	// The first run after a silent install: a green tick for a few seconds.
 	JustUpdated bool
+	// `u` was pressed and the answer has not come back yet.
+	Checking bool
+	// It came back and there was nothing newer: said for a few seconds, because a button
+	// that answers nothing looks broken.
+	UpToDate bool
 }
 
 type UpdateInfo struct {
@@ -67,6 +72,15 @@ func DrawHome(c *Canvas, s HomeState) {
 		nil,
 		chipRow([]KeyHint{{Key: "j", Label: "join room"}}),
 		chipRow([]KeyHint{{Key: "s", Label: "settings"}}),
+	}
+	if s.Update == nil {
+		lines = append(lines, chipRow([]KeyHint{{Key: "u", Label: "check for updates"}}))
+	}
+	switch {
+	case s.Checking:
+		lines = append(lines, nil, []Span{{"Asking GitHub...", Muted}})
+	case s.UpToDate:
+		lines = append(lines, nil, []Span{{"You are on the latest version.", Style{FG: ThemeOK}}})
 	}
 	if u := s.Update; u != nil {
 		lines = append(lines, nil)

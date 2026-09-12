@@ -8,8 +8,13 @@ import (
 	"time"
 )
 
-// The frames in testdata were captured from the Node client at 120x34 (see scripts in the
-// migration notes): each screen here must come out cell for cell the same.
+// The frames in testdata were captured from the Node client at 120x34: each screen here must
+// come out cell for cell the same, which is how the interface people learnt cannot drift.
+//
+// Two of them are no longer Node's, and deliberately: the settings grew sections and the
+// cost/quality bars, and the home screen grew a key for asking about updates, which Node had
+// no equivalent of. Their frames are ours, regenerated on purpose — so a difference in either
+// still fails, it just fails against the design we chose rather than against Ink.
 
 func golden(t *testing.T, name string) string {
 	t.Helper()
@@ -38,7 +43,7 @@ func compare(t *testing.T, name string, c *Canvas) {
 	}
 }
 
-func TestHomeMatchesNode(t *testing.T) {
+func TestHomeFrame(t *testing.T) {
 	c := NewCanvas(120, 34)
 	DrawHome(c, HomeState{Version: "0.5.2", Platform: "macOS", Features: "audio, chat, video, screen share", Name: "mvega", Color: "#A3E635"})
 	compare(t, "home", c)
@@ -220,7 +225,7 @@ func compareColors(t *testing.T, name string, c *Canvas) {
 	}
 }
 
-func TestColorsMatchNode(t *testing.T) {
+func TestColors(t *testing.T) {
 	c := NewCanvas(120, 34)
 	DrawHome(c, HomeState{Version: "0.5.2", Platform: "macOS", Features: "audio, chat, video, screen share", Name: "mvega", Color: "#A3E635"})
 	compareColors(t, "home", c)

@@ -32,3 +32,7 @@ type Left struct{ Reason string }
 
 // UpdateAvailable: a newer version, ready or only known (see internal/update).
 type UpdateAvailable UpdateInfo
+
+// UpToDate: an update check that found nothing newer. Only the home screen's `u` says so out
+// loud; the one at startup passes in silence.
+type UpToDate struct{}

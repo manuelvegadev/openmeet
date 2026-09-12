@@ -9,7 +9,6 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                                                                                                      │
 │                        🎥 OpenMeet Terminal v0.5.2 · macOS: audio, chat, video, screen share                         │
 │                                            Lightweight video conferencing                                            │
 │                                                                                                                      │
@@ -18,6 +17,7 @@
 │                                                                                                                      │
 │                                                     j  join room                                                     │
 │                                                      s  settings                                                     │
+│                                                 u  check for updates                                                 │
 │                                                                                                                      │
 │                                                       esc  quit                                                      │
 │                                                                                                                      │

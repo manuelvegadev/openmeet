@@ -72,9 +72,9 @@ irm https://openmeet.manuelvega.dev/install.ps1 | iex         # Windows
 Those two URLs are Cloudflare redirects to `releases/latest/download/install.{sh,ps1}` — a
 line someone can read out, and one place to change if the binaries ever move.
 
-The app then keeps itself current (`internal/update`): once a day it asks GitHub Releases,
-downloads the asset for this OS beside the binary, checks that the download runs
-(`--version`), and only then says so on the home screen — `→ v0.6.1` by the version,
+The app then keeps itself current (`internal/update`): on every start — and whenever you
+press `u` on the home screen — it asks GitHub Releases, downloads the asset for this OS
+beside the binary, checks that the download runs (`--version`), and only then says so — `→ v0.6.1` by the version,
 `Update downloaded. Restart to install.` and `r` to swap and start again; quitting installs
 it too. The swap is a rename, so it happens only once the process is about to exit (Windows
 will not replace a running exe: it is renamed to `.old.exe` and removed on the next start).

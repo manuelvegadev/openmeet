@@ -758,11 +758,19 @@ func main() {
 	if *noAuto {
 		policy = "off"
 	}
-	go func() {
-		if status := update.Check(context.Background(), policy, Version, st, func(f string, a ...any) {}); status != nil {
+	// Asked at every start, and again whenever someone presses `u` — the difference being
+	// that a person asking is told when there is nothing, and a start passes in silence.
+	check := func(mode update.Mode) {
+		status := update.Check(context.Background(), policy, Version, st, mode, func(string, ...any) {})
+		switch {
+		case status != nil:
 			emit(tui.UpdateAvailable{Version: status.Version, Ready: status.Ready, Command: status.Command})
+		case mode == update.Asked:
+			emit(tui.UpToDate{})
 		}
-	}()
+	}
+	go check(update.Startup)
+	host.CheckUpdate = func() { check(update.Asked) }
 	restart := false
 	host.RestartUpdate = func() { restart = true }
 	host.JustUpdated = justUpdated
