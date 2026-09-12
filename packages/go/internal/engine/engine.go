@@ -39,6 +39,8 @@ type Options struct {
 	VideoDisabledWhy string
 	WebcamEnabled    bool
 	ScreenSendKbps   int
+	// A ceiling on everything a share puts on the wire at once; 0 is no ceiling.
+	ScreenUploadKbps int
 }
 
 type peerInfo struct {
@@ -203,23 +205,37 @@ func (e *Engine) onVideoTrack(peerID, kind string, track *webrtc.TrackRemote) {
 	e.snapshot()
 }
 
-// screenBudgetKbps is the whole share's rate — the same packet goes to every peer — under
-// the user's ceiling, with a floor that keeps a full room legible (webrtc.ts).
+// screenBudgetKbps is what each person watching gets. The share is encoded once and the
+// same packets go to everyone, so the rate is theirs, not a cake to divide: two people
+// watching see the same picture two people would, and what it costs is the upload —
+// measured, the sender's CPU does not move with the number of peers, because per peer all
+// that happens is SRTP and a sendto.
+//
+// The exception is a deliberate one: an upload ceiling, off by default. Where it is set and
+// the room would go past it, everyone's rate comes down together rather than the link
+// failing. It is read when the share starts.
 func (e *Engine) screenBudgetKbps() int {
+	rate := e.opts.ScreenSendKbps
+	if rate <= 0 {
+		rate = 2500
+	}
+	ceiling := e.opts.ScreenUploadKbps
+	if ceiling <= 0 {
+		return rate
+	}
 	e.mu.Lock()
 	n := len(e.people)
 	e.mu.Unlock()
 	if n < 1 {
 		n = 1
 	}
-	share := 6000 / n
-	if share < 800 {
-		share = 800
+	if share := ceiling / n; share < rate {
+		if share < 300 {
+			share = 300
+		}
+		return share
 	}
-	if e.opts.ScreenSendKbps > 0 && e.opts.ScreenSendKbps < share {
-		share = e.opts.ScreenSendKbps
-	}
-	return share
+	return rate
 }
 
 func (e *Engine) sendScreenState() {

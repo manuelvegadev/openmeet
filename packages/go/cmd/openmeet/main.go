@@ -131,7 +131,9 @@ func (st *store) Rows() []tui.SettingsRow {
 	}
 	rows = append(rows,
 		tui.SettingsRow{Tab: "Video", Label: "Screen Send", Choices: numbers(screenKbpsSteps), Choice: indexOf(screenKbpsSteps, s.ScreenSendKbps), Suffix: "kbps",
-			Help: "The ceiling for a screen share at 1080p, split between the people watching. It is encoded once too, on the GPU, whoever is watching."},
+			Help: "What each person watching gets, whoever else is watching: the share is encoded once, on the GPU, and the same picture goes to everyone. Only the upload multiplies — measured, the sender's CPU does not move with the number of peers."},
+		tui.SettingsRow{Tab: "Advanced", Label: "Upload Ceiling", Choices: append([]string{"off"}, numbers(uploadSteps)...), Choice: uploadChoice(s.ScreenUploadKbps), Suffix: "Mbps for a share, everyone together",
+			Help: "Off means each viewer gets the rate you chose and your upload carries the rest: five people watching at 2500 kbps is 12.5 Mbps up. Set it and everyone's rate comes down together instead; it is read when a share starts."},
 		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Choices: numbers(complexitySteps), Choice: indexOf(complexitySteps, complexityOf(s)),
 			Help: "How hard the encoder works for the same bitrate: 10 is the best sound per kbps and the most CPU, 1 the cheapest. It never changes what is sent."},
 		tui.SettingsRow{Tab: "Other", Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color(),
@@ -140,6 +142,22 @@ func (st *store) Rows() []tui.SettingsRow {
 			Help: "A newer version is looked for once a day and downloaded before it is offered; the home screen says so when one is ready."},
 	)
 	return rows
+}
+
+func mbpsToKbps(list []int) []int {
+	out := make([]int, len(list))
+	for i, v := range list {
+		out[i] = v * 1000
+	}
+	return out
+}
+
+// The ceiling row: "off" first, then the steps in Mbps.
+func uploadChoice(kbps int) int {
+	if kbps <= 0 {
+		return 0
+	}
+	return slices.Index(uploadSteps, kbps/1000) + 1
 }
 
 func boolChoice(on bool) int {
@@ -231,13 +249,21 @@ func (st *store) Meters(tab string) []tui.Meter {
 		}
 	case "Video":
 		enc := video.Encoder()
+		// The network bar is what a full room would ask of the upload — five people watching
+		// — because that is the number the mesh makes grow, not the rate itself.
+		net := float64(s.ScreenSendKbps*5) / 50000
+		netNote := fmt.Sprintf("%d kbps to each viewer, %.1f Mbps up with five", s.ScreenSendKbps, float64(s.ScreenSendKbps*5)/1000)
+		if s.ScreenUploadKbps > 0 {
+			net = float64(s.ScreenUploadKbps) / 50000
+			netNote = fmt.Sprintf("%d kbps each, capped at %d Mbps together", s.ScreenSendKbps, s.ScreenUploadKbps/1000)
+		}
 		cpu, note := 0.30, enc
 		if enc == "libx264" || enc == "" {
 			cpu, note = 0.95, "libx264 (no hardware encoder found)"
 		}
 		return []tui.Meter{
 			{Label: "CPU", Fill: cpu, Note: note},
-			{Label: "Network", Fill: float64(s.ScreenSendKbps) / 10000, Note: fmt.Sprintf("up to %d kbps per peer", s.ScreenSendKbps)},
+			{Label: "Network", Fill: net, Note: netNote},
 			{Label: "Quality", Fill: 0.3 + float64(s.ScreenSendKbps-1000)/9000*0.7, Note: "at 1080p30", Good: true},
 		}
 	case "Advanced":
@@ -252,6 +278,8 @@ func (st *store) Meters(tab string) []tui.Meter {
 
 var (
 	complexitySteps = []int{1, 3, 5, 8, 10}
+	// In Mbps, as the row reads them; stored as kbps, 0 for off.
+	uploadSteps     = []int{5, 10, 20, 50}
 	audioKbpsSteps  = []int{64, 96, 128, 192, 256}
 	screenKbpsSteps = []int{1000, 1500, 2500, 4000, 6000, 10000}
 	updatePolicies  = []string{"auto", "notify", "off"}
@@ -306,6 +334,8 @@ func (st *store) Run(idx int) string {
 		} else {
 			s.MicLevel = "off"
 		}
+	case "Upload Ceiling":
+		s.ScreenUploadKbps = cycleNumber(append([]int{0}, mbpsToKbps(uploadSteps)...), s.ScreenUploadKbps)
 	case "Opus Complexity":
 		s.OpusComplexity = cycleNumber(complexitySteps, complexityOf(*s))
 	case "Voice Gate":
@@ -674,7 +704,7 @@ func main() {
 				VoiceGate: st.s.VoiceGate, Bitrate: audioBps, Complex: complexity, Debug: *debug,
 				MicLevel:     st.s.MicLevel != "off",
 				VideoEnabled: videoEnabled, VideoDisabledWhy: videoWhy, WebcamEnabled: webcamEnabled,
-				ScreenSendKbps: st.s.ScreenSendKbps,
+				ScreenSendKbps: st.s.ScreenSendKbps, ScreenUploadKbps: st.s.ScreenUploadKbps,
 			}, emit)
 			if err := e.Start(); err != nil {
 				return nil, err

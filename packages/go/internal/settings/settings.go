@@ -36,12 +36,15 @@ type App struct {
 	// default, including when the field is absent) or "off".
 	MicLevel string `json:"micLevel,omitempty"`
 	// The Opus encoder's CPU lever, 1..10; 0 (absent) means the default, 10.
-	OpusComplexity  int     `json:"opusComplexity,omitempty"`
-	PauseRendering  string  `json:"pauseRendering"`
-	AutoUpdate      string  `json:"autoUpdate"`
-	LastUpdateCheck int64   `json:"lastUpdateCheck"`
-	LatestSeen      *string `json:"latestSeen"`
-	LastRunVersion  *string `json:"lastRunVersion"`
+	OpusComplexity int `json:"opusComplexity,omitempty"`
+	// A ceiling on a share's whole upload, in kbps; 0 (absent) is none, which is the
+	// default: screenSendKbps is then what each person watching gets.
+	ScreenUploadKbps int     `json:"screenUploadKbps,omitempty"`
+	PauseRendering   string  `json:"pauseRendering"`
+	AutoUpdate       string  `json:"autoUpdate"`
+	LastUpdateCheck  int64   `json:"lastUpdateCheck"`
+	LatestSeen       *string `json:"latestSeen"`
+	LastRunVersion   *string `json:"lastRunVersion"`
 }
 
 func Defaults() App {
