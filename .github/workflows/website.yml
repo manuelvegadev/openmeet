@@ -1,0 +1,23 @@
+name: website
+
+# Pull requests only. A push to main is followed by deploy-website.yml, which runs this same
+# build through the shared action before it publishes, so building here too would be the same
+# minute of runner time twice.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/website/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/actions/build-website/**'
+      - '.github/workflows/website.yml'
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-website

@@ -11,11 +11,10 @@ runs:
         node-version: 22
         cache: pnpm
 
-    # The filter keeps the terminal package's native modules (wrtc, audify) out of the job:
-    # the site needs nothing that compiles.
+    # The site is the only member installed here; the server has no business in this job.
     - name: Install dependencies
       shell: bash
-      run: pnpm install --frozen-lockfile --filter @openmeet/website...
+      run: pnpm install --frozen-lockfile --filter @openmeet/website
 
     - name: Type-check
       shell: bash

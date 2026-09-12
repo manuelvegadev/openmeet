@@ -1,0 +1,44 @@
+name: lint
+
+# Biome reads source, not types, so it needs no package's dependencies — the root install is
+# the linter and nothing else. One job for the whole repository, because `biome check .` is
+# repository-wide and a rule change in biome.json has to be measured against every file.
+#
+# The path lists here and in the other workflows are written out rather than shared: GitHub
+# Actions does not resolve YAML anchors.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/server/**'
+      - 'packages/website/**'
+      - 'biome.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/lint.yml'
+  pull_request:
+    paths:
+      - 'packages/server/**'
+      - 'packages/website/**'
+      - 'biome.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/lint.yml'
+
+jobs:
+  biome:
+    name: biome
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install Biome (the root project, nothing else)
+        run: pnpm install --frozen-lockfile --filter openmeet
+      - run: pnpm lint
