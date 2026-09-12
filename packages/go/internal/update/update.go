@@ -119,9 +119,26 @@ func parse(v string) []int {
 }
 
 // Latest asks the registry — GitHub — for the newest tag, or takes the day's cached answer.
+// Latest is the newest released version, asked of GitHub at most once a day.
+//
+// Both halves refuse an answer that is not a version, and they have to: `releases/latest`
+// answers with whatever release is newest in the repository, which is not necessarily this
+// client's. Before the first binary went out it answered `terminal-v0.5.2` — the retired npm
+// package's tag — and a client that cached that string went a whole day comparing its version
+// against something unreadable, which reads as "no update" and hides every release until the
+// cache expires.
+// cachedLatest is today's answer if there is one and it reads as a version.
+func cachedLatest(st Store) string {
+	seen := st.LatestSeen()
+	if parse(seen) != nil && time.Since(st.LastCheck()) < checkEvery {
+		return seen
+	}
+	return ""
+}
+
 func Latest(ctx context.Context, st Store) (string, error) {
-	if time.Since(st.LastCheck()) < checkEvery && st.LatestSeen() != "" {
-		return st.LatestSeen(), nil
+	if seen := cachedLatest(st); seen != "" {
+		return seen, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
@@ -145,6 +162,9 @@ func Latest(ctx context.Context, st Store) (string, error) {
 		return "", err
 	}
 	latest := strings.TrimPrefix(rel.Tag, "v")
+	if parse(latest) == nil {
+		return "", fmt.Errorf("releases: latest is %q, which is not this client's", rel.Tag)
+	}
 	st.SetCheck(time.Now(), latest)
 	return latest, nil
 }
