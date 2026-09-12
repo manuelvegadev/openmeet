@@ -33,9 +33,30 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    width: 520px;
+    // As wide as the command it holds, and never wider than the page. It used to be a fixed
+    // 520px with the line wrapping inside it, which made a command look like three.
+    width: max-content;
     max-width: 100%;
     text-align: left;
+  }
+
+  // Which platform the command above is for, and the way out for anyone on neither. Under
+  // the command rather than inside it: a label in the middle of a line of shell is noise.
+  &__detected {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    padding: 0 2px;
+    font-size: 12px;
+    color: var(--muted);
+
+    a {
+      color: var(--accent);
+    }
+  }
+
+  &__sep {
+    color: var(--line-strong);
   }
 
   &__note {

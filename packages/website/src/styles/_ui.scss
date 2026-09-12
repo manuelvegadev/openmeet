@@ -123,16 +123,37 @@
   font-size: 15px;
   min-width: 0;
 
+  // One line, always: a command broken across three of them is not a command any more. When
+  // the window is narrower than the line, the line scrolls — not the page, and not the
+  // prompt, the label or the button, which stay where they are.
   code {
-    overflow-wrap: anywhere;
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow-x: auto;
+    // No scrollbar: it is a line of text, not a pane. It still scrolls by swipe or
+    // shift-wheel, and `copy` gives the whole thing whether or not it is all on screen.
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+
+    // Set by the page's script only when the line really is cut off (lib/copy.ts).
+    &.is-clipped {
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+      mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    }
   }
 
   &__dollar {
     color: var(--accent);
+    flex: none;
   }
 
   &__note {
     margin-left: auto;
+    flex: none;
     color: var(--muted);
     font-size: 12px;
     white-space: nowrap;
@@ -157,8 +178,15 @@
   }
 }
 
+// Only what belongs to the machine looking at the page; the script sets data-os on the block.
+.hero__install[data-os='mac'] [data-for='win'],
+.hero__install[data-os='win'] [data-for='mac'] {
+  display: none;
+}
+
 .copy {
   margin-left: auto;
+  flex: none;
   font: inherit;
   font-size: 12px;
   color: var(--muted);

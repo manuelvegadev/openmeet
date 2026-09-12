@@ -109,14 +109,17 @@ export function Cmd({
   note,
   copy = true,
   prompt = '$',
+  os,
 }: {
   cmd: string;
   note?: string;
   copy?: boolean;
   prompt?: string;
+  /** Shown only on that platform, when the block around it says which one this is. */
+  os?: 'mac' | 'win';
 }) {
   return (
-    <div className="cmd">
+    <div className="cmd" data-for={os}>
       <span className="cmd__dollar">{prompt}</span>
       <code>{cmd}</code>
       {note ? <span className="cmd__note">{note}</span> : null}

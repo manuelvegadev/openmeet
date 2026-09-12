@@ -3,6 +3,8 @@ import type { Lang } from '../content/types';
 export const SITE_URL = 'https://openmeet.manuelvega.dev';
 export const GITHUB_URL = 'https://github.com/manuelvegadev/openmeet';
 export const RELEASES_URL = `${GITHUB_URL}/releases`;
+/** Where "other platforms" goes: the README's install section, which has both one-liners. */
+export const INSTALL_DOCS_URL = `${GITHUB_URL}#install`;
 export const DOCS_URL = `${GITHUB_URL}/blob/main/packages/go/README.md`;
 export const SELF_HOST_URL = `${GITHUB_URL}#deployment`;
 export const CHANGELOG_URL = `${GITHUB_URL}/releases`;

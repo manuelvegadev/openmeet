@@ -53,9 +53,11 @@ export interface Copy {
     titlePlain: string;
     titleAccent: string;
     lead: string;
-    /** The two install lines' labels. */
+    /** Which platform the command on screen is for, once the page has worked it out. */
     mac: string;
     windows: string;
+    /** The link out for anyone on neither of the two. */
+    other: string;
     thatIsIt: string;
     note: string;
   };
