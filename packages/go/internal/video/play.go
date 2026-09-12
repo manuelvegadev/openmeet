@@ -30,13 +30,23 @@ const (
 	windowMaxH = 720
 )
 
-func NewPlayer(title string) (*Player, error) {
+// arrivalPTS stamps every frame with the moment it reached the player, which is the only
+// honest clock a raw H.264 stream has: it carries no timestamps at all, so ffplay would
+// otherwise invent them at its default 25 fps. Inventing them is what made a share drift —
+// 30 frames arriving for every 25 shown is a fifth of a second of delay per second, six
+// seconds after forty, measured — and it cannot be fixed by naming the right rate either,
+// because a still desktop on Windows produces no frames (dup_frames=false) and a clock
+// counting frames would then fall behind by exactly the length of the stillness.
+const arrivalPTS = "setpts=(RTCTIME-RTCSTART)/(TB*1000000)"
+
+func NewPlayer(title string, fps int) (*Player, error) {
 	if Ffplay() == "" {
 		return nil, fmt.Errorf("ffplay not found")
 	}
 	cmd := exec.Command(Ffplay(), "-hide_banner", "-loglevel", "error", "-nostats",
 		"-fflags", "nobuffer", "-flags", "low_delay", "-framedrop", "-probesize", "32", "-analyzeduration", "0",
-		"-f", "h264", "-i", "pipe:0", "-window_title", title, "-x", fmt.Sprint(windowMaxW), "-y", fmt.Sprint(windowMaxH))
+		"-framerate", fmt.Sprint(fps), "-f", "h264", "-i", "pipe:0", "-vf", arrivalPTS,
+		"-window_title", title, "-x", fmt.Sprint(windowMaxW), "-y", fmt.Sprint(windowMaxH))
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -158,7 +168,11 @@ func (r *Receiver) Open() error {
 	if r.player != nil && !r.player.Closed() {
 		return nil
 	}
-	p, err := NewPlayer(fmt.Sprintf("%s · %s", r.PeerName, r.Kind))
+	fps := ScreenFPS
+	if r.Kind == Webcam {
+		fps = CameraFPS
+	}
+	p, err := NewPlayer(fmt.Sprintf("%s · %s", r.PeerName, r.Kind), fps)
 	if err != nil {
 		return err
 	}

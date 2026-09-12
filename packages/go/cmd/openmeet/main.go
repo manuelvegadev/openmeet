@@ -514,7 +514,11 @@ func choices(list []video.Device) []tui.VideoChoice {
 
 // preview runs a capture into a window with no room: --test-screen and --test-camera.
 func preview(kind video.Kind, d video.Device) {
-	p, err := video.NewPlayer("openmeet preview · " + d.Label())
+	fps := video.ScreenFPS
+	if kind == video.Webcam {
+		fps = video.CameraFPS
+	}
+	p, err := video.NewPlayer("openmeet preview · "+d.Label(), fps)
 	if err != nil {
 		log.Fatal(err)
 	}

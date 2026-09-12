@@ -27,6 +27,13 @@ here.
 - **The video overlay.** With compressed H.264 going to ffplay there is nothing to burn text
   into, so a peer's name lives in the window title. Worth a line in the settings if the row
   ever comes back.
+- **A receiver that cannot stall the network read.** `Player.Write` writes an access unit
+  straight to ffplay's stdin, on the goroutine reading RTP, so a player that stops consuming
+  stops that goroutine and the packets pile up until pion drops them — a broken picture
+  until the next keyframe. It only ever happened because the player was consuming too slowly
+  (see the timestamp note in `play.go`), and that is fixed, but the coupling is still there.
+  A small queue drained by its own goroutine, dropping whole frames up to the next IDR when
+  it backs up, would make a slow player cost a stutter rather than a stall.
 - **Choosing which terminal opens it.** The installers deliberately register nothing with
   the system, because a Start Menu entry or a desktop shortcut has to name a terminal and
   that is the user's choice, not ours. The way to have both would be to *ask*: the installer
