@@ -40,15 +40,13 @@ export interface PeerRow {
   latencyMs?: number;
   /** Not shown when the peer is at 100%. */
   volume?: string;
-  /** Meter fill, 0-100. Omitted means a silent peer: an empty track. */
-  level?: number;
 }
 
-export const YOU: PeerRow = { who: 'mvega', tag: 'c', rate: '↑128k', level: 33 };
+export const YOU: PeerRow = { who: 'mvega', tag: 'c', rate: '↑128k' };
 
 export const PEERS: PeerRow[] = [
-  { who: 'sofia', tag: 'S', speaking: true, selected: true, rate: '↓384k', latencyMs: 38, level: 80 },
-  { who: 'diego', tag: 'C', rate: '↓128k', latencyMs: 96, level: 20 },
+  { who: 'sofia', tag: 'S', speaking: true, selected: true, rate: '↓2500k', latencyMs: 38 },
+  { who: 'diego', tag: 'C', rate: '↓128k', latencyMs: 96 },
   { who: 'amara', tag: 'm', rate: '↓128k', latencyMs: 155, volume: '70%' },
 ];
 

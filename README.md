@@ -18,13 +18,15 @@ The project has two parts:
 
 ```bash
 # macOS (Apple Silicon)
-curl -fsSL https://github.com/manuelvegadev/openmeet/releases/latest/download/install.sh | bash
+curl -fsSL https://openmeet.manuelvega.dev/install | bash
 ```
 
 ```powershell
 # Windows 11 (PowerShell) — also registers a Windows Terminal profile and a desktop shortcut
-irm https://github.com/manuelvegadev/openmeet/releases/latest/download/install.ps1 | iex
+irm https://openmeet.manuelvega.dev/install.ps1 | iex
 ```
+
+Both are redirects to the installer in the latest release, so the URL never changes.
 
 Then `openmeet`. Nothing else is needed for a call; screen and camera sharing need [ffmpeg](https://ffmpeg.org) (`brew install ffmpeg` / `winget install Gyan.FFmpeg`, which the Windows installer does). The app keeps itself current from GitHub Releases: a newer version downloads in the background and the home screen offers `r` to restart into it. The binaries are also on the [releases page](https://github.com/manuelvegadev/openmeet/releases) with their SHA-256 sums.
 

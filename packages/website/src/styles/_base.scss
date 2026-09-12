@@ -4,7 +4,7 @@
 // packages/terminal/src/lib/theme.ts, the name colours (--yellow/--blue/--purple/--fuchsia)
 // from its NAME_PALETTE in lib/identity.ts, plus the greys this page needs and the app does
 // not. Copied rather than imported because the website must not depend on openmeet-terminal —
-// that would drag @roamhq/wrtc and audify into every deploy, which is exactly what the
+// that would drag the client's native modules into every deploy, which is exactly what the
 // `--filter @openmeet/website...` install exists to avoid. Keep them in step by hand.
 :root {
   --bg: #0b0b0b;

@@ -65,9 +65,12 @@ notarized yet: `install.sh` clears the quarantine flag, and Windows SmartScreen 
 Installing and staying current, from the user's side:
 
 ```bash
-curl -fsSL https://github.com/manuelvegadev/openmeet/releases/latest/download/install.sh | bash   # macOS
-irm https://github.com/manuelvegadev/openmeet/releases/latest/download/install.ps1 | iex           # Windows
+curl -fsSL https://openmeet.manuelvega.dev/install | bash     # macOS
+irm https://openmeet.manuelvega.dev/install.ps1 | iex         # Windows
 ```
+
+Those two URLs are Cloudflare redirects to `releases/latest/download/install.{sh,ps1}` — a
+line someone can read out, and one place to change if the binaries ever move.
 
 The app then keeps itself current (`internal/update`): once a day it asks GitHub Releases,
 downloads the asset for this OS beside the binary, checks that the download runs

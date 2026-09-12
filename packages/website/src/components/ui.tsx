@@ -55,7 +55,9 @@ function latencyTone(ms: number): string {
 
 /**
  * One line of the participants column, the shape every row on the page shares: speaking dot,
- * selection marker, name and state tag on the left, numbers and the meter on the right.
+ * selection marker, name and state tag on the left, numbers on the right. The dot is the
+ * whole of the audio display — a meter redrawn ten times a second costs a full repaint each
+ * time, which is why the app has one only where you are choosing a microphone.
  * `rate` and `latencyMs` are dropped where the pane has no room for them.
  */
 export function Peer({ peer, rate = true, latency = true }: { peer: PeerRow; rate?: boolean; latency?: boolean }) {
@@ -69,11 +71,6 @@ export function Peer({ peer, rate = true, latency = true }: { peer: PeerRow; rat
       {rate && peer.rate ? <span className="info">{peer.rate}</span> : null}
       {latency && peer.latencyMs ? <span className={latencyTone(peer.latencyMs)}>~{peer.latencyMs}ms</span> : null}
       {peer.volume ? <span className="muted">{peer.volume}</span> : null}
-      <span className={peer.volume ? 'meter meter--short' : 'meter'}>
-        {peer.level ? (
-          <i style={{ width: `${peer.level}%`, background: `var(--${peer.level >= 70 ? 'danger' : 'ok'})` }} />
-        ) : null}
-      </span>
     </div>
   );
 }

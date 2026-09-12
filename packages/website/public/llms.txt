@@ -2,7 +2,7 @@
 
 > Open-source, peer-to-peer audio calls, screen and webcam sharing and chat from a terminal, in one 12 MB binary. No account, no browser. Opus audio at 48 kHz encoded once for the room, screen and camera as hardware H.264, WebRTC mesh of up to six people, self-hostable signaling server. macOS 15+ and Windows 11. MIT licence.
 
-Install with `curl -fsSL https://github.com/manuelvegadev/openmeet/releases/latest/download/install.sh | bash` on macOS or `irm https://github.com/manuelvegadev/openmeet/releases/latest/download/install.ps1 | iex` on Windows, then run `openmeet`; the app keeps itself current from GitHub Releases. Nothing else to install; ffmpeg only for screen or camera sharing. The first start asks for a name and a colour; rooms are names, typing one creates it.
+Install with `curl -fsSL https://openmeet.manuelvega.dev/install | bash` on macOS or `irm https://openmeet.manuelvega.dev/install.ps1 | iex` on Windows, then run `openmeet`; the app keeps itself current from GitHub Releases. Nothing else to install; ffmpeg only for screen or camera sharing. The first start asks for a name and a colour; rooms are names, typing one creates it.
 
 Media never passes through the server: WebRTC carries audio and video directly between participants and the server only relays the signaling handshake, keeps rooms in memory and forgets them when the last person leaves.
 

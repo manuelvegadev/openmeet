@@ -1,6 +1,6 @@
 @use 'tokens' as *;
 
-// The app's vocabulary: keys, chips, names, tags, the meter, commands.
+// The app's vocabulary: keys, chips, names, tags, commands.
 
 // A key on a gold keycap followed by what it does on a grey pill. Square: they are terminal
 // cells. `--disabled` is the app's greyed key, both halves on the surface grey.
@@ -80,28 +80,6 @@
   }
 }
 
-.meter {
-  display: inline-block;
-  width: 90px;
-  height: 14px;
-  background: var(--surface);
-  vertical-align: middle;
-  position: relative;
-  flex: none;
-
-  &--short {
-    width: 63px;
-  }
-
-  i {
-    position: absolute;
-    inset: 0 auto 0 0;
-  }
-
-  @include below($bp-phone) {
-    width: 50px;
-  }
-}
 
 .prow {
   display: flex;
