@@ -11,10 +11,16 @@ export const CHANGELOG_URL = `${GITHUB_URL}/releases`;
 export const AUTHOR = { name: 'Manuel Vega', url: 'https://manuelvega.dev' };
 
 /**
- * Google Analytics, on the published pages only. It lives in `Document`, which the dev server
- * does not render, so `pnpm dev` never counts itself as a visitor.
+ * Cloudflare Web Analytics: visits without cookies, without an identifier, and without
+ * anything that would need a consent banner — which is the only kind this site can honestly
+ * carry, given what it says on it about not collecting anything.
+ *
+ * The token is public by design; it is in the page source of every site that uses this.
+ * Cloudflare can also inject the beacon at the edge, and the zone was set up that way years
+ * ago, but it injects nothing any more (checked on this site and on the apex), so the tag is
+ * here where it can be seen and tested.
  */
-export const GA_ID = 'G-02S1FEV7RG';
+export const CF_BEACON_TOKEN = '9c195e2746c84e578ea8ba84ac5c98c7';
 
 /** Injected by Vite from packages/go/VERSION. */
 export const APP_VERSION: string = __APP_VERSION__;

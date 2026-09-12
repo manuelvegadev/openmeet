@@ -2,7 +2,7 @@ import { App } from './app';
 import type { Lang } from './content/types';
 import { installCopyHandler } from './lib/copy';
 import { COPY, LANGS } from './lib/i18n';
-import { APP_VERSION, AUTHOR, GA_ID, GITHUB_URL, PATHS, RELEASES_URL, SITE_URL } from './lib/site';
+import { APP_VERSION, AUTHOR, CF_BEACON_TOKEN, GITHUB_URL, PATHS, RELEASES_URL, SITE_URL } from './lib/site';
 
 /**
  * Everything a crawler, a link unfurler or an answer engine reads before the body: title and
@@ -121,25 +121,24 @@ export function Document({ lang, noindex }: { lang: Lang; noindex?: boolean }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Head lang={lang} noindex={noindex} />
-        {/* Google Analytics, Google's own snippet. Here rather than in `Head` because `Head` is
-            what the dev server renders, and localhost is not a visitor. On the 404 too: a page
-            nobody can reach is worth knowing about. */}
-        <script async src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} />
-        <script
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: Google's snippet, with our own id
-          dangerouslySetInnerHTML={{
-            __html: `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','${GA_ID}');`,
-          }}
-        />
       </head>
       <body>
         <div id="root">
           <App lang={lang} />
         </div>
-        {/* The page's only script: the copy buttons, from the same function the dev server runs. */}
+        {/* The page's only script of its own: the copy buttons, from the same function the dev
+            server runs. */}
         <script
           // biome-ignore lint/security/noDangerouslySetInnerHtml: our own source, serialized from lib/copy.ts
           dangerouslySetInnerHTML={{ __html: `(${installCopyHandler})()` }}
+        />
+        {/* Visits, counted without cookies. In `Document` rather than `Head` because `Head` is
+            what the dev server renders, and localhost is not a visitor. Deferred, so it is the
+            last thing the page does. */}
+        <script
+          defer
+          src="https://static.cloudflareinsights.com/beacon.min.js"
+          data-cf-beacon={JSON.stringify({ token: CF_BEACON_TOKEN })}
         />
       </body>
     </html>

@@ -31,16 +31,16 @@ for (const loc of locs) {
 
 if (!existsSync(new URL('404.html', dist))) fail('no 404.html for GitHub Pages to serve');
 
-// The published pages carry two inline scripts — the copy handler and Google's snippet — and
-// load the tag from Google. A bundle in assets/ means the client build leaked into the deploy.
+// The published pages carry one inlined handler of ours and the analytics beacon; a bundle in
+// assets/ means the client build leaked into the deploy.
 const stray = readdirSync(new URL('assets/', dist)).filter((f) => f.endsWith('.js'));
 if (stray.length) fail(`assets/ still holds JavaScript: ${stray.join(', ')}`);
 
-// Analytics on every page, the 404 included: if the snippet stops being emitted, nothing else
-// would notice.
+// The beacon on every page, the 404 included: if it stopped being emitted, the numbers would
+// quietly go to zero and nothing else would notice.
 for (const file of [...locs.map((loc) => `.${new URL(loc).pathname}index.html`), './404.html']) {
   if (!existsSync(new URL(file, dist))) continue;
-  if (!read(file).includes('googletagmanager.com/gtag/js')) fail(`${file} carries no analytics tag`);
+  if (!read(file).includes('static.cloudflareinsights.com/beacon')) fail(`${file} carries no analytics beacon`);
 }
 
 if (!process.exitCode) console.log(`check:dist — ${locs.length} pages, 404 and no stray JavaScript`);
