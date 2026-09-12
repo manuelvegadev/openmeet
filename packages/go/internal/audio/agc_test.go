@@ -21,7 +21,7 @@ func TestAutomaticGainLevels(t *testing.T) {
 		var last float64
 		for s := 0; s < 150; s++ { // three seconds of frames
 			f := tone(FrameLen, amp)
-			a.Apply(f, RMS(tone(FrameLen, amp)))
+			a.Apply(f, RMS(f))
 			last = RMS(f)
 			for _, v := range f {
 				if v == 32767 || v == -32768 {
@@ -40,7 +40,7 @@ func TestAutomaticGainHoldsThroughSilence(t *testing.T) {
 	a := NewAutomaticGain()
 	for range 100 {
 		f := tone(FrameLen, 400)
-		a.Apply(f, RMS(tone(FrameLen, 400)))
+		a.Apply(f, RMS(f))
 	}
 	g := a.Gain()
 	for range 500 {

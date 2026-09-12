@@ -11,6 +11,13 @@ import (
 	"runtime"
 )
 
+// App is the file, which is still the Node client's field for field. Six of them —
+// VideoOverlay, AudioInputChannels, AudioInputGainDb, AudioReceiveKbps, ScreenReceiveKbps,
+// NoiseSuppression and PauseRendering — have no reader in this client: their settings rows
+// were removed when it turned out nothing was behind them (docs/backlog.md says what each
+// would take). They stay so that a file written here can still be read by a copy of the old
+// client, and so the work is not lost track of. Do not add to that list: a field nobody
+// reads and nobody has a plan for should simply go.
 type App struct {
 	Name               *string `json:"name"`
 	Color              *string `json:"color"`
@@ -28,14 +35,13 @@ type App struct {
 	ScreenReceiveKbps  int     `json:"screenReceiveKbps"`
 	NoiseSuppression   bool    `json:"noiseSuppression"`
 	VoiceGate          bool    `json:"voiceGate"`
-	// macOS: "apple" (the voice processing unit: Voice Isolation, echo cancellation, gain
-	// — at ~10% of a core, measured; the default, and what an empty value means) or "raw"
-	// (miniaudio, cheapest). Go client only.
+	// "system" — the platform's own voice processing, Apple's unit on macOS and the
+	// communications category on Windows — or "raw". Absent means system, which is the
+	// default; "apple", written by earlier versions, reads the same way.
 	AudioProcessing string `json:"audioProcessing,omitempty"`
-	// Our own levelling, for the platforms and devices whose driver has none: "auto" (the
-	// default, including when the field is absent) or "off".
+	// Our own levelling, for the platforms and devices whose driver has none: "auto" or "off".
 	MicLevel string `json:"micLevel,omitempty"`
-	// The Opus encoder's CPU lever, 1..10; 0 (absent) means the default, 10.
+	// The Opus encoder's CPU lever, 1..10.
 	OpusComplexity int `json:"opusComplexity,omitempty"`
 	// A ceiling on a share's whole upload, in kbps; 0 (absent) is none, which is the
 	// default: screenSendKbps is then what each person watching gets.
@@ -52,6 +58,7 @@ func Defaults() App {
 		AudioBackend: "auto", AudioInputChannels: "auto",
 		AudioSendKbps: 128, AudioReceiveKbps: 128, ScreenSendKbps: 2500, ScreenReceiveKbps: 2500,
 		VoiceGate: true, PauseRendering: "minimized", AutoUpdate: "auto",
+		AudioProcessing: "system", MicLevel: "auto", OpusComplexity: 10,
 	}
 }
 

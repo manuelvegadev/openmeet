@@ -45,7 +45,11 @@ func platformSupport() (name, features string) {
 
 // ── the host: settings and devices as the interface sees them ───────────────
 
-type store struct{ s settings.App }
+type store struct {
+	s settings.App
+	// The chosen camera's name, once it has been looked up (cameraName).
+	camName string
+}
 
 func (st *store) Name() string  { return settings.Str(st.s.Name) }
 func (st *store) Color() string { return settings.Str(st.s.Color) }
@@ -77,7 +81,24 @@ func (st *store) SetCamera(id string) {
 	if id != "" {
 		st.s.VideoDeviceID = settings.Ptr(id)
 	}
+	st.camName = ""
 	_ = settings.Save(st.s)
+}
+
+// cameraName is the chosen camera's own name, looked up once and kept: Rows runs on the
+// interface's goroutine, and enumerating cameras spawns ffmpeg for about a third of a second.
+func (st *store) cameraName() string {
+	id := st.CameraID()
+	if id == "" {
+		return "Default (0)"
+	}
+	if st.camName == "" {
+		st.camName = "Device " + id
+		if d := video.ByID(video.Cameras(), id); d != nil {
+			st.camName = d.Label()
+		}
+	}
+	return st.camName
 }
 
 func orDefault(s string) string {
@@ -114,51 +135,42 @@ func (st *store) Rows() []tui.SettingsRow {
 			Help: "Levels your voice, up to +18 dB, so you arrive as loud as everyone else. Ours, for the devices whose driver does none."},
 		tui.SettingsRow{Tab: "Audio", Label: "Voice Gate", Choices: []string{"On", "Off"}, Choice: boolChoice(s.VoiceGate),
 			Help: "While you are silent nothing is encoded, sent or decoded anywhere in the room — which is most of a call."},
-		tui.SettingsRow{Tab: "Audio", Label: "Audio Send", Choices: numbers(audioKbpsSteps), Choice: indexOf(audioKbpsSteps, s.AudioSendKbps), Suffix: "kbps",
+		tui.SettingsRow{Tab: "Audio", Label: "Audio Send", Choices: numbers(audioKbpsSteps), Choice: slices.Index(audioKbpsSteps, s.AudioSendKbps), Suffix: "kbps",
 			Help: "What the one Opus encoder spends. It encodes once for the whole room, so this is the same whoever is in it."},
 	)
 	if runtime.GOOS == "darwin" {
-		cam := "Default (0)"
-		if v := settings.Str(s.VideoDeviceID); v != "" {
-			cam = "Device " + v
-			for _, c := range video.Cameras() {
-				if c.ID == v {
-					cam = c.Label()
-				}
-			}
-		}
-		rows = append(rows, tui.SettingsRow{Tab: "Video", Label: "Camera", Value: cam, Help: "Which camera a share uses."})
+		rows = append(rows, tui.SettingsRow{Tab: "Video", Label: "Camera", Value: st.cameraName(), Help: "Which camera a share uses."})
 	}
 	rows = append(rows,
-		tui.SettingsRow{Tab: "Video", Label: "Screen Send", Choices: numbers(screenKbpsSteps), Choice: indexOf(screenKbpsSteps, s.ScreenSendKbps), Suffix: "kbps",
+		tui.SettingsRow{Tab: "Video", Label: "Screen Send", Choices: numbers(screenKbpsSteps), Choice: slices.Index(screenKbpsSteps, s.ScreenSendKbps), Suffix: "kbps",
 			Help: "What each person watching gets, whoever else is watching: the share is encoded once, on the GPU, and the same picture goes to everyone. Only the upload multiplies — measured, the sender's CPU does not move with the number of peers."},
-		tui.SettingsRow{Tab: "Advanced", Label: "Upload Ceiling", Choices: append([]string{"off"}, numbers(uploadSteps)...), Choice: uploadChoice(s.ScreenUploadKbps), Suffix: "Mbps for a share, everyone together",
+		tui.SettingsRow{Tab: "Advanced", Label: "Upload Ceiling", Choices: uploadLabels(), Choice: slices.Index(uploadSteps, s.ScreenUploadKbps), Suffix: "Mbps for a share, everyone together",
 			Help: "Off means each viewer gets the rate you chose and your upload carries the rest: five people watching at 2500 kbps is 12.5 Mbps up. Set it and everyone's rate comes down together instead; it is read when a share starts."},
-		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Choices: numbers(complexitySteps), Choice: indexOf(complexitySteps, complexityOf(s)),
+		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Choices: numbers(complexitySteps), Choice: slices.Index(complexitySteps, s.OpusComplexity),
 			Help: "How hard the encoder works for the same bitrate: 10 is the best sound per kbps and the most CPU, 1 the cheapest. It never changes what is sent."},
 		tui.SettingsRow{Tab: "Other", Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color(),
 			Help: "Your name and colour, as everyone in the room sees them."},
-		tui.SettingsRow{Tab: "Other", Label: "Updates", Choices: []string{"install on exit", "tell me", "do not check"}, Choice: indexOfString(updatePolicies, s.AutoUpdate),
+		tui.SettingsRow{Tab: "Other", Label: "Updates", Choices: []string{"install on exit", "tell me", "do not check"}, Choice: slices.Index(updatePolicies, s.AutoUpdate),
 			Help: "A newer version is looked for once a day and downloaded before it is offered; the home screen says so when one is ready."},
 	)
 	return rows
 }
 
-func mbpsToKbps(list []int) []int {
-	out := make([]int, len(list))
-	for i, v := range list {
-		out[i] = v * 1000
+// The ceiling's labels: "off" for none, Mbps for the rest.
+func uploadLabels() []string {
+	out := make([]string, len(uploadSteps))
+	for i, v := range uploadSteps {
+		out[i] = "off"
+		if v > 0 {
+			out[i] = strconv.Itoa(v / 1000)
+		}
 	}
 	return out
 }
 
-// The ceiling row: "off" first, then the steps in Mbps.
-func uploadChoice(kbps int) int {
-	if kbps <= 0 {
-		return 0
-	}
-	return slices.Index(uploadSteps, kbps/1000) + 1
-}
+// What the encoder costs, on the one scale both tabs draw it on; the Audio tab adds the
+// rest of its path on top.
+func opusCPU(complexity int) float64 { return 0.10 + float64(complexity)*0.02 }
 
 func boolChoice(on bool) int {
 	if on {
@@ -174,9 +186,6 @@ func numbers(list []int) []string {
 	}
 	return out
 }
-
-func indexOf(list []int, v int) int             { return slices.Index(list, v) }
-func indexOfString(list []string, v string) int { return slices.Index(list, v) }
 
 // What the system's own voice processing is called here, and what it is worth. There is no
 // such thing on Linux, so there is no row there either.
@@ -197,13 +206,6 @@ func processingHelp() string {
 	return "Apple's voice processing unit: Voice Isolation, echo cancellation and gain, for about a tenth of a core."
 }
 
-func complexityOf(s settings.App) int {
-	if s.OpusComplexity <= 0 {
-		return 10
-	}
-	return s.OpusComplexity
-}
-
 // Meters are the two or three bars under the settings: what this section's choices cost the
 // machine and the network, and what they buy. The weights are anchored on measurements in
 // docs/performance.md — Apple's unit against raw devices, a hardware H.264 encoder against a
@@ -213,7 +215,7 @@ func (st *store) Meters(tab string) []tui.Meter {
 	s := st.s
 	switch tab {
 	case "Audio":
-		cpu := 0.10 + float64(complexityOf(s))*0.02
+		cpu := opusCPU(s.OpusComplexity)
 		what := "raw"
 		if s.AudioProcessing != "raw" {
 			cpu += 0.35
@@ -258,7 +260,7 @@ func (st *store) Meters(tab string) []tui.Meter {
 			netNote = fmt.Sprintf("%d kbps each, capped at %d Mbps together", s.ScreenSendKbps, s.ScreenUploadKbps/1000)
 		}
 		cpu, note := 0.30, enc
-		if enc == "libx264" || enc == "" {
+		if !video.Hardware() {
 			cpu, note = 0.95, "libx264 (no hardware encoder found)"
 		}
 		return []tui.Meter{
@@ -267,10 +269,10 @@ func (st *store) Meters(tab string) []tui.Meter {
 			{Label: "Quality", Fill: 0.3 + float64(s.ScreenSendKbps-1000)/9000*0.7, Note: "at 1080p30", Good: true},
 		}
 	case "Advanced":
-		c := float64(complexityOf(s))
+		c := s.OpusComplexity
 		return []tui.Meter{
-			{Label: "CPU", Fill: 0.10 + c*0.055, Note: "the Opus encoder"},
-			{Label: "Quality", Fill: 0.45 + c*0.055, Note: "at the same bitrate", Good: true},
+			{Label: "CPU", Fill: opusCPU(c), Note: "the Opus encoder"},
+			{Label: "Quality", Fill: 0.45 + float64(c)*0.055, Note: "at the same bitrate", Good: true},
 		}
 	}
 	return nil
@@ -278,8 +280,11 @@ func (st *store) Meters(tab string) []tui.Meter {
 
 var (
 	complexitySteps = []int{1, 3, 5, 8, 10}
-	// In Mbps, as the row reads them; stored as kbps, 0 for off.
-	uploadSteps     = []int{5, 10, 20, 50}
+	// The two-state rows, in the order their chips are drawn.
+	processingValues = []string{"system", "raw"}
+	micLevelValues   = []string{"auto", "off"}
+	// In kbps, as they are stored; 0 is no ceiling, and the row prints them in Mbps.
+	uploadSteps     = []int{0, 5000, 10000, 20000, 50000}
 	audioKbpsSteps  = []int{64, 96, 128, 192, 256}
 	screenKbpsSteps = []int{1000, 1500, 2500, 4000, 6000, 10000}
 	updatePolicies  = []string{"auto", "notify", "off"}
@@ -323,21 +328,13 @@ func (st *store) Run(idx int) string {
 	case "Camera":
 		return "camera"
 	case "Audio Processing":
-		if s.AudioProcessing == "raw" {
-			s.AudioProcessing = "system"
-		} else {
-			s.AudioProcessing = "raw"
-		}
+		s.AudioProcessing = cycle(processingValues, s.AudioProcessing)
 	case "Mic Level":
-		if s.MicLevel == "off" {
-			s.MicLevel = "auto"
-		} else {
-			s.MicLevel = "off"
-		}
+		s.MicLevel = cycle(micLevelValues, s.MicLevel)
 	case "Upload Ceiling":
-		s.ScreenUploadKbps = cycleNumber(append([]int{0}, mbpsToKbps(uploadSteps)...), s.ScreenUploadKbps)
+		s.ScreenUploadKbps = cycleNumber(uploadSteps, s.ScreenUploadKbps)
 	case "Opus Complexity":
-		s.OpusComplexity = cycleNumber(complexitySteps, complexityOf(*s))
+		s.OpusComplexity = cycleNumber(complexitySteps, s.OpusComplexity)
 	case "Voice Gate":
 		s.VoiceGate = !s.VoiceGate
 	case "Audio Send":
@@ -644,6 +641,16 @@ func main() {
 	}
 
 	st := &store{s: settings.Load()}
+	// Before anything opens a device: the picker's mic test goes through the same pump as a
+	// call does, so it has to be on the path the call will use. A flag still overrides it.
+	if !*noVPIO && !*vpBypass {
+		audio.NoVoiceProcessing = st.s.AudioProcessing == "raw"
+	}
+	// Before anything opens a device: the picker's mic test goes through the same pump as a
+	// call, so it has to be on the same path the call will use. A flag still overrides it.
+	if !*noVPIO && !*vpBypass {
+		audio.NoVoiceProcessing = st.s.AudioProcessing == "raw"
+	}
 	// A silent update announces itself once: the version that ran last is not this one.
 	update.CleanupOld()
 	justUpdated := st.s.LastRunVersion != nil && *st.s.LastRunVersion != Version && Version != "dev"
@@ -694,7 +701,7 @@ func main() {
 			if *bitrate > 0 {
 				audioBps = *bitrate * 1000
 			}
-			complexity := complexityOf(st.s)
+			complexity := st.s.OpusComplexity
 			if *complex > 0 {
 				complexity = *complex
 			}

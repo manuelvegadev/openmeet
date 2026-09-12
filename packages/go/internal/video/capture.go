@@ -19,13 +19,17 @@ import (
 // encoder gets a keyframe every second so a newcomer waits at most that long: pion has
 // no way to ask ffmpeg for one on a PLI.
 const (
-	ScreenFPS      = 30
-	ScreenShort    = 1080
-	ScreenLong     = 3840
-	CameraHeight   = 720
-	CameraFPS      = 30
-	keyframeEvery  = 1 * time.Second
-	silenceTimeout = 8 * time.Second
+	ScreenFPS   = 30
+	ScreenShort = 1080
+	// Where a path that cannot scale sends the screen as it is instead: past this, the
+	// frames are worth a trip through the CPU (see screenArgs, the NVENC branch).
+	ScreenUnscaledMaxW = 3840
+	ScreenUnscaledMaxH = 2160
+	ScreenLong         = 3840
+	CameraHeight       = 720
+	CameraFPS          = 30
+	keyframeEvery      = 1 * time.Second
+	silenceTimeout     = 8 * time.Second
 )
 
 // Kind is which of the two video tracks a stream rides.
@@ -106,11 +110,13 @@ func screenArgs(d Device, fallback bool) []string {
 		if !fallback {
 			args := []string{"-f", "lavfi", "-i", fmt.Sprintf("ddagrab=output_idx=%s:framerate=%d:dup_frames=false", d.ID, ScreenFPS)}
 			if Encoder() == "h264_nvenc" {
-				// The D3D11 frames go to NVENC as they are: no filter can scale them there
-				// (scale_cuda wants CUDA frames, hwmap to CUDA is ENOSYS — gotcha 28), so the
-				// screen goes out at its own size — an ultrawide as 3440x1440 — and only a
-				// panel past 4K is downloaded and scaled on the CPU.
-				if d.Width <= 3840 && d.Height <= 2160 {
+				// The D3D11 frames go to NVENC as they are: nothing can scale them there
+				// (scale_cuda wants CUDA frames, hwmap to CUDA is ENOSYS — gotcha 28). So on
+				// this one path the screen keeps its own size rather than the capped one —
+				// an ultrawide goes out as 3440x1440 — and the same bitrate buys fewer bits
+				// per pixel than the rule assumes. Only a panel past ScreenUnscaledMax is
+				// worth downloading to the CPU to scale.
+				if d.Width <= ScreenUnscaledMaxW && d.Height <= ScreenUnscaledMaxH {
 					return args
 				}
 				return append(args, "-vf", "hwdownload,format=bgra"+cpuScale(ow, oh))

@@ -127,7 +127,6 @@ func Find(devices []Device, name string) (*Device, error) {
 type Stream struct {
 	s        *C.om_stream
 	channels int
-	duplex   bool
 	rate     int // the device's own rate; SampleRate when no conversion is needed
 	rs       *Resampler
 	native   []int16 // a capture's frames at the device rate, before conversion
@@ -168,12 +167,7 @@ func (e *Engine) open(playback bool, dev *Device, channels int) (*Stream, error)
 func (st *Stream) Close() { C.om_close(st.s) }
 
 // Rate is the device's own; the stream always reads and writes at SampleRate.
-func (st *Stream) Rate() int {
-	if st.duplex {
-		return int(C.om_rate(st.s))
-	}
-	return st.rate
-}
+func (st *Stream) Rate() int { return st.rate }
 
 // Available is in frames at SampleRate, whatever the device runs at.
 func (st *Stream) Available() int {
@@ -287,8 +281,8 @@ func (p *Pump) openStreams() error {
 		}
 		if d := C.om_open_duplex(inIdx, outIdx, SampleRate, C.int(RingMs), C.int(PlayAheadMs), bypass, &cs, &ps); d != nil {
 			p.dup = d
-			p.capture = &Stream{s: cs, channels: 1, duplex: true}
-			p.playback = &Stream{s: ps, channels: OutChannels, duplex: true}
+			p.capture = &Stream{s: cs, channels: 1, rate: int(C.om_rate(cs))}
+			p.playback = &Stream{s: ps, channels: OutChannels, rate: int(C.om_rate(ps))}
 			p.path = "Apple voice processing (Voice Isolation, echo cancellation, gain)"
 			if VoiceProcessingBypass {
 				p.path = "Apple voice processing, bypassed (Voice Isolation only)"
@@ -498,12 +492,14 @@ func (p *Pump) Priority() string {
 // ones without anybody noticing.
 func (p *Pump) Describe() string {
 	return fmt.Sprintf("%s; in %q, out %q; capture %s, playback %s, ring %d ms, pump every %d ms, ahead %d ms, thread priority %s",
-		p.path, deviceName(p.in), deviceName(p.out), p.capture.describe(), p.playback.describe(), RingMs, PumpMs, p.AheadMs(), p.Priority())
+		p.path, DisplayName(p.in), DisplayName(p.out), p.capture.describe(), p.playback.describe(), RingMs, PumpMs, p.AheadMs(), p.Priority())
 }
 
-func deviceName(d *Device) string {
+// DisplayName is how a device reads when there is one, and what to call the absence of a
+// choice when there is not.
+func DisplayName(d *Device) string {
 	if d == nil {
-		return "system default"
+		return "System Default"
 	}
 	return d.Name
 }

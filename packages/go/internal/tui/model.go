@@ -176,11 +176,13 @@ type Model struct {
 	profileColor string
 
 	// settings
-	settingsIdx    int
-	settingsTab    int
-	picker         string // "", "input", "output", "camera"
-	pickerItems    []string
-	pickerCams     []VideoChoice
+	settingsIdx int
+	settingsTab int
+	picker      string // "", "input", "output", "camera"
+	pickerItems []string
+	// The value each item stands for, index-aligned: a device name, or a camera id, and ""
+	// for the first row, which is always the system's own choice.
+	pickerIDs      []string
 	pickerIdx      int
 	settingsLoaded bool
 
@@ -499,8 +501,8 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 			m.pickerIdx = min(len(m.pickerItems)-1, m.pickerIdx+1)
 		case tea.KeyEnter:
 			chosen := ""
-			if m.pickerIdx > 0 {
-				chosen = m.pickerItems[m.pickerIdx]
+			if m.pickerIdx < len(m.pickerIDs) {
+				chosen = m.pickerIDs[m.pickerIdx]
 			}
 			switch m.picker {
 			case "input":
@@ -508,11 +510,7 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 			case "output":
 				m.host.Settings.SetDevices(m.host.Settings.InputID(), chosen)
 			case "camera":
-				id := ""
-				if i := m.pickerIdx - 1; i >= 0 && i < len(m.pickerCams) {
-					id = m.pickerCams[i].ID
-				}
-				m.host.Settings.SetCamera(id)
+				m.host.Settings.SetCamera(chosen)
 			}
 			m.picker = ""
 		}
@@ -523,10 +521,8 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 	m.settingsTab = min(m.settingsTab, max(0, len(tabs)-1))
 	// The selection lives on the tab being shown, so ↑↓ walk that tab's rows and nothing else.
 	visible := []int{}
-	for i, r := range rows {
-		if m.settingsTab < len(tabs) && r.Tab == tabs[m.settingsTab] {
-			visible = append(visible, i)
-		}
+	if m.settingsTab < len(tabs) {
+		visible = RowsForTab(rows, tabs[m.settingsTab])
 	}
 	at := 0
 	for i, idx := range visible {
@@ -565,7 +561,6 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 				m.openPicker("output", m.host.Devices.Outputs(), m.host.Settings.OutputID())
 			case "camera":
 				m.openPicker("camera", nil, "")
-				return nil
 			}
 		}
 	}
@@ -575,29 +570,23 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 func (m *Model) openPicker(kind string, devices []string, saved string) {
 	m.picker = kind
 	if kind == "camera" {
-		m.pickerCams = nil
+		m.pickerItems, m.pickerIDs = []string{"Default (0)"}, []string{""}
 		if m.host.AllCameras != nil {
-			m.pickerCams = m.host.AllCameras()
-		}
-		m.pickerItems = []string{"Default (0)"}
-		for _, cam := range m.pickerCams {
-			m.pickerItems = append(m.pickerItems, cam.Label)
-		}
-		m.pickerIdx = 0
-		for i, cam := range m.pickerCams {
-			if cam.ID != "" && cam.ID == m.host.Settings.CameraID() {
-				m.pickerIdx = i + 1
+			for _, cam := range m.host.AllCameras() {
+				m.pickerItems = append(m.pickerItems, cam.Label)
+				m.pickerIDs = append(m.pickerIDs, cam.ID)
 			}
 		}
-		return
+		saved = m.host.Settings.CameraID()
+	} else {
+		m.pickerItems = append([]string{"System Default"}, devices...)
+		m.pickerIDs = append([]string{""}, devices...)
+		saved = m.host.Devices.Resolve(saved, devices)
 	}
-	m.pickerItems = append([]string{"System Default"}, devices...)
 	m.pickerIdx = 0
-	if name := m.host.Devices.Resolve(saved, devices); name != "" {
-		for i, d := range m.pickerItems {
-			if d == name {
-				m.pickerIdx = i
-			}
+	for i, id := range m.pickerIDs {
+		if id != "" && id == saved {
+			m.pickerIdx = i
 		}
 	}
 }
@@ -1056,6 +1045,18 @@ func (m *Model) deviceHint() string {
 	return ""
 }
 
+// RowsForTab is the indexes of the rows in one section, in order. The drawing and the keys
+// both walk it, so the selection cannot land on a row that is not on screen.
+func RowsForTab(rows []SettingsRow, tab string) []int {
+	var out []int
+	for i, r := range rows {
+		if r.Tab == tab {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 // settingsTabs is the sections in the order the rows first mention them.
 func settingsTabs(rows []SettingsRow) []string {
 	var tabs []string
@@ -1074,10 +1075,8 @@ func firstOfTab(rows []SettingsRow, tabs []string, tab int) int {
 	if tab < 0 || tab >= len(tabs) {
 		return 0
 	}
-	for i, r := range rows {
-		if r.Tab == tabs[tab] {
-			return i
-		}
+	if idx := RowsForTab(rows, tabs[tab]); len(idx) > 0 {
+		return idx[0]
 	}
 	return 0
 }

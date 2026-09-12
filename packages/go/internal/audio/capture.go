@@ -127,9 +127,14 @@ func (c *Capture) frame(frame []int16) {
 		age := uint32(len(outgoing) - 1 - i)
 		if c.agc != nil {
 			// On a copy: the gate's pre-buffer owns those frames, and the level it measures
-			// has to stay the microphone's own.
+			// has to stay the microphone's own. The live frame's RMS is already in hand;
+			// only the gate's held-back frames have to be measured again.
+			level := rms
+			if age > 0 {
+				level = RMS(f)
+			}
 			c.scratch = append(c.scratch[:0], f...)
-			c.agc.Apply(c.scratch, RMS(f))
+			c.agc.Apply(c.scratch, level)
 			f = c.scratch
 		}
 		n, err := c.enc.Encode(f, c.out)

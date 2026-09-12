@@ -30,17 +30,17 @@ func levelColor(level float64) string {
 }
 
 func DrawMicBar(c *Canvas, x, y int, level float64) {
-	frac := level / vuMaxRMS
-	if frac > 1 {
-		frac = 1
-	}
-	if frac < 0 {
-		frac = 0
-	}
-	units := int(frac*float64(micBarWidth*8) + 0.5)
+	DrawBar(c, x, y, micBarWidth, level/vuMaxRMS, levelColor(level))
+}
+
+// DrawBar is every bar in the app: eighth-blocks in one colour over the surface grey, so a
+// partial cell is the same two colours as its neighbours. frac is clamped to 0..1.
+func DrawBar(c *Canvas, x, y, width int, frac float64, fg string) {
+	frac = min(1, max(0, frac))
+	units := int(frac*float64(width*8) + 0.5)
 	full, part := units/8, units%8
-	st := Style{FG: levelColor(level), BG: ThemeSurface}
-	for i := 0; i < micBarWidth; i++ {
+	st := Style{FG: fg, BG: ThemeSurface}
+	for i := range width {
 		r := ' '
 		if i < full {
 			r = '█'

@@ -11,6 +11,7 @@ package rtc
 import (
 	"fmt"
 	"github.com/pion/rtp/codecs"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"sync"
@@ -278,6 +279,9 @@ type videoTrack struct {
 	*webrtc.TrackLocalStaticRTP
 	mu sync.Mutex
 	pk rtp.Packetizer
+	// A frame is rarely a whole number of 90 kHz ticks — 30 fps is 2999.99997 — so the
+	// leftover is carried to the next one rather than truncated away every frame.
+	remainder float64
 }
 
 const (
@@ -299,7 +303,10 @@ func newVideoTrack(id string) (*videoTrack, error) {
 func (v *videoTrack) write(s media.Sample) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	pkts := v.pk.Packetize(s.Data, uint32(s.Duration.Seconds()*90000))
+	ticks := s.Duration.Seconds()*90000 + v.remainder
+	whole := math.Floor(ticks)
+	v.remainder = ticks - whole
+	pkts := v.pk.Packetize(s.Data, uint32(whole))
 	for i, p := range pkts {
 		if i > 0 && i%pacingBurst == 0 {
 			time.Sleep(pacingGap)

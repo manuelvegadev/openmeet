@@ -729,15 +729,8 @@ func (e *Engine) UpdateDevices(in, out *audio.Device) error {
 		return err
 	}
 	e.pump = pump
-	e.notice(tui.KindInfo, "", "", "Audio devices changed: "+deviceName(in)+" → "+deviceName(out))
+	e.notice(tui.KindInfo, "", "", "Audio devices changed: "+audio.DisplayName(in)+" → "+audio.DisplayName(out))
 	return nil
-}
-
-func deviceName(d *audio.Device) string {
-	if d == nil {
-		return "System Default"
-	}
-	return d.Name
 }
 
 // Close leaves the room and releases everything. Safe to call twice.

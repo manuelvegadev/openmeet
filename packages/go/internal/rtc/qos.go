@@ -33,8 +33,7 @@ func newQOSNet() (transport.Net, error) {
 func (q *qosNet) ListenUDP(network string, laddr *net.UDPAddr) (transport.UDPConn, error) {
 	c, err := q.Net.ListenUDP(network, laddr)
 	if err == nil {
-		markVoice(c)
-		sizeBuffers(c)
+		tuneSocket(c)
 	}
 	return c, err
 }
@@ -42,20 +41,22 @@ func (q *qosNet) ListenUDP(network string, laddr *net.UDPAddr) (transport.UDPCon
 func (q *qosNet) ListenPacket(network, address string) (net.PacketConn, error) {
 	c, err := q.Net.ListenPacket(network, address)
 	if err == nil {
-		markVoice(c)
-		sizeBuffers(c)
+		tuneSocket(c)
 	}
 	return c, err
 }
 
-const socketBuffer = 4 << 20
+// Enough for a keyframe burst — a 1080p IDR is 100-300 KB — with room to spare. The send
+// side needs nothing like it, and pion opens a socket per local interface per peer, so the
+// ceiling is charged tens of times over.
+const readBuffer = 1 << 20
 
-func sizeBuffers(c interface{}) {
+// tuneSocket is everything a fresh pion socket gets: the voice marking and the room to
+// absorb a burst. One function, so a new listen path cannot take half of it.
+func tuneSocket(c interface{}) {
+	markVoice(c)
 	if b, ok := c.(interface{ SetReadBuffer(int) error }); ok {
-		_ = b.SetReadBuffer(socketBuffer)
-	}
-	if b, ok := c.(interface{ SetWriteBuffer(int) error }); ok {
-		_ = b.SetWriteBuffer(socketBuffer)
+		_ = b.SetReadBuffer(readBuffer)
 	}
 }
 

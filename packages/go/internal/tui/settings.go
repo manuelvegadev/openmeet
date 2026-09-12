@@ -109,12 +109,11 @@ func DrawSettings(c *Canvas, s SettingsState) {
 	// as the tallest line in this tab, so moving the selection never shifts the list under it.
 	helpTop := area.Y + 2
 	helpRows := 1
-	for _, row := range s.Rows {
-		if row.Tab == tab {
-			helpRows = max(helpRows, min(maxHelpRows, len(Wrap([]Span{{row.Help, Muted}}, area.W-2))))
-		}
+	for _, i := range RowsForTab(s.Rows, tab) {
+		helpRows = max(helpRows, min(maxHelpRows, len(Wrap([]Span{{s.Rows[i].Help, Muted}}, area.W-2))))
 	}
-	if row, ok := selectedRow(s); ok && row.Help != "" {
+	if s.Selected >= 0 && s.Selected < len(s.Rows) && s.Rows[s.Selected].Help != "" {
+		row := s.Rows[s.Selected]
 		for i, line := range Wrap([]Span{{row.Help, Muted}}, area.W-2) {
 			if i >= helpRows {
 				break
@@ -124,9 +123,10 @@ func DrawSettings(c *Canvas, s SettingsState) {
 	}
 	body := Rect{area.X, helpTop + helpRows + 1, area.W, legendY - 1 - (helpTop + helpRows + 1)}
 	rowY := body.Y
-	for i, row := range s.Rows {
-		if row.Tab != tab || rowY >= body.Y+body.H {
-			continue
+	for _, i := range RowsForTab(s.Rows, tab) {
+		row := s.Rows[i]
+		if rowY >= body.Y+body.H {
+			break
 		}
 		selected := i == s.Selected
 		Pointer(c, body.X, rowY, selected)
@@ -150,21 +150,14 @@ func DrawSettings(c *Canvas, s SettingsState) {
 	}
 }
 
-func selectedRow(s SettingsState) (SettingsRow, bool) {
-	if s.Selected >= 0 && s.Selected < len(s.Rows) {
-		return s.Rows[s.Selected], true
-	}
-	return SettingsRow{}, false
-}
-
 // drawChoices draws every value the row can take as a chip, the current one on the accent
 // and the rest on the surface — the key chips' two tones, minus their second half. A setting
 // reads as what it is and what else it could be, without opening anything.
 func drawChoices(c *Canvas, x, y, max int, row SettingsRow) {
 	for i, choice := range row.Choices {
-		st := Style{FG: ThemeMuted, BG: ThemeSurface}
+		st := chipOff
 		if i == row.Choice {
-			st = Style{FG: ThemeOnAccent, BG: ThemeAccent, Bold: true}
+			st = chipKey
 		}
 		x = c.Put(x, y, " "+choice+" ", st, max) + 1
 	}
@@ -211,18 +204,7 @@ func DrawMeters(c *Canvas, area Rect, meters []Meter) {
 
 func DrawMeterBar(c *Canvas, x, y int, m Meter) {
 	frac := min(1, max(0, m.Fill))
-	units := int(frac*float64(meterBarWidth*8) + 0.5)
-	full, part := units/8, units%8
-	st := Style{FG: meterColor(frac, m.Good), BG: ThemeSurface}
-	for i := range meterBarWidth {
-		r := ' '
-		if i < full {
-			r = '█'
-		} else if i == full && part > 0 {
-			r = eighths[part]
-		}
-		c.Set(x+i, y, r, st)
-	}
+	DrawBar(c, x, y, meterBarWidth, frac, meterColor(frac, m.Good))
 }
 
 // meterColor: on a cost bar a full bar is bad, on a quality bar an empty one is.
