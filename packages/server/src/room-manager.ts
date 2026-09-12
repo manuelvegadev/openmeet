@@ -1,5 +1,5 @@
-import type { Participant, Room } from '@openmeet/shared';
 import { nanoid } from 'nanoid';
+import type { Participant, Room } from './protocol.js';
 import type { ConnectedClient } from './types.js';
 
 export interface RoomState {

@@ -2,8 +2,8 @@
   "name": "openmeet",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter @openmeet/shared --filter @openmeet/server --parallel dev",
-    "build": "pnpm --filter @openmeet/shared build && pnpm --filter @openmeet/server build",
+    "dev": "pnpm --filter @openmeet/server dev",
+    "build": "pnpm --filter @openmeet/server build",
     "clean": "pnpm -r clean",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

@@ -1,3 +1,14 @@
+// The WebSocket protocol: every message that crosses the wire, as a discriminated union.
+//
+// This file is one half of the contract. The other half is the Go client's
+// `packages/go/internal/signal`, which declares the same messages field for field and is kept
+// in step by hand — Go cannot import TypeScript, so nothing mechanical enforces it. Changing a
+// message here without changing it there is how a room goes quiet with no error anywhere.
+//
+// Adding an optional field is safe in both directions: the client updates itself while the
+// server is deployed separately, so a binary from last week talks to the server from today.
+// Renaming or repurposing one is not.
+
 // === Common Types ===
 
 export interface Participant {

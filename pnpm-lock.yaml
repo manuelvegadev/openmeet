@@ -14,9 +14,6 @@ importers:
 
   packages/server:
     dependencies:
-      '@openmeet/shared':
-        specifier: workspace:*
-        version: link:../shared
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -39,12 +36,6 @@ importers:
       tsx:
         specifier: ^4.23.13
         version: 4.23.13
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  packages/shared:
-    devDependencies:
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

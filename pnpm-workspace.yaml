@@ -1,11 +1,10 @@
 # An explicit list rather than a `packages/*` glob: packages/go has no package.json and the
-# retired Node client used to be drawn into every install by the glob alone.
+# retired Node client used to be drawn into every install by the glob alone. The two members
+# share no code and no dependencies — the workspace is here for one lockfile and one Biome.
 packages:
-  - "packages/shared"
   - "packages/server"
   - "packages/website"
 
-# esbuild reaches the website through vite and tsx. The retired Node client's native modules
-# (@roamhq/wrtc, audify) left with it.
+# esbuild reaches the website through vite and tsx.
 onlyBuiltDependencies:
   - "esbuild"

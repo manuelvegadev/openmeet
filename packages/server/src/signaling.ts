@@ -1,9 +1,9 @@
 import type { Server } from 'node:http';
-import type { WSMessage } from '@openmeet/shared';
 import { nanoid } from 'nanoid';
 import { WebSocket, WebSocketServer } from 'ws';
 import { handleChatMessage } from './chat.js';
 import { config } from './config.js';
+import type { WSMessage } from './protocol.js';
 import { addParticipant, ensureRoom, getParticipants, getRoomState, removeParticipant } from './room-manager.js';
 import type { ConnectedClient } from './types.js';
 

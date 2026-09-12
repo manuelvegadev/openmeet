@@ -1,6 +1,6 @@
-import type { ChatBroadcastMessage, ChatMessage } from '@openmeet/shared';
 import { nanoid } from 'nanoid';
 import { WebSocket } from 'ws';
+import type { ChatBroadcastMessage, ChatMessage } from './protocol.js';
 import type { ConnectedClient } from './types.js';
 
 export function handleChatMessage(
