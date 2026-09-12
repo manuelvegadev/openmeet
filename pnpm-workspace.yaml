@@ -1,7 +1,11 @@
+# An explicit list rather than a `packages/*` glob: packages/go has no package.json and the
+# retired Node client used to be drawn into every install by the glob alone.
 packages:
-  - "packages/*"
+  - "packages/shared"
+  - "packages/server"
+  - "packages/website"
 
+# esbuild reaches the website through vite and tsx. The retired Node client's native modules
+# (@roamhq/wrtc, audify) left with it.
 onlyBuiltDependencies:
-  - "@roamhq/wrtc"
-  - "audify"
   - "esbuild"

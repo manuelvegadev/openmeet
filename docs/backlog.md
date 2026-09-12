@@ -12,12 +12,15 @@ here.
 
 - **Mic Channels.** A microphone wired to input 1 of a stereo pair is averaged with a silent
   channel: 6 dB down and noisier. The auto mono-in-a-stereo-pair detection belongs as a step
-  before the gate (the retired client's `packages/terminal/src/lib/audio/channels.ts` is the
-  working version to port). Bring the settings row back with it.
+  before the gate. The working version to port is in the retired Node client, which no longer
+  lives in the tree — git keeps it at its last tag:
+  `git show terminal-v0.5.2:packages/terminal/src/lib/audio/channels.ts` (its test sits beside
+  it). Bring the settings row back with it.
 - **`--debug` writing a log file** next to the settings, so a report can be a file rather
   than a screenshot of the debug panel.
 - **The RTX hint**: suggest NVIDIA Broadcast to someone who has an RTX and has not installed
-  it. A cached PowerShell probe; the retired client's `nvidia-broadcast.ts` has it.
+  it. A cached PowerShell probe; the retired client had it at
+  `git show terminal-v0.5.2:packages/terminal/src/lib/audio/nvidia-broadcast.ts`.
 - **Pause Rendering.** Bubble Tea repaints only on events, so the cost is cosmetic. Focus
   reporting (`tea.WithReportFocus`) would cover `unfocused`; `minimized` needs a window
   watcher per platform.
@@ -189,8 +192,9 @@ processing to maintain for the one case the system does not already cover.
 - **Deprecate `openmeet-terminal` on npm.** The package is retired (0.5.2 is the last
   version) and its README says so, but npm itself does not yet: run
   `npm deprecate openmeet-terminal "OpenMeet is now a single binary: https://openmeet.manuelvega.dev"`
-  once, logged in with 2FA. The publish workflow is gone, so nothing can be published by
-  accident.
+  once, logged in with 2FA. The publish workflow is gone and the source no longer lives in the
+  tree, so nothing can be published by accident. npm keeps serving the README from the 0.5.2
+  tarball, which already carries the retirement notice.
 - **Sign and notarize the binaries.** `install.sh` clears the quarantine flag and SmartScreen
   may ask once on Windows; a Developer ID and an Authenticode certificate would remove both
   steps, and the updater would then verify a signature rather than only that `--version` runs.

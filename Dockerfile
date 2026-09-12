@@ -9,7 +9,6 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml .npmrc pnpm-lock.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/
-COPY packages/terminal/package.json ./packages/terminal/
 
 # Install only what the server needs (skips the terminal's native WebRTC build)
 RUN pnpm install --frozen-lockfile --filter "@openmeet/server..."
