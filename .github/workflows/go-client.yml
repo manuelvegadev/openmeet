@@ -8,6 +8,8 @@ name: go-client
 on:
   push:
     branches: [main, go-migration]
+    # GitHub does not evaluate path filters for pushes of tags, so the release below fires on
+    # any v* tag whatever the commit touched. Do not "fix" that by adding VERSION here.
     paths: ['packages/go/**', '.github/workflows/go-client.yml']
     tags: ['v*']
   pull_request:

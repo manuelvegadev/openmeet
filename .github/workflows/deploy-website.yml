@@ -1,14 +1,24 @@
 name: Deploy website
 
 # openmeet.manuelvega.dev is packages/website prerendered to static HTML and served by GitHub
-# Pages. Only changes under that package (or to this file) deploy; the client's release flow
-# (go-client.yml) is untouched. Pages must be set to "GitHub Actions" as its source in the repository settings.
-
+# Pages. Pages must be set to "GitHub Actions" as its source in the repository settings.
+#
+# The paths are website.yml's list — everything that can change what this publishes — because
+# this is the run that matters: the pull-request build is a preview, and this repository commits
+# straight to main. Two of them are not obvious. packages/go/VERSION is read by vite.config.ts at
+# build time and rendered in the nav, the TUI mock and the JSON-LD, so a release that only bumps
+# VERSION has to redeploy or the site advertises the previous version. The composite action is
+# where the build itself lives.
 on:
   push:
     branches: [main]
     paths:
       - 'packages/website/**'
+      - 'packages/go/VERSION'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/actions/build-website/**'
       - '.github/workflows/deploy-website.yml'
   workflow_dispatch:
 

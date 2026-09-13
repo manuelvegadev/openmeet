@@ -1,8 +1,12 @@
 name: server
 
-# The signaling server: Express, ws and in-memory Maps, type-checked by its own build. The Go
-# client has go-client.yml and the site has website.yml and deploy-website.yml, so a change to
-# either spends no runner here. Linting is repository-wide and lives in lint.yml.
+# The signaling server: Express, ws and in-memory Maps, type-checked by its own build, and the
+# image that ships it. The Go client has go-client.yml and the site has website.yml and
+# deploy-website.yml, so a change to either spends no runner here. Linting lives in lint.yml.
+#
+# The image is built but never pushed. It is here because `tsc` cannot see a stale COPY or a
+# build order that no longer holds: when packages/shared folded into the server, three of this
+# Dockerfile's lines stopped being true and nothing in CI would have said so.
 
 on:
   push:
@@ -37,3 +41,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --filter @openmeet/server
       - run: pnpm build
+      # No push and no registry: building it is the check.
+      - name: The server image builds
+        run: docker build -t openmeet-server .
