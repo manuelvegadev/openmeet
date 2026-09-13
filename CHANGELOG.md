@@ -12,6 +12,89 @@ matrix in the README, not a version of its own.
 
 ## [Unreleased]
 
+### Added
+
+- The mouse works. Every button on screen is clickable and does exactly what its key does, the
+  wheel scrolls whichever pane the pointer is over — the conversation, the participants, the
+  settings, a picker — and clicking a participant selects them, clicking the composer focuses
+  it, clicking the participants pane goes back to the controls.
+- The conversation can be selected with the mouse and copied. The selection is the
+  application's own rather than the terminal's, which is the point: it holds text and never
+  the frame around it, so no borders, no rule, no participants pane come along with it, and a
+  message that wrapped over four rows copies as the one line it is instead of four. Double
+  click takes a word, triple click the whole line, and the row over the composer names the key
+  that copies it. The debug panel is selectable the same way, and a line it drew clipped still
+  copies whole.
+- **`Cmd+C` copies the selection on macOS**, and the row over the composer names the chord the
+  way the system a person is sitting at names it: `⌘C` once the terminal has said it can send
+  it, `Ctrl+C` on Windows, `ctrl+c` elsewhere. A chord with Cmd in it has no bytes in the encoding a
+  terminal has used since the seventies, which is why it has never reached a terminal
+  application — pressing it did nothing anywhere. The kitty keyboard protocol is the way to be
+  told, so the client now asks the terminal whether it speaks it and turns it on where it
+  does: Ghostty, kitty, WezTerm, and iTerm2 with it enabled. On Windows and on a terminal
+  without it — Apple's Terminal, Windows Terminal — `Ctrl+C` is the key, which is what it is
+  in every other application there anyway. `Ctrl+C` keeps working everywhere, and still leaves
+  the room when nothing is selected. Pasting needed nothing: `Cmd+V` and `Ctrl+V` are the
+  terminal's own and always were.
+  - The protocol also changes how `Esc` and `Ctrl+key` are encoded, so the client translates
+    them back rather than letting Bubble Tea see sequences it does not know. Set
+    `OPENMEET_NO_KITTY=1` to turn the whole thing off.
+- The clipboard is reached two ways at once: the platform's own tool when the session is
+  local, and OSC 52 through the terminal always, which is what carries a copy home from a
+  client running over SSH. A line over the composer says it happened, and says when it was the
+  terminal that carried it — that route is one an emulator can be set to refuse, and Apple's
+  Terminal ignores it outright (there `pbcopy` does the work).
+- A line of transient feedback over the composer for the things whose only other sign was a
+  chip changing its label: a share starting or stopping, a share that ended on its own and
+  why, a camera that would not open, a change of audio device, a copy.
+
+- The composer is a text field rather than a place text arrives. Click anywhere in the draft
+  and the caret goes there; drag to select, double click for a word; Backspace or Delete
+  removes a selection, and typing or pasting over one replaces it. `Ctrl+W` deletes the word
+  behind the caret, `Ctrl+U` deletes back to the start — which is what Ghostty already sends
+  for `Cmd+Backspace`, so that works too — `Ctrl+A` selects the whole draft, `Shift+←/→`
+  extend a selection, and `Option+←/→` move by a word (a terminal sends those as `Alt+B` and
+  `Alt+F`). `Ctrl+Backspace` means the same as `Ctrl+W`, where the terminal can send it at
+  all: measured, `Option+Backspace` in Ghostty is indistinguishable from Backspace, so it
+  cannot be given a meaning of its own.
+
+### Fixed
+
+- Pasting into the composer no longer wrecks the screen. A paste arrives as one key event with
+  the clipboard's every character in it, newlines included, and a newline went into a cell and
+  then into the frame itself — which pushed every row after it sideways and left the room
+  unreadable until it was restarted. Control characters are now stripped where text enters
+  (newlines and tabs become spaces, so a pasted paragraph is one message) and again at the
+  canvas, which will not hold one whoever hands it over. That second half matters beyond
+  pasting: a chat message from another client is data, and until now one containing a newline
+  would have redrawn your screen wrong.
+- Copying works on Windows. A selection there was silently thrown away the instant you reached
+  for `Ctrl+C` — in the conversation *and* in the composer — so the key found nothing to copy
+  and left the room instead, which made copying impossible on that platform. Windows sends a
+  key event carrying a NUL for the Ctrl key itself ahead of every ctrl chord, and it was being
+  taken for a keypress: in the composer it replaced the selection, as typing over one should,
+  and in the conversation it put the selection away, as any key should. It is not a keypress,
+  and now nothing sees it.
+- The composer wraps instead of running off the edge. Typing past the width of the chat pane
+  used to push what you were writing out of sight, with no scroll and no second line; the
+  input now grows upward as the draft wraps — up to six rows, or a third of the pane, and past
+  that it scrolls to keep the cursor in view and marks the rows above with `…`. The log gives
+  up the rows it takes and gets them back when the message is sent.
+
+### Changed
+
+- **New `settings.json` keys: `mouse` and `copyOnSelect`**, both `"on"` or `"off"`, both with a
+  row under Advanced. `mouse` is on by default and absent reads as on, so nothing needs doing.
+  Turn it off to hand click, drag and wheel back to the terminal along with its own selection;
+  it takes effect on the spot. For one drag without turning anything off, hold the key your terminal uses to
+  override an application's mouse — Shift in Ghostty, Windows Terminal and most others,
+  Option in iTerm2, Fn in Terminal.app — which the setting's own line of help names for the
+  terminal you are actually in.
+- `copyOnSelect` is **off** by default and absent reads as off: letting go of a drag leaves the
+  selection up and does not touch the clipboard, because a stray drag should not overwrite what
+  you were carrying. `Ctrl+C` is what copies. Turn it on under Advanced for the other
+  behaviour, where releasing the button is enough.
+
 ## [0.6.3] - 2026-09-11
 
 ### Added

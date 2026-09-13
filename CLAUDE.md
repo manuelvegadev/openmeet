@@ -80,9 +80,11 @@ The client. Module `github.com/manuelvegadev/openmeet/packages/go`, Go 1.25, cgo
 | `internal/rtc` | pion: one PeerConnection per peer, three transceivers in order on both offerer and answerer paths, `polite = myID < peerID`, retries, ICE RTTs; Opus PT 111 (`minptime=10;useinbandfec=1`), H.264 PT 102 (`42e01f`, packetization-mode 1); **one `TrackLocalStaticRTP` (audio) and two `TrackLocalStaticSample` (webcam, screen) bound to every connection** — encode once; `LeanInterceptors` (RTCP reports only); the `transport.Net` wrapper marking sockets DSCP EF / `SO_NET_SERVICE_TYPE` voice |
 | `internal/audio` | `shim.c` compiles miniaudio in with `MA_NO_*` trims; the device callbacks stay in C and copy into lock-free `ma_pcm_rb` rings — **no audio thread ever enters Go** (a Go callback cost 1.9% for the devices alone against 0.3% in C). `Pump` runs every 20 ms on a locked OS thread at audio priority: capture ring → voice gate (`gate.go`, a port of the Node one, same tests) → Opus (FEC on) → packets with capture-clock timestamps; playout (`playout.go`: per-peer RFC 3550 jitter target 2–6 frames, `DecodeFEC`, PLC, quiet-frame catch-up) → mixer → playback ring prefilled with silence. `vpio_darwin.c` is Apple's Voice Processing I/O unit (Voice Isolation, AEC, gain) as the default macOS path; on Windows the same setting opens the capture in `AudioCategory_Communications`, which is how the endpoint driver's own echo cancellation, noise suppression and gain — and Windows Studio Effects on a machine with an NPU — are asked for (it needs eight marked lines of patch in vendored miniaudio, written down in `internal/audio/miniaudio/PATCHES.md`, because the category can only be set between creating the audio client and initialising it). What that is worth depends on the endpoint: a laptop's microphone usually brings an APO, a USB interface often brings nothing. `agc.go` is ours for those: it levels the voice and nothing else, adapting only while there is a voice to measure. Devices open at their **own** rate and `resample.go` — a port of the Node client's polyphase resampler, 83–89 dB SNR — converts both directions, because miniaudio's own converter is linear interpolation and a 44.1 kHz interface sounded duller through it than through Apple's unit. `om_watch` installs CoreAudio listeners (nominal rate, default devices) **before** opening, miniaudio's stop/reroute notifications cover Windows; either → sleep 300 ms → reopen by name (default fallback) → drain duplicates — this is what keeps a Bluetooth profile switch (44.1 k → 16 k) from turning robotic. Adaptive playback headroom (+20 ms after late ticks, first second ignored). `priority_*.go`: `HIGH_PRIORITY_CLASS` + MMCSS Pro Audio on Windows, QoS user-interactive on macOS |
 | `internal/video` | ffmpeg captures and encodes H.264 with the hardware encoder (`-init_hw_device videotoolbox … hwupload,scale_vt` keeps scaling on the GPU: 29% of a core against 103–133% for the CPU chains; NVENC via `ddagrab` D3D11, gdigrab fallback), Annex-B with AUDs split into access units in Go, keyframe every second, 8 s silence watchdog; `Receiver` rebuilds frames with pion's `samplebuilder` and pipes to `ffplay -f h264`. Screens: avfoundation + `system_profiler` names on macOS, PowerShell `AllScreens` on Windows, cached 60 s. `Encoder()` picks videotoolbox / nvenc / amf / qsv / libx264 |
-| `internal/tui` | Ink's output, redrawn — with one deliberate exception, the settings screen, which has sections (Audio, Video, Advanced, Other; ←→) and the cost/quality bars under them, so `testdata/settings*.txt` are our own frames rather than Ink's: `canvas.go` (cells, spans, wrap), `theme.go` (the palette from `theme.ts`, `ColorForName`), `chips.go`, `frame.go` (`Centered` with Ink's rounding — centred Text floors, chip rows ceil, an extra row in centred screens), one file per screen, `model.go` (every key the Node client had; the `Room` and `Host` interfaces), `golden_test.go` against `testdata/*.{txt,json}` captured from the Node app at 120x34 — text, colours and bold. Bubble Tea writes only changed lines: 139 B/s in a call |
+| `internal/tui` | Ink's output, redrawn — with one deliberate exception, the settings screen, which has sections (Audio, Video, Advanced, Other; ←→) and the cost/quality bars under them, so `testdata/settings*.txt` are our own frames rather than Ink's: `canvas.go` (cells, spans, wrap), `theme.go` (the palette from `theme.ts`, `ColorForName`), `chips.go`, `frame.go` (`Centered` with Ink's rounding — centred Text floors, chip rows ceil, an extra row in centred screens), one file per screen, `model.go` (every key the Node client had; the `Room` and `Host` interfaces), `golden_test.go` against `testdata/*.{txt,json}` captured from the Node app at 120x34 — text, colours and bold. Bubble Tea writes only changed lines: 139 B/s in a call. The mouse is mode 1002 (`hitmap.go`, `mouse.go`): screens register what they draw as they draw it — `DrawHints` every chip, `DrawSelect` every row, `DrawTabs` every tab — and a click **sends the key the chip already shows** through the ordinary key handler, so nothing is stated twice and a disabled chip registers nothing. `selection.go` is our own selection, two positions in the conversation rather than cells on screen, bridged by the offsets `WrapOffsets` records: it can only contain text, and a wrapped message copies as one line. `toast.go` is the notice row over the composer, which is also where the key that copies a selection is shown. The composer is a text field: it wraps and grows upward as a draft does, up to six rows or a third of the pane, then scrolls with the cursor (`wrapDraft`, which unlike `Wrap` keeps every rune — an editor may not drop what was typed), and it is a selectable region like the log, so the caret follows a click and what is selected is what a backspace or a paste replaces |
 | `internal/engine` | The room session: dial, rejoin with backoff (1 s → 30 s) as a newcomer, message handling (screen state re-broadcast to joiners, `camOn` on mute-state), stats loop (kbps, RTT, loss, latency), snapshots for the TUI, screen budget |
-| `internal/settings` | The same `settings.json` as the Node client, field for field (+ `audioProcessing`), BOM-tolerant |
+| `internal/settings` | The same `settings.json` as the Node client, field for field (+ `audioProcessing`, `mouse`, `copyOnSelect`), BOM-tolerant |
+| `internal/keyboard` | The kitty keyboard protocol, for the one thing the legacy encoding cannot express: a chord with Cmd in it. A `Reader` between the tty and Bubble Tea asks the terminal (`CSI ? u`), turns the protocol on where it answers (`CSI = 1 u`), and translates what that changes — `Esc` becomes `CSI 27 u`, `Ctrl+C` becomes `CSI 99;5u` — back into the bytes Bubble Tea has always been handed, keeping `Cmd+C` (`CSI 99;9u`), which never had any. Measured in Ghostty, not read off a spec |
+| `internal/clip` | The clipboard: OSC 52 through the renderer's own writer always — the only route home from a session over SSH — plus `pbcopy`/PowerShell/`wl-copy` when the session is local. Apple's Terminal is the one terminal here that ignores OSC 52, and is covered by `pbcopy` |
 | `internal/update` | GitHub Releases, asked **on every start** and again on `u` from the home screen (a five-minute floor stops a relaunch asking twice; the stored answer is a fallback for a machine with no network, not a budget). The asset is downloaded beside the exe as `openmeet.new[.exe]`, verified by running it with `--version`, and swapped by rename at exit — Windows renames the running exe to `.old.exe`, cleaned on the next start — with `r` relaunching into it and waiting, because a shell prints its prompt when the process it started exits. An answer that is not a version is refused, cached or fresh: `releases/latest` gives whatever release is newest in the repository, which was the retired npm package's tag until the first binary shipped |
 | `scripts/` | `build.sh` (`--deps` stops after libopus, for vet and test), `build-windows.sh`, `install.sh`, `install.ps1`, `win/` (the *optional* Windows Terminal profile and shortcut, the icon, rig launchers). The installers register nothing with the system: no Start Menu entry, no shortcut, no terminal profile — which terminal the app runs in is the user's to choose, and a shortcut would choose for them |
 
@@ -394,18 +396,43 @@ says otherwise; what was specific to the retired Node client went with it.
 27. **The golden frames are the contract**, not a snapshot to regenerate when a test fails:
     they came from the Node client and they are why the two look alike. Regenerating one is a
     decision to diverge, which the settings screen made on purpose.
+28. **Asking the terminal for the mouse is the same switch as taking its selection away.**
+    There is no mode where both work. Every terminal offers one modifier that hands a single
+    drag back — Shift in Ghostty, Windows Terminal, WezTerm, kitty and VS Code, **Option** in
+    iTerm2, **Fn** in Terminal.app — so a mouse that is on has to say which key that is, and
+    must never ask for Shift itself (XTSHIFTESCAPE), which would take away the only way out.
+    Ours is a setting because the trade is the user's. What replaces the terminal's selection
+    has to be worth it: a selection in text rather than in cells, which cannot pick up the
+    frame and does not cut a wrapped message into rows.
+29. **`Cmd+C` reaches a terminal application only through the kitty keyboard protocol.** A
+    chord with Super in it has no legacy encoding, so pressing it sends *nothing* — measured,
+    not assumed. Turning the protocol on is not free: with its lowest flag, `Esc` becomes
+    `CSI 27 u` and `Ctrl+key` becomes `CSI <code>;5u`, which are most of this keyboard, so
+    `internal/keyboard` translates them back. Enter, Tab and the arrows are untouched, and a
+    terminal that never answers the query never sends a CSI u sequence, so nothing changes
+    there at all.
+30. **A paste is one key event carrying the whole clipboard, newlines and all** — that is what
+    bracketed paste is for, and Bubble Tea hands it over as a single `KeyRunes` with `Paste`
+    set. Nothing splits it for you. And a control character that reaches a cell is written
+    into the frame as itself: one newline in a row shifts every row after it and the screen is
+    unreadable until the app restarts. So text is cleaned where it enters *and* the canvas
+    refuses one on the way in (`Clean`, `Canvas.Set`). The second half is not belt and braces:
+    a chat message from another client is data too. The same rule decides what counts as
+    *typing*: Windows sends a rune event holding a NUL for the Ctrl key itself ahead of every
+    ctrl chord, and taking that for text deleted the selection that the chord — usually the
+    copy — was about to act on. `typed()` answers no to a key with nothing printable in it.
 
 ### Building and releasing
 
-28. **pkg-config paths must be absolute.** A relative `PKG_CONFIG_PATH` resolves from the
+31. **pkg-config paths must be absolute.** A relative `PKG_CONFIG_PATH` resolves from the
     package directory and quietly falls back to Homebrew's dynamic libopus; `otool -L` on the
     binary is the check.
-29. **`go get golang.org/x/sys@latest` bumps `go.mod` to a Go version we do not target.**
+32. **`go get golang.org/x/sys@latest` bumps `go.mod` to a Go version we do not target.**
     Pinned to v0.41.0; `THREAD_PRIORITY_TIME_CRITICAL` is our own constant.
-30. **The vendored miniaudio carries one patch of ours**, eight lines marked
+33. **The vendored miniaudio carries one patch of ours**, eight lines marked
     `/* OpenMeet patch */` and written down in `internal/audio/miniaudio/PATCHES.md`. Re-apply
     it on any upgrade, or Windows silently loses its voice processing.
-31. **A release is the tag and `packages/go/VERSION` agreeing.** The binary reports VERSION
+34. **A release is the tag and `packages/go/VERSION` agreeing.** The binary reports VERSION
     and the updater compares it with the tag it downloaded, so a mismatch would loop; CI
     refuses the tag instead.
-32. **`pnpm prune` in Docker needs `CI=true`** for a non-interactive environment.
+35. **`pnpm prune` in Docker needs `CI=true`** for a non-interactive environment.
