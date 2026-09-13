@@ -53,25 +53,41 @@ export interface ParticipantLeftMessage {
   participantId: string;
 }
 
+// The two WebRTC payloads the server forwards without ever reading. They were
+// `RTCSessionDescriptionInit` / `RTCIceCandidateInit`, which are DOM types: a Node-only package
+// was pulling in the whole browser lib for three fields it never touches. These are the shapes
+// that actually cross the wire — `internal/signal` declares exactly them.
+export interface SessionDescription {
+  type: 'offer' | 'answer' | 'pranswer' | 'rollback';
+  sdp: string;
+}
+
+export interface IceCandidate {
+  candidate: string;
+  sdpMid?: string | null;
+  sdpMLineIndex?: number | null;
+  usernameFragment?: string | null;
+}
+
 export interface OfferMessage {
   type: 'offer';
   fromId: string;
   toId: string;
-  sdp: RTCSessionDescriptionInit;
+  sdp: SessionDescription;
 }
 
 export interface AnswerMessage {
   type: 'answer';
   fromId: string;
   toId: string;
-  sdp: RTCSessionDescriptionInit;
+  sdp: SessionDescription;
 }
 
 export interface IceCandidateMessage {
   type: 'ice-candidate';
   fromId: string;
   toId: string;
-  candidate: RTCIceCandidateInit;
+  candidate: IceCandidate;
 }
 
 // === Chat Messages ===

@@ -1,6 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    // ES2022 and nothing else: this is a Node package, and without the explicit lib the
+    // default pulls in DOM, which is how browser types got into protocol.ts unnoticed.
+    "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "outDir": "./dist",
