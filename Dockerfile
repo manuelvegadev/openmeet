@@ -16,8 +16,11 @@ COPY packages/server/ ./packages/server/
 
 RUN pnpm --filter @openmeet/server build
 
-# Prune dev dependencies
-RUN CI=true pnpm prune --prod
+# Production dependencies only. This reinstalls rather than pruning: the workspace stopped
+# hoisting (07a6d66), so `pnpm prune --prod` at the root leaves packages/server/node_modules
+# empty and nothing resolves `express` from dist/index.js — the store is there, the links into
+# it are not.
+RUN CI=true pnpm install --frozen-lockfile --prod --filter @openmeet/server
 
 # Stage 2: Production
 FROM node:22-alpine
