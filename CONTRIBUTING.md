@@ -51,6 +51,7 @@ Work on a branch named after the change: `feat/windows-audio`, `fix/glare-retry`
 ```bash
 pnpm lint                                        # Biome, for the server and the website
 pnpm build                                       # the server
+docker build -t openmeet-server .                # if you touched the Dockerfile
 (cd packages/go && gofmt -l . && go vet ./... && go test ./...)   # the client, golden frames included
 packages/go/scripts/build.sh && packages/go/openmeet --list-devices   # on a machine with audio devices
 ```

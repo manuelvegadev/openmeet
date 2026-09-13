@@ -51,7 +51,6 @@ Client A <──WebRTC P2P──> Client B
 openmeet/
 ├── package.json              # Root workspace scripts
 ├── pnpm-workspace.yaml       # an explicit list: packages/server, packages/website
-├── .npmrc                    # shamefully-hoist=true
 ├── biome.json                # Shared Biome config
 ├── Dockerfile                # Multi-stage build (server only)
 ├── docker-compose.yml        # Single service, port 3001
@@ -60,8 +59,8 @@ openmeet/
 ├── docs/                     # Architecture docs
 ├── .github/workflows/        # CI/CD workflows
 │   ├── go-client.yml         # vet/test/build both binaries on macOS; GitHub Release on v* tags
-│   ├── lint.yml              # Biome, repository-wide; the root install alone
-│   ├── server.yml            # the server's build (which is its type-check)
+│   ├── lint.yml              # Biome over both packages; the root install alone
+│   ├── server.yml            # the server's type-check, and the image builds
 │   ├── website.yml           # the website build, pull requests only
 │   └── deploy-website.yml    # GitHub Pages deploy of packages/website on push to main
 └── packages/
@@ -76,7 +75,7 @@ The client. Module `github.com/manuelvegadev/openmeet/packages/go`, Go 1.25, cgo
 
 | Package | Purpose |
 |---|---|
-| `cmd/openmeet` | Flags (`--server`, `--room`, `--input-device`/`--output-device` by substring, `--list-devices`, `--no-voice-gate`, `--audio-kbps` 64, `--opus-complexity` 10, `--no-voice-processing`, `--voice-processing-bypass`, `--no-priority`, `--no-video`, `--video-device`, `--test-screen`/`--test-camera`, `--headless`, `--debug`, `--cpuprofile`, `--no-auto-update`, `--version`); the settings store and device source the TUI talks to (effects devices — Wave Link FX, NVIDIA Broadcast — labelled and first; a raw Wave mic points at its FX sibling; the Bluetooth note); the updater wiring; the Bubble Tea program fed through an events channel (never `program.Send` before `Run`: it deadlocks) |
+| `cmd/openmeet` | Flags (`--server`, `--room`, `--input-device`/`--output-device` by substring, `--list-devices`, `--no-voice-gate`, `--audio-kbps` and `--opus-complexity` (both 0 — meaning the saved setting, 128 kbps and 10, stands), `--no-voice-processing`, `--voice-processing-bypass`, `--no-priority`, `--no-video`, `--video-device`, `--test-screen`/`--test-camera`, `--headless`, `--debug`, `--cpuprofile`, `--no-auto-update`, `--version`); the settings store and device source the TUI talks to (effects devices — Wave Link FX, NVIDIA Broadcast — labelled and first; a raw Wave mic points at its FX sibling; the Bluetooth note); the updater wiring; the Bubble Tea program fed through an events channel (never `program.Send` before `Run`: it deadlocks) |
 | `internal/signal` | The WebSocket protocol, field for field with `packages/server/src/protocol.ts`; `Dial`, `Send`, `Incoming` |
 | `internal/rtc` | pion: one PeerConnection per peer, three transceivers in order on both offerer and answerer paths, `polite = myID < peerID`, retries, ICE RTTs; Opus PT 111 (`minptime=10;useinbandfec=1`), H.264 PT 102 (`42e01f`, packetization-mode 1); **one `TrackLocalStaticRTP` (audio) and two `TrackLocalStaticSample` (webcam, screen) bound to every connection** — encode once; `LeanInterceptors` (RTCP reports only); the `transport.Net` wrapper marking sockets DSCP EF / `SO_NET_SERVICE_TYPE` voice |
 | `internal/audio` | `shim.c` compiles miniaudio in with `MA_NO_*` trims; the device callbacks stay in C and copy into lock-free `ma_pcm_rb` rings — **no audio thread ever enters Go** (a Go callback cost 1.9% for the devices alone against 0.3% in C). `Pump` runs every 20 ms on a locked OS thread at audio priority: capture ring → voice gate (`gate.go`, a port of the Node one, same tests) → Opus (FEC on) → packets with capture-clock timestamps; playout (`playout.go`: per-peer RFC 3550 jitter target 2–6 frames, `DecodeFEC`, PLC, quiet-frame catch-up) → mixer → playback ring prefilled with silence. `vpio_darwin.c` is Apple's Voice Processing I/O unit (Voice Isolation, AEC, gain) as the default macOS path; on Windows the same setting opens the capture in `AudioCategory_Communications`, which is how the endpoint driver's own echo cancellation, noise suppression and gain — and Windows Studio Effects on a machine with an NPU — are asked for (it needs eight marked lines of patch in vendored miniaudio, written down in `internal/audio/miniaudio/PATCHES.md`, because the category can only be set between creating the audio client and initialising it). What that is worth depends on the endpoint: a laptop's microphone usually brings an APO, a USB interface often brings nothing. `agc.go` is ours for those: it levels the voice and nothing else, adapting only while there is a voice to measure. Devices open at their **own** rate and `resample.go` — a port of the Node client's polyphase resampler, 83–89 dB SNR — converts both directions, because miniaudio's own converter is linear interpolation and a 44.1 kHz interface sounded duller through it than through Apple's unit. `om_watch` installs CoreAudio listeners (nominal rate, default devices) **before** opening, miniaudio's stop/reroute notifications cover Windows; either → sleep 300 ms → reopen by name (default fallback) → drain duplicates — this is what keeps a Bluetooth profile switch (44.1 k → 16 k) from turning robotic. Adaptive playback headroom (+20 ms after late ticks, first second ignored). `priority_*.go`: `HIGH_PRIORITY_CLASS` + MMCSS Pro Audio on Windows, QoS user-interactive on macOS |
@@ -101,7 +100,7 @@ The landing page at **openmeet.manuelvega.dev**, private package, never publishe
 
 **Content and languages.** `src/content/types.ts` is the shape, `en.ts` and `es.ts` the strings, and `src/content/demo.ts` everything that is the same in every language — the demo room's cast and script, the measured install sizes, the chips, the stack. Components read the words through `useCopy()` (`lib/i18n.tsx`) and the rest straight from `demo.ts`, so the two pages cannot drift into showing different demos. English lives at `/` and is the `x-default`; Spanish at `/es/`. Adding a language is a `Copy` file plus an entry in `LANGS`/`PATHS`: `langFromPath` and the header's language links derive from that table rather than naming `es`.
 
-**SEO.** `src/document.tsx` renders the whole `<head>`: title/description per language, canonical, `hreflang` alternates, Open Graph (`public/og.jpg`, 1200×630 from `docs/screenshot.png`) and Twitter cards, and a JSON-LD graph (`SoftwareApplication` with the version read from `packages/go/VERSION` at build time, `FAQPage` mirroring the visible FAQ, `WebSite`). `public/robots.txt` allows everything including the AI crawlers by name; `public/llms.txt` is the plain-text summary for answer engines. The performance pane quotes measured figures only — install sizes (78 MB against Discord's 479 MB and Chrome's 1.4 GB) and the engine's flat 65 MB — never a total-memory number, for the reason recorded in `docs/performance.md` under "Footprint, measured for the website".
+**SEO.** `src/document.tsx` renders the whole `<head>`: title/description per language, canonical, `hreflang` alternates, Open Graph (`public/og.jpg`, 1200×630 from `docs/screenshot.png`) and Twitter cards, and a JSON-LD graph (`SoftwareApplication` with the version read from `packages/go/VERSION` at build time, `FAQPage` mirroring the visible FAQ, `WebSite`). `public/robots.txt` allows everything including the AI crawlers by name; `public/llms.txt` is the plain-text summary for answer engines. The performance pane quotes measured figures only — install sizes (the 12 MB binary against Discord's 479 MB and Chrome's 1.4 GB) and the engine's flat 65 MB — never a total-memory number, for the reason recorded in `docs/performance.md` under "Footprint, measured for the website".
 
 **Deploy.** `deploy-website.yml` runs on pushes to `main` touching `packages/website/**`, then `upload-pages-artifact` → `deploy-pages`. It and `website.yml` (pull requests only, so a push to `main` does not build the same thing twice) share `.github/actions/build-website`: install of that package alone, type-check, build, `check:dist`. GitHub Pages must be set to source "GitHub Actions"; `public/CNAME` carries the domain, and DNS needs `CNAME openmeet → manuelvegadev.github.io` (the `manuelvega.dev` zone is on Cloudflare with a wildcard, so the record must be explicit, and DNS-only until GitHub has issued the certificate).
 
@@ -153,44 +152,28 @@ Express v5 HTTP server + WebSocket signaling + in-memory Maps.
 - **Keepalive**: Server pings all WebSocket clients every 25s to survive reverse proxies
 - **No static files**: The server only exposes the REST API and `/ws`. There is no web client.
 
-## WebRTC Implementation Details
+## WebRTC, and what must not change
 
-### Critical patterns (do NOT change without understanding)
+The connection contract — three transceivers in the order audio, webcam, screen; audio
+`sendrecv` even while muted so the remote `OnTrack` fires; `polite = myID < peerID` for glare;
+retries by the impolite peer only; screen-share state as a WebSocket broadcast rather than a
+renegotiation — is set out for the client we ship in
+[`docs/websocket-webrtc-architecture.md`](docs/websocket-webrtc-architecture.md), which is the
+place to read it and the place to change it. Gotchas 1–3 below restate the three rules a change
+is most likely to break; they are numbered because the Go source cites them by number
+(`engine.go` cites gotcha 3 twice), so they are not free to renumber.
 
-1. **3 transceivers per connection**: Created upfront in the offerer path — index 0 (audio), index 1 (webcam video), index 2 (screen video). This avoids dynamic m-line additions mid-call and ensures both sides have identical transceiver ordering.
+Two things that live nowhere else:
 
-2. **Audio transceiver direction**: Uses `sendrecv` (not `recvonly`) even when no audio track exists. This ensures `ontrack` fires on the remote side, enabling audio level detection and mute state indicators.
+**Per-peer latency estimate** (`internal/engine`, from pion's stats in the same polling loop):
 
-3. **Answerer path uses `addTrack`**: Only `addTrack`-created transceivers are eligible for m-line matching during `setRemoteDescription`. The answerer pre-attaches audio with `addTrack` and lets `setRemoteDescription` create the two video transceivers, then explicitly sets their directions to `sendrecv` BEFORE `createAnswer()`.
+`latency ≈ RTT/2 + max(jitter × 2, 20 ms) + 20 ms`
 
-4. **Glare handling (perfect negotiation)**: Lexicographic ID comparison (`myId < peerId` = polite). Polite peer yields on collision by closing and recreating the connection as answerer (@roamhq/wrtc doesn't support rollback). Impolite peer ignores incoming offer.
+where the last term is capture frame + codec + playback FIFO. Shown in the participant list as
+`~Xms`: dim up to 80 ms, yellow to 150, red beyond.
 
-5. **SDP modification**: our own description gets `stereo=1;sprop-stereo=1` and `maxaveragebitrate` from `audioReceiveKbps` (default 128 kbps — per RFC 7587 that field constrains the *remote* encoder), plus RED promoted ahead of bare Opus. The peer's description is rewritten with `audioSendKbps` before `setRemoteDescription`, which is the only lever on our own encoder.
-
-6. **Connection retry**: Failed connections retry with exponential backoff (1s, 2s, 4s, max 3 attempts). Only the impolite peer (larger ID) retries to avoid simultaneous retry storms.
-
-7. **Screen share via transceiver 2**: `setScreenTrack()` targets the 3rd transceiver (index 2), using `replaceTrack()` + direction toggle (`recvonly` ↔ `sendrecv`) and renegotiates. The renegotiation offer SDP is munged to force `a=sendrecv` on the screen m-line because @roamhq/wrtc may not reflect direction changes.
-
-8. **Webcam via transceiver 1**: `setVideoTrack()` explicitly targets transceiver index 1 to avoid accidentally touching the screen transceiver. Camera mute sends black frames instead of renegotiating.
-
-9. **Screen share state signaling**: `screen-share-state` WebSocket message broadcasts who is screen sharing. Re-broadcasts on `participants.length` change so newcomers learn current state. Remote screen windows close when `isScreenSharing: false` arrives.
-
-### Per-peer latency estimation
-
-The client estimates one-way audio latency per peer using WebRTC stats already collected in the stats polling loop:
-
-`estimated_latency ≈ RTT/2 + max(jitter × 2, 20ms) + 20ms`
-
-- **RTT/2**: network one-way delay from `candidate-pair.currentRoundTripTime` and `remote-inbound-rtp.roundTripTime`
-- **jitter × 2**: jitter buffer estimate (floor 20ms) from `inbound-rtp.jitter`
-- **20ms**: fixed processing overhead (capture frame + encode/decode + playback FIFO)
-
-Displayed in participant list as `~Xms` with color coding: dim (≤80ms), yellow (81–150ms), red (>150ms).
-
-### Remote mute detection
-
-- **WebSocket `mute-state` messages**: Explicit mute state broadcast on join, toggle, and participant change
-- **Stream track check**: Fallback when no mute state has been received yet
+**Remote mute** comes from the `mute-state` broadcast, sent on join, on toggle and whenever the
+participant list changes, so a peer's state is known before they speak.
 
 ## The retired Node client, and where it is now
 
@@ -224,8 +207,9 @@ On pushes and PRs touching `packages/go/**`, on a macOS runner (the only host th
 
 One per unit, each triggered only by the paths that can affect it — a change to the Go client or
 to documentation spends no runner on any of them. `lint.yml` runs Biome and installs the root
-project alone, because Biome reads source rather than types; its trigger is repository-wide
-because `biome check .` is. `server.yml` builds the server, which is how it is type-checked.
+project alone, because Biome reads source rather than types. Its paths cover both packages and
+the files that pin Biome itself, since `biome check .` walks everything `biome.json` includes
+rather than one package. `server.yml` builds the server, which is how it is type-checked.
 `website.yml` builds the site on pull requests only, since a push to `main` goes to
 `deploy-website.yml`, which runs the same shared action before publishing.
 
@@ -236,30 +220,26 @@ What a change costs:
 | `packages/go/**` | `go-client.yml` |
 | `packages/server/**` | `server.yml`, `lint.yml` |
 | `packages/website/**` | `lint.yml`, then `website.yml` on a PR or `deploy-website.yml` on `main` |
+| `packages/go/VERSION` | `go-client.yml`, and `deploy-website.yml` — the page prints the version |
+| `Dockerfile` | `server.yml`, which builds the image |
+| the root manifests or the lockfile | all three Node workflows |
 | docs, `*.md` | none |
 
 Note that **GitHub Actions does not resolve YAML anchors**, so each workflow writes its path
 list out in full.
 
-### Workflow: `publish-terminal.yml` (removed Sept 2026)
-
-Automated npm publishing of `openmeet-terminal` via GitHub Actions, kept here as the record of how it worked.
-
-- **Trigger**: Push tags matching `terminal-v*` (e.g. `terminal-v0.1.0`)
-- **Steps**: checkout → pnpm + Node 22 setup → install → build shared → build terminal → publish to npm → create GitHub Release
-- **Auth**: none stored. npm **trusted publishing** — the job's OIDC token (`id-token: write`) is exchanged for publish rights against a trusted publisher configured on npmjs.com for this repository and this workflow's filename. Renaming the file or moving the repo breaks the publish until that is updated to match. The tarball is published `--provenance`, so npm shows which commit and which run built it
-- **npm version**: the job installs `npm@latest` first. Trusted publishing needs npm ≥ 11.5.1 and `setup-node` ships whatever npm came with the Node release; `pnpm publish` rewrites the `workspace:` protocol and then delegates to the npm on PATH, so that is the one doing the exchange
-
 ### How to publish a new version
 
 ```bash
 echo 0.6.1 > packages/go/VERSION
+$EDITOR CHANGELOG.md                     # [Unreleased] becomes [0.6.1] - <date>, + the compare link
 git commit -am "chore(go): release 0.6.1"
 git tag v0.6.1
-git push && git push --tags
-# go-client.yml builds both binaries and creates the GitHub Release; clients pick it up within a day
-gh release edit v0.6.1 --notes-file <(...)   # the last step: copy the section into the release
+git push && git push --tags              # go-client.yml builds both binaries and cuts the release
 ```
+
+Then copy that version's section into the release body — the exact command is in
+`CONTRIBUTING.md` under "Releases", which is the one copy of it.
 
 **A release is not finished until `CHANGELOG.md` has its section and the GitHub release carries
 a copy of it.** The workflow leaves the release body empty on purpose — GitHub's generated notes

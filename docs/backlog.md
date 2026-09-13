@@ -7,7 +7,8 @@ value within each section. Measurements live in [performance.md](performance.md)
 
 Each of these is a thing the client does not do yet, with the reason it has not mattered.
 The settings rows that had nothing behind them were removed rather than left lying; their
-fields stay in `settings.json` (see the note on `settings.App`) and what is left of each is
+fields stay in `settings.json` (the comment on `App` in `packages/go/internal/settings/settings.go`
+says which and why) and what is left of each is
 here.
 
 - **Mic Channels.** A microphone wired to input 1 of a stereo pair is averaged with a silent

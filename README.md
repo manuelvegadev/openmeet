@@ -2,7 +2,8 @@
 
 [![release](https://img.shields.io/github/v/release/manuelvegadev/openmeet?logo=github&color=cb3837)](https://github.com/manuelvegadev/openmeet/releases/latest)
 [![go client](https://github.com/manuelvegadev/openmeet/actions/workflows/go-client.yml/badge.svg)](https://github.com/manuelvegadev/openmeet/actions/workflows/go-client.yml)
-[![CI](https://github.com/manuelvegadev/openmeet/actions/workflows/ci.yml/badge.svg)](https://github.com/manuelvegadev/openmeet/actions/workflows/ci.yml)
+[![server](https://github.com/manuelvegadev/openmeet/actions/workflows/server.yml/badge.svg)](https://github.com/manuelvegadev/openmeet/actions/workflows/server.yml)
+[![lint](https://github.com/manuelvegadev/openmeet/actions/workflows/lint.yml/badge.svg)](https://github.com/manuelvegadev/openmeet/actions/workflows/lint.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](#license)
 
 Lightweight, self-hosted audio/video conferencing from the terminal. Create or join a room, talk over Opus, share your screen or camera, and chat — peer to peer, no account, one 12 MB binary.
@@ -81,8 +82,7 @@ See [docs/websocket-webrtc-architecture.md](docs/websocket-webrtc-architecture.m
 |-------|-----------|
 | Client | Go, pion/webrtc, libopus (static), miniaudio (CoreAudio / WASAPI), Apple Voice Processing I/O, Bubble Tea, ffmpeg/ffplay |
 | Server | Express 5, ws (WebSocket), Node.js 22 |
-| Shared types | TypeScript |
-| Monorepo | pnpm workspaces (server, shared, website) + a Go module |
+| Monorepo | a pnpm workspace of two (server, website) + a Go module |
 | Lint/format | Biome (TypeScript), gofmt / go vet |
 | Containerization | Docker (multi-stage Alpine build, server only) |
 
@@ -92,10 +92,8 @@ See [docs/websocket-webrtc-architecture.md](docs/websocket-webrtc-architecture.m
 openmeet/
 ├── packages/
 │   ├── go/              # the client: one static binary (cmd/openmeet, internal/*)
-│   ├── shared/          # TypeScript types (WebSocket messages, Room, Participant)
-│   ├── server/          # Express + WebSocket signaling + chat
-│   ├── website/         # openmeet.manuelvega.dev, static landing page (English and Spanish)
-│   └── terminal/        # the retired Node/Ink client, kept as the reference the Go one was drawn from
+│   ├── server/          # Express + WebSocket signaling + chat, and protocol.ts (the wire types)
+│   └── website/         # openmeet.manuelvega.dev, static landing page (English and Spanish)
 ├── Dockerfile
 ├── docker-compose.yml
 └── pnpm-workspace.yaml
@@ -119,8 +117,8 @@ Everything else about the client — flags, releasing, how the updater works, wh
 
 ```bash
 pnpm install
-pnpm dev            # server on :3001 and the shared package in watch mode
-pnpm build          # shared → server
+pnpm dev            # server on :3001, in watch mode
+pnpm build          # type-check and compile the server
 pnpm lint           # Biome
 ```
 
@@ -160,7 +158,7 @@ NODE_ENV=production node packages/server/dist/index.js
 
 ## The Node client
 
-`openmeet-terminal` on npm was the client until September 2026 and is retired: no further versions are published, and its source left this tree in September 2026. Git keeps all of it at the `terminal-v0.5.2` tag — `git show terminal-v0.5.2:packages/terminal/README.md` — and npm still serves its page. Its last version still works against the same server, without video towards Go peers (it has no H.264).
+`openmeet-terminal` on npm was the client until September 2026 and is retired: no further versions are published and its source has left this tree. Git keeps all of it at the `terminal-v0.5.2` tag. The last published version still talks to the same server, without video towards Go peers — it has no H.264.
 
 ## License
 

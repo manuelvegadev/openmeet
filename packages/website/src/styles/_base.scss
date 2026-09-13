@@ -1,11 +1,10 @@
 @use 'tokens' as *;
 
-// The app's palette, copied by hand: the chrome and state colours from
-// packages/terminal/src/lib/theme.ts, the name colours (--yellow/--blue/--purple/--fuchsia)
-// from its NAME_PALETTE in lib/identity.ts, plus the greys this page needs and the app does
-// not. Copied rather than imported because the website must not depend on openmeet-terminal —
-// that would drag the client's native modules into every deploy, which is exactly what the
-// `--filter @openmeet/website...` install exists to avoid. Keep them in step by hand.
+// The app's palette, copied by hand: the chrome and state colours and the name colours
+// (--yellow/--blue/--purple/--fuchsia), plus the greys this page needs and the app does not.
+// The client is a Go binary, so there is nothing here to import from — the values live in
+// packages/go/internal/tui/theme.go (ThemeAccent and the rest, ColorForName for the names),
+// which is itself a copy of the retired Node client's theme.ts. Keep them in step by hand.
 :root {
   --bg: #0b0b0b;
   --text: #e8e8e8;

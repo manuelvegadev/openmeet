@@ -1,6 +1,7 @@
-// Package signal speaks the server's WebSocket protocol — the same JSON the Node client
-// sends, so a Go client and a Node client can share a room while the migration runs.
-// The shapes mirror packages/server/src/protocol.ts; keep them in step by hand.
+// Package signal speaks the server's WebSocket protocol. The shapes mirror
+// packages/server/src/protocol.ts field for field and are kept in step by hand: Go cannot
+// import TypeScript, and every field here is `omitempty`, so a tag that stops matching
+// unmarshals to a zero value rather than to an error.
 package signal
 
 import (
