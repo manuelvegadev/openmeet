@@ -6,7 +6,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 
 # Copy workspace config
-COPY package.json pnpm-workspace.yaml .npmrc pnpm-lock.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY packages/server/package.json ./packages/server/
 
 # The website is the other workspace member and has no business in a server image.
@@ -26,7 +26,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 
-COPY --from=builder /app/package.json /app/pnpm-workspace.yaml /app/.npmrc ./
+COPY --from=builder /app/package.json /app/pnpm-workspace.yaml ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
 COPY --from=builder /app/packages/server/package.json ./packages/server/
