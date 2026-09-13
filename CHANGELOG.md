@@ -12,6 +12,8 @@ matrix in the README, not a version of its own.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-13
+
 ### Added
 
 - The mouse works. Every button on screen is clickable and does exactly what its key does, the
@@ -206,7 +208,8 @@ Versions before 0.6.0 were the Node client, published to npm as `openmeet-termin
 `terminal-v*` tags. They are not restated here; their releases remain on the
 [tags page](https://github.com/manuelvegadev/openmeet/tags).
 
-[Unreleased]: https://github.com/manuelvegadev/openmeet/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/manuelvegadev/openmeet/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/manuelvegadev/openmeet/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/manuelvegadev/openmeet/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/manuelvegadev/openmeet/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/manuelvegadev/openmeet/compare/v0.6.0...v0.6.1
