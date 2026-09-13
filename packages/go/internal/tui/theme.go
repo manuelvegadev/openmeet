@@ -16,6 +16,10 @@ const (
 	ThemeWarn      = "#FB923C"
 	ThemeDanger    = "#F87171"
 	ThemeInfo      = "#7DD3FC"
+	// Ours, with no equivalent in theme.ts: the Node client never selected anything. The
+	// accent at a background's luminance, so a selection reads as this application's and not
+	// as the terminal's own blue.
+	ThemeSelection = "#3A2F00"
 )
 
 // Chat usernames by hash, for a peer whose client sent no colour.

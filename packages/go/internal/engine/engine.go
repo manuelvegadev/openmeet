@@ -258,6 +258,10 @@ func (e *Engine) StartScreen(d video.Device) error {
 			e.mu.Unlock()
 			if was {
 				e.notice(tui.KindInfo, "", "", "Screen share ended: "+reason)
+				// The one thing here nobody asked for: a share that stops on its own — the
+				// silence watchdog, a permission the system never granted — is worth saying
+				// out loud, because the chip going back to "share" looks like it worked.
+				e.Emit(tui.Toast{Kind: "warn", Text: "Screen share ended: " + reason})
 				e.sendScreenState()
 				e.snapshot()
 			}

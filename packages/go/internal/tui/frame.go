@@ -89,6 +89,7 @@ func Centered(c *Canvas, area Rect, lines [][]Span) {
 				x = area.X + (area.W-w+1)/2
 			}
 			c.PutSpans(x, y, line, area.X+area.W)
+			HotChips(c, x, y, line)
 		}
 		y++
 	}

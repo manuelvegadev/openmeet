@@ -95,7 +95,7 @@ func DrawDevices(c *Canvas, s DevicesState) {
 		c.Put(area.X, y, "Input (Microphone):", Style{Bold: true}, area.X+area.W)
 	}
 	y++
-	n := DrawSelect(c, Rect{area.X, y, area.W, area.Y + area.H - y}, s.Items, s.Idx)
+	n := DrawSelect(c, Rect{area.X, y, area.W, area.Y + area.H - y}, s.Items, s.Idx, "devices")
 	if s.Hint != "" {
 		// A blank row, then the note, as the Node client set its Broadcast hint.
 		for i, line := range Wrap([]Span{{s.Hint, Style{FG: ThemeInfo}}}, area.W) {

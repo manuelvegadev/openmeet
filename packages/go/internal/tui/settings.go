@@ -122,11 +122,17 @@ func DrawSettings(c *Canvas, s SettingsState) {
 		}
 	}
 	body := Rect{area.X, helpTop + helpRows + 1, area.W, legendY - 1 - (helpTop + helpRows + 1)}
+	c.Hot(body, Action{Kind: ActScroll, ID: "settings"})
 	rowY := body.Y
 	for _, i := range RowsForTab(s.Rows, tab) {
 		row := s.Rows[i]
 		if rowY >= body.Y+body.H {
 			break
+		}
+		// A settings row is picked by a click and acted on by the next one: the first click
+		// only brings its line of help up, which is what you came to read before changing it.
+		if !row.Disabled {
+			c.Hot(Rect{body.X, rowY, area.W, 1}, Action{Kind: ActRow, ID: "settings", Idx: i})
 		}
 		selected := i == s.Selected
 		Pointer(c, body.X, rowY, selected)
@@ -146,7 +152,7 @@ func DrawSettings(c *Canvas, s SettingsState) {
 		rowY++
 	}
 	if s.PickerTitle != "" {
-		DrawModal(c, s.PickerTitle, s.Picker, s.PickerIdx, pickHints)
+		DrawModal(c, s.PickerTitle, s.Picker, s.PickerIdx, pickHints, "picker")
 	}
 }
 
@@ -178,6 +184,7 @@ func DrawTabs(c *Canvas, x, y, max int, tabs []string, active int) {
 		}
 		left := x + 2
 		x = c.Put(left, y, name, st, max) + 2
+		c.Hot(Rect{left - 1, y, x - left, 1}, Action{Kind: ActTab, Idx: i})
 		if i == active {
 			from, to = left-1, x-1
 		}
@@ -225,8 +232,11 @@ func meterColor(frac float64, good bool) string {
 }
 
 // DrawSelect draws a list the way the pickers do: the marker cell, a space, the label, bold
-// on the current row. Returns the rows used.
-func DrawSelect(c *Canvas, area Rect, items []string, idx int) int {
+// on the current row. Returns the rows used. list names the list for the mouse: its rows are
+// registered as clickable, and a click on one both picks it and confirms it, because a list
+// like this is a question with an Escape on it rather than a thing to browse.
+func DrawSelect(c *Canvas, area Rect, items []string, idx int, list string) int {
+	c.Hot(area, Action{Kind: ActScroll, ID: list})
 	for i, label := range items {
 		y := area.Y + i
 		if y >= area.Y+area.H {
@@ -234,6 +244,7 @@ func DrawSelect(c *Canvas, area Rect, items []string, idx int) int {
 		}
 		Pointer(c, area.X, y, i == idx)
 		c.Put(area.X+2, y, label, Style{Bold: i == idx}, area.X+area.W)
+		c.Hot(Rect{area.X, y, area.W, 1}, Action{Kind: ActRow, ID: list, Idx: i, Go: true})
 	}
 	return len(items)
 }

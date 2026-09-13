@@ -14,13 +14,16 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/manuelvegadev/openmeet/packages/go/internal/audio"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/clip"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/engine"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/keyboard"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/settings"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/tui"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/update"
@@ -60,6 +63,10 @@ func (st *store) SetIdentity(name, color string) {
 func (st *store) InputID() string         { return settings.Str(st.s.AudioInputID) }
 func (st *store) OutputID() string        { return settings.Str(st.s.AudioOutputID) }
 func (st *store) DevicesConfigured() bool { return st.s.DevicesConfigured }
+
+// Absent means on: a settings.json written before this client had a mouse still gets one.
+func (st *store) Mouse() bool        { return st.s.Mouse != "off" }
+func (st *store) CopyOnSelect() bool { return st.s.CopyOnSelect == "on" }
 func (st *store) SetDevices(in, out string) {
 	st.s.AudioInputID, st.s.AudioOutputID, st.s.DevicesConfigured = settings.Ptr(in), settings.Ptr(out), true
 	_ = settings.Save(st.s)
@@ -146,6 +153,10 @@ func (st *store) Rows() []tui.SettingsRow {
 			Help: "What each person watching gets, whoever else is watching: the share is encoded once, on the GPU, and the same picture goes to everyone. Only the upload multiplies — measured, the sender's CPU does not move with the number of peers."},
 		tui.SettingsRow{Tab: "Advanced", Label: "Upload Ceiling", Choices: uploadLabels(), Choice: slices.Index(uploadSteps, s.ScreenUploadKbps), Suffix: "Mbps for a share, everyone together",
 			Help: "Off means each viewer gets the rate you chose and your upload carries the rest: five people watching at 2500 kbps is 12.5 Mbps up. Set it and everyone's rate comes down together instead; it is read when a share starts."},
+		tui.SettingsRow{Tab: "Advanced", Label: "Mouse", Choices: []string{"on", "off"}, Choice: boolChoice(st.Mouse()),
+			Help: "Click the buttons, scroll the pane under the pointer, and drag across the conversation to select and copy it. " + mouseHelpText()},
+		tui.SettingsRow{Tab: "Advanced", Label: "Copy on Select", Choices: []string{"off", "on"}, Choice: boolChoice(!st.CopyOnSelect()),
+			Help: "Off, a selection waits and ctrl+c copies it, so a stray drag cannot overwrite what you were carrying. On, letting go of the button is enough.", Disabled: !st.Mouse()},
 		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Choices: numbers(complexitySteps), Choice: slices.Index(complexitySteps, s.OpusComplexity),
 			Help: "How hard the encoder works for the same bitrate: 10 is the best sound per kbps and the most CPU, 1 the cheapest. It never changes what is sent."},
 		tui.SettingsRow{Tab: "Other", Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color(),
@@ -283,6 +294,8 @@ var (
 	// The two-state rows, in the order their chips are drawn.
 	processingValues = []string{"system", "raw"}
 	micLevelValues   = []string{"auto", "off"}
+	mouseValues      = []string{"on", "off"}
+	copyValues       = []string{"off", "on"}
 	// In kbps, as they are stored; 0 is no ceiling, and the row prints them in Mbps.
 	uploadSteps     = []int{0, 5000, 10000, 20000, 50000}
 	audioKbpsSteps  = []int{64, 96, 128, 192, 256}
@@ -333,6 +346,10 @@ func (st *store) Run(idx int) string {
 		s.MicLevel = cycle(micLevelValues, s.MicLevel)
 	case "Upload Ceiling":
 		s.ScreenUploadKbps = cycleNumber(uploadSteps, s.ScreenUploadKbps)
+	case "Mouse":
+		s.Mouse = cycle(mouseValues, s.Mouse)
+	case "Copy on Select":
+		s.CopyOnSelect = cycle(copyValues, s.CopyOnSelect)
 	case "Opus Complexity":
 		s.OpusComplexity = cycleNumber(complexitySteps, s.OpusComplexity)
 	case "Voice Gate":
@@ -345,6 +362,71 @@ func (st *store) Run(idx int) string {
 		s.AutoUpdate = cycle(updatePolicies, s.AutoUpdate)
 	}
 	_ = settings.Save(st.s)
+	return ""
+}
+
+type ttyWriter struct {
+	*os.File
+	mu sync.Mutex
+}
+
+func (w *ttyWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.File.Write(p)
+}
+
+// mouseHelp names the key that hands one drag back to the terminal, for the times its own
+// selection is what you want — a column out of a table, or text from the pane beside this
+// one. Which key it is belongs to the terminal, not to us, so it is worth printing.
+// The answer cannot change while the process runs, and Rows() is rebuilt on every frame of
+// the settings screen.
+var mouseHelpText = sync.OnceValue(mouseHelp)
+
+func mouseHelp() string {
+	switch key := bypassKey(); key {
+	case "":
+		return "Hold Shift while dragging — Option in iTerm2, Fn in Terminal.app — for your terminal's own selection instead."
+	default:
+		return "Hold " + key + " while dragging for your terminal's own selection instead."
+	}
+}
+
+// The chord that copies, named the way the system a person is sitting at names it. Two of
+// them, because on macOS which one it is depends on the terminal: ctrl+c always works, and
+// Cmd+C only once the terminal has said it can send it (internal/keyboard).
+func defaultCopyKey() string {
+	if runtime.GOOS == "windows" {
+		// Windows writes it this way everywhere else on the system, so it writes it this way
+		// here too — even though every other chip in this interface is lower case.
+		return "Ctrl+C"
+	}
+	return "ctrl+c"
+}
+
+func copyChordName() string {
+	if runtime.GOOS == "darwin" {
+		return "\u2318C"
+	}
+	return defaultCopyKey()
+}
+
+func bypassKey() string {
+	if os.Getenv("TMUX") != "" || os.Getenv("SSH_TTY") != "" {
+		// The terminal at the far end is the one that decides, and we cannot see it.
+		return ""
+	}
+	if os.Getenv("WT_SESSION") != "" {
+		return "Shift"
+	}
+	switch os.Getenv("TERM_PROGRAM") {
+	case "Apple_Terminal":
+		return "Fn"
+	case "iTerm.app":
+		return "Option"
+	case "ghostty", "WezTerm", "vscode", "Hyper", "kitty":
+		return "Shift"
+	}
 	return ""
 }
 
@@ -678,6 +760,7 @@ func main() {
 	host := tui.Host{
 		Version: Version, Platform: name, Features: features,
 		Settings: st, Devices: dev,
+		CopyKey:     defaultCopyKey(),
 		InitialRoom: *room, InputFlag: *inDev, OutputFlag: *outDev,
 		Screens:    func() []tui.VideoChoice { return choices(video.Screens()) },
 		AllCameras: func() []tui.VideoChoice { return choices(video.Cameras()) },
@@ -776,7 +859,36 @@ func main() {
 	host.JustUpdated = justUpdated
 
 	model := tui.New(host)
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	// Everything the terminal is told goes through one writer with a lock on it: the
+	// renderer writes a whole frame in a single call, and the clipboard's OSC 52 escape goes
+	// down the same pipe, so the sequence cannot land in the middle of a frame. It still has
+	// to look like a file, because Bubble Tea asks whether its output is a terminal before
+	// it will report a window size — hence the embedded *os.File rather than a plain wrapper.
+	out := &ttyWriter{File: os.Stdout}
+	clip.Terminal(out)
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithOutput(out)}
+	// Cmd+C has no bytes in the encoding a terminal has used since the seventies, so a
+	// terminal application never sees it. The kitty keyboard protocol is the one way to be
+	// told, and internal/keyboard is the reader that speaks it — on the terminals that have
+	// it. Everywhere else this changes nothing and ctrl+c stays the key.
+	var keys *keyboard.Reader
+	if os.Getenv("OPENMEET_NO_KITTY") == "" {
+		keys = keyboard.New(os.Stdin, out,
+			func(c keyboard.Chord) {
+				if c.Code == 'c' {
+					emit(tui.Copy{})
+				}
+			},
+			func(int) { emit(tui.CopyKey{Name: copyChordName()}) })
+		opts = append(opts, tea.WithInput(keys))
+	}
+	if st.Mouse() {
+		// Mode 1002: presses, releases, the wheel, and motion only while a button is down.
+		// Nothing is reported while the pointer merely crosses the screen, so an idle window
+		// costs what it always did.
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	program := tea.NewProgram(model, opts...)
 	go func() {
 		for msg := range events {
 			program.Send(msg)
@@ -792,6 +904,9 @@ func main() {
 	}()
 	if _, err := program.Run(); err != nil {
 		log.Fatal(err)
+	}
+	if keys != nil {
+		keys.Disable()
 	}
 	// The app is gone from the terminal and holds nothing: the one moment to swap the binary.
 	if update.Pending() != "" && policy == "auto" {

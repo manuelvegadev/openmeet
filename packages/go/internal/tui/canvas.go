@@ -35,10 +35,17 @@ type cell struct {
 type Canvas struct {
 	W, H  int
 	cells [][]cell
+	// What the mouse can land on, in the order it was drawn: see the hit map in hitmap.go.
+	// barrier is where a modal drew over everything before it.
+	hots         []hotspot
+	barrier      int
+	texts        map[string][]TextRow
+	textsBlocked bool
 }
 
 func NewCanvas(w, h int) *Canvas {
-	c := &Canvas{W: w, H: h, cells: make([][]cell, h)}
+	// The hit map is rebuilt every frame; sized once here it never has to grow.
+	c := &Canvas{W: w, H: h, cells: make([][]cell, h), hots: make([]hotspot, 0, 64)}
 	for y := range c.cells {
 		c.cells[y] = make([]cell, w)
 		for x := range c.cells[y] {
@@ -52,6 +59,10 @@ func NewCanvas(w, h int) *Canvas {
 type Rect struct{ X, Y, W, H int }
 
 func (r Rect) Inset(dx, dy int) Rect { return Rect{r.X + dx, r.Y + dy, r.W - 2*dx, r.H - 2*dy} }
+
+func (r Rect) Contains(x, y int) bool {
+	return x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H
+}
 
 // Fill paints a rectangle with a style, keeping spaces.
 func (c *Canvas) Fill(r Rect, st Style) {
@@ -67,8 +78,13 @@ func (c *Canvas) Fill(r Rect, st Style) {
 	}
 }
 
-// Set puts one character at a cell, wide characters taking two.
+// Set puts one character at a cell, wide characters taking two. A control character never
+// reaches the grid: it would be written into the frame as itself, and a newline in the middle
+// of a row shifts every row after it.
 func (c *Canvas) Set(x, y int, r rune, st Style) int {
+	if isControl(r) {
+		r = ' '
+	}
 	w := runewidth.RuneWidth(r)
 	if w == 0 {
 		w = 1
@@ -89,6 +105,7 @@ func (c *Canvas) Put(x, y int, s string, st Style, maxX int) int {
 	if maxX <= 0 || maxX > c.W {
 		maxX = c.W
 	}
+	s = Clean(s)
 	for _, r := range s {
 		w := runewidth.RuneWidth(r)
 		if w == 0 {
@@ -116,8 +133,48 @@ func (c *Canvas) PutSpans(x, y int, spans []Span, maxX int) int {
 	return x
 }
 
-// Width of a string in cells.
-func Width(s string) int { return runewidth.StringWidth(s) }
+// Width of a string in cells, measured on what would actually be drawn — so what the layout
+// counts and what the canvas paints cannot disagree about a string nobody here wrote.
+func Width(s string) int { return runewidth.StringWidth(Clean(s)) }
+
+// Clean makes a run of text safe to draw and to measure. Text arrives here from places with
+// no reason to be printable — the clipboard, a message from another client — and a newline
+// written into a cell is written into the frame, which moves every row after it. Newlines and
+// tabs become a space, because they were separating something; the rest go.
+func Clean(s string) string {
+	if !hasControl(s) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t':
+			b.WriteRune(' ')
+		case isControl(r):
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// isControl covers C0, DEL and C1 — everything a terminal would read as an instruction
+// rather than as a character.
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) }
+
+// hasControl answers the same question over a whole string without decoding it. Clean sits
+// in front of every Width and every Put, so this runs a few hundred times a frame: C0 and DEL
+// are single bytes, and a C1 can only appear in valid UTF-8 behind the lead byte 0xC2, which
+// also leads U+00A0..U+00BF — those merely fall through to the rune loop, which is correct.
+func hasControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c == 0x7f || c == 0xc2 {
+			return true
+		}
+	}
+	return false
+}
 
 func spansWidth(spans []Span) int {
 	w := 0
@@ -131,22 +188,35 @@ func spansWidth(spans []Span) int {
 // space at the end of the line it closes, and through the middle of a word longer than the
 // width. Styles survive the breaks.
 func Wrap(spans []Span, width int) [][]Span {
+	lines, _ := WrapOffsets(spans, width)
+	return lines
+}
+
+// WrapOffsets is Wrap, and also where each line it produced began: the rune offset into the
+// spans' own text, counted as if they were one string. That is the only bridge a selection
+// needs between the rows on screen and the line they are all part of — click a row, land in
+// the text, and a message wrapped over four rows copies as the one line it is.
+func WrapOffsets(spans []Span, width int) ([][]Span, []int) {
 	if width <= 0 {
-		return [][]Span{spans}
+		return [][]Span{spans}, []int{0}
 	}
 	// Flatten into styled words, where a word is a run of non-spaces or a run of spaces.
 	type piece struct {
 		text  string
 		st    Style
 		space bool
+		off   int
 	}
 	var pieces []piece
+	at := 0
 	for _, sp := range spans {
 		cur := strings.Builder{}
 		curSpace := false
+		curOff := at
 		flush := func() {
 			if cur.Len() > 0 {
-				pieces = append(pieces, piece{cur.String(), sp.St, curSpace})
+				pieces = append(pieces, piece{cur.String(), sp.St, curSpace, curOff})
+				curOff = at
 				cur.Reset()
 			}
 		}
@@ -157,13 +227,20 @@ func Wrap(spans []Span, width int) [][]Span {
 			}
 			curSpace = isSpace
 			cur.WriteRune(r)
+			at++
 		}
 		flush()
 	}
 	var lines [][]Span
+	var offs []int
 	var line []Span
 	lineW := 0
-	push := func(text string, st Style) {
+	lineOff := 0
+	started := false
+	push := func(text string, st Style, off int) {
+		if !started {
+			lineOff, started = off, true
+		}
 		if len(line) > 0 && line[len(line)-1].St == st {
 			line[len(line)-1].Text += text
 		} else {
@@ -173,22 +250,25 @@ func Wrap(spans []Span, width int) [][]Span {
 	}
 	newline := func() {
 		lines = append(lines, line)
+		offs = append(offs, lineOff)
 		line = nil
 		lineW = 0
+		lineOff = 0
+		started = false
 	}
 	for _, p := range pieces {
 		w := Width(p.text)
 		if p.space {
 			// Spaces stay on the line they follow; ones that overflow just vanish at the edge.
 			if lineW+w <= width {
-				push(p.text, p.st)
+				push(p.text, p.st, p.off)
 			} else if lineW < width {
-				push(p.text[:width-lineW], p.st)
+				push(p.text[:width-lineW], p.st, p.off)
 			}
 			continue
 		}
 		if lineW+w <= width {
-			push(p.text, p.st)
+			push(p.text, p.st, p.off)
 			continue
 		}
 		if w <= width {
@@ -196,22 +276,35 @@ func Wrap(spans []Span, width int) [][]Span {
 			if lineW > 0 {
 				newline()
 			}
-			push(p.text, p.st)
+			push(p.text, p.st, p.off)
 			continue
 		}
 		// Longer than a line: break through it.
+		i := 0
 		for _, r := range p.text {
 			rw := runewidth.RuneWidth(r)
 			if lineW+rw > width {
 				newline()
 			}
-			push(string(r), p.st)
+			push(string(r), p.st, p.off+i)
+			i++
 		}
 	}
 	if len(line) > 0 || len(lines) == 0 {
 		lines = append(lines, line)
+		offs = append(offs, lineOff)
 	}
-	return lines
+	return lines, offs
+}
+
+// PlainText is what a line of spans reads as, with nothing of how it was drawn: the string a
+// selection counts its offsets in and a copy puts on the clipboard.
+func PlainText(spans []Span) string {
+	var b strings.Builder
+	for _, sp := range spans {
+		b.WriteString(sp.Text)
+	}
+	return b.String()
 }
 
 // Render serialises the canvas: one line per row, SGR runs, a reset at the end of each.

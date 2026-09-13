@@ -18,8 +18,10 @@ func DrawProfile(c *Canvas, s ProfileState) {
 	if s.Step == "color" {
 		area := Screen(c, "Your colour", []KeyHint{{Key: "↑↓", Label: "colour"}, {Key: "enter", Label: "pick"}, {Key: "esc", Label: "back to name"}})
 		c.Put(area.X, area.Y, fmt.Sprintf("How %s shows up for everyone. ↑↓ to look, enter to pick.", s.Finished), Muted, area.X+area.W)
+		c.Hot(Rect{area.X, area.Y + 2, area.W, len(NamePalette)}, Action{Kind: ActScroll, ID: "colors"})
 		for i, pc := range NamePalette {
 			y := area.Y + 2 + i
+			c.Hot(Rect{area.X, y, area.W, 1}, Action{Kind: ActRow, ID: "colors", Idx: i})
 			Pointer(c, area.X, y, i == s.ColorIdx)
 			x := c.PutSpans(area.X+2, y, []Span{NameSpan(s.Finished, pc.Hex, i == s.ColorIdx)}, area.X+area.W)
 			c.Put(x+1, y, pc.Name, Muted, area.X+area.W)

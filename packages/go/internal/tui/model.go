@@ -61,6 +61,10 @@ type Host struct {
 	CheckUpdate func()
 	// This launch is the first on a version that installed itself.
 	JustUpdated bool
+	// How this system names the chord that copies, before the terminal has said whether it
+	// can send a better one. The interface draws what it is given: which chord a platform
+	// calls what is not something this package can know.
+	CopyKey string
 	// Where to start: the room to join straight away, if the CLI said so.
 	InitialRoom string
 	InputFlag   string
@@ -76,6 +80,11 @@ type SettingsStore interface {
 	CameraID() string
 	DevicesConfigured() bool
 	SetDevices(input, output string)
+	// Whether the terminal's mouse is ours. Off gives the terminal its own selection back,
+	// which is a trade someone may want and so is theirs to make.
+	Mouse() bool
+	// Whether letting go of a drag copies by itself. Off, and ctrl+c does it.
+	CopyOnSelect() bool
 	// The camera a share will use; "" is the system's first.
 	SetCamera(id string)
 	Rows() []SettingsRow
@@ -131,6 +140,12 @@ type textField struct {
 }
 
 func (f *textField) insert(s string) {
+	// A paste arrives here whole, with whatever was on the clipboard in it. What cannot be
+	// drawn cannot be typed either — and a message is sent exactly as it reads.
+	s = Clean(s)
+	if s == "" {
+		return
+	}
 	r := []rune(f.value)
 	r = append(r[:f.cursor], append([]rune(s), r[f.cursor:]...)...)
 	f.value = string(r)
@@ -150,6 +165,47 @@ func (f *textField) backspace() {
 func (f *textField) left()  { f.cursor = max(0, f.cursor-1) }
 func (f *textField) right() { f.cursor = min(len([]rune(f.value)), f.cursor+1) }
 func (f *textField) clear() { f.value = ""; f.cursor = 0 }
+
+// cut removes the runes in [from, to) and leaves the caret where they were, which is what a
+// field does whether the range was selected, backspaced or replaced by a paste.
+func (f *textField) cut(from, to int) {
+	r := []rune(f.value)
+	from, to = clampInt(from, 0, len(r)), clampInt(to, 0, len(r))
+	if from >= to {
+		return
+	}
+	f.value = string(append(append([]rune{}, r[:from]...), r[to:]...))
+	f.cursor = from
+}
+
+// wordStart is where the word before the caret begins: the spaces immediately behind it, and
+// then the run of non-spaces before those — what every field deletes as "the word".
+func (f *textField) wordStart() int {
+	r := []rune(f.value)
+	i := clampInt(f.cursor, 0, len(r))
+	for i > 0 && r[i-1] == ' ' {
+		i--
+	}
+	for i > 0 && r[i-1] != ' ' {
+		i--
+	}
+	return i
+}
+
+// wordEnd is the mirror of it, forward.
+func (f *textField) wordEnd() int {
+	r := []rune(f.value)
+	i := clampInt(f.cursor, 0, len(r))
+	for i < len(r) && r[i] == ' ' {
+		i++
+	}
+	for i < len(r) && r[i] != ' ' {
+		i++
+	}
+	return i
+}
+
+func (f *textField) length() int { return len([]rune(f.value)) }
 
 type Model struct {
 	host   Host
@@ -218,10 +274,33 @@ type Model struct {
 	leaveArmed bool
 	roomName   string
 	debugLines []ChatEntry
+
+	// The mouse works on the frame that is on screen, so the last one drawn is kept: it
+	// carries the hit map the screens registered while drawing and the wrap map the chat
+	// recorded, which is everything a click needs to know.
+	frame           *Canvas
+	mouseOn         bool
+	sel             selection
+	clickCount      int
+	lastClick       time.Time
+	lastClickPos    TextPos
+	lastClickRegion string
+
+	toastText string
+	toastKind string
+	toastGen  int
+	// What the room names as the key that copies. ctrl+c until the terminal says it can
+	// send something better.
+	copyKey string
 }
 
 func New(host Host) *Model {
 	m := &Model{host: host, width: 80, height: 24, anchor: -1, showTick: host.JustUpdated}
+	m.mouseOn = host.Settings.Mouse()
+	m.copyKey = host.CopyKey
+	if m.copyKey == "" {
+		m.copyKey = "ctrl+c"
+	}
 	if host.Settings.Name() == "" || host.Settings.Color() == "" {
 		m.screen = screenProfile
 		m.profileFrom = screenHome
@@ -304,12 +383,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applySnapshot(msg)
 		return m, nil
 	case Line:
-		m.rs.Entries = append(m.rs.Entries, ChatEntry(msg))
+		// Cleaned on arrival as well as on the way out: a message from another client is
+		// data, and the wrap wants real spaces where its newlines were.
+		e := ChatEntry(msg)
+		e.Text, e.Who = Clean(e.Text), Clean(e.Who)
+		m.rs.Entries = append(m.rs.Entries, e)
 		return m, nil
 	case DebugLine:
+		msg.Text = Clean(msg.Text)
 		m.debugLines = append(m.debugLines, ChatEntry(msg))
 		if len(m.debugLines) > 200 {
 			m.debugLines = m.debugLines[len(m.debugLines)-200:]
+			// The panel is a ring, so its indexes move when it rolls. A selection into it
+			// would quietly come to mean different lines; it goes instead.
+			if m.sel.region == "debug" {
+				m.sel.clear()
+			}
 		}
 		return m, nil
 	case tickDoneMsg:
@@ -326,6 +415,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case upToDateDoneMsg:
 		m.upToDate = false
 		return m, nil
+	case toastMsg:
+		if msg.gen == m.toastGen {
+			m.toastText, m.toastKind = "", ""
+		}
+		return m, nil
+	case copiedMsg:
+		return m, m.copied(msg)
+	case Toast:
+		return m, m.toast(msg.Kind, msg.Text)
+	case tea.MouseMsg:
+		return m, m.mouse(tea.MouseEvent(msg))
+	case Copy:
+		return m, m.copyNow()
+	case CopyKey:
+		m.copyKey = msg.Name
+		return m, nil
 	case Left:
 		if m.screen == screenRoom {
 			m.rs.Connected = false
@@ -333,10 +438,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		// Windows sends a rune event carrying a NUL for the Ctrl key itself, ahead of every
+		// ctrl chord. It is not a keypress and must not be treated as one anywhere: it must
+		// not type, and it must not put away the selection that the chord arriving behind it
+		// is about to copy.
+		if msg.Type == tea.KeyRunes && Clean(string(msg.Runes)) == "" {
+			return m, nil
+		}
 		if msg.Type == tea.KeyCtrlC {
+			// With a selection up, Ctrl+C copies. It has to: Shift does not modify a control
+			// character, so Ctrl+Shift+C arrives as this same byte, and Cmd+C never leaves
+			// the terminal on macOS at all. The next press, with nothing selected, quits.
+			if cmd := m.copyNow(); cmd != nil {
+				return m, cmd
+			}
 			m.leaveRoom()
 			m.quit = true
 			return m, tea.Quit
+		}
+		// Any other key is the end of a selection: it was made to be copied, and it has been.
+		// The composer's own is the exception — there a selection is something to type over,
+		// and its keys below decide what becomes of it.
+		if m.sel.region != "input" {
+			m.sel.clear()
 		}
 		switch m.screen {
 		case screenProfile:
@@ -375,6 +499,8 @@ func isRune(msg tea.KeyMsg, r string) bool {
 	return msg.Type == tea.KeyRunes && string(msg.Runes) == r
 }
 
+// typed is whether a key event is text, and what text. A key event with nothing printable in
+// it never gets this far: Update drops it (see the phantom Ctrl key there).
 func typed(msg tea.KeyMsg) (string, bool) {
 	switch msg.Type {
 	case tea.KeyRunes:
@@ -534,28 +660,14 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 	rows := m.host.Settings.Rows()
 	tabs := settingsTabs(rows)
 	m.settingsTab = min(m.settingsTab, max(0, len(tabs)-1))
-	// The selection lives on the tab being shown, so ↑↓ walk that tab's rows and nothing else.
-	visible := []int{}
-	if m.settingsTab < len(tabs) {
-		visible = RowsForTab(rows, tabs[m.settingsTab])
-	}
-	at := 0
-	for i, idx := range visible {
-		if idx == m.settingsIdx {
-			at = i
-		}
-	}
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.screen = screenHome
 	case tea.KeyUp:
-		if len(visible) > 0 {
-			m.settingsIdx = visible[max(0, at-1)]
-		}
+		// The selection lives on the tab being shown: it walks that tab's rows and no others.
+		m.settingsMoveIn(rows, tabs, -1)
 	case tea.KeyDown:
-		if len(visible) > 0 {
-			m.settingsIdx = visible[min(len(visible)-1, at+1)]
-		}
+		m.settingsMoveIn(rows, tabs, 1)
 	case tea.KeyLeft, tea.KeyShiftTab:
 		m.settingsTab = max(0, m.settingsTab-1)
 		m.settingsIdx = firstOfTab(rows, tabs, m.settingsTab)
@@ -577,9 +689,26 @@ func (m *Model) keySettings(msg tea.KeyMsg) tea.Cmd {
 			case "camera":
 				m.openPicker("camera", nil, "")
 			}
+			// The Mouse row is the one setting that changes this program while it runs.
+			return m.syncMouse()
 		}
 	}
 	return nil
+}
+
+// syncMouse brings the terminal into line with the setting, on the spot: turning the mouse
+// off has to give the terminal its own selection back now, not at the next start.
+func (m *Model) syncMouse() tea.Cmd {
+	want := m.host.Settings.Mouse()
+	if want == m.mouseOn {
+		return nil
+	}
+	m.mouseOn = want
+	if want {
+		return tea.EnableMouseCellMotion
+	}
+	m.sel.clear()
+	return tea.DisableMouse
 }
 
 func (m *Model) openPicker(kind string, devices []string, saved string) {
@@ -732,8 +861,11 @@ func (m *Model) keyDevices(msg tea.KeyMsg) tea.Cmd {
 			if m.devTitle == "Audio Setup" {
 				m.joinRoom()
 			} else if m.room != nil {
-				_ = m.room.UpdateDevices(m.devInput, m.devOutput)
 				m.screen = screenRoom
+				if err := m.room.UpdateDevices(m.devInput, m.devOutput); err != nil {
+					return m.toast("warn", "Could not change device: "+err.Error())
+				}
+				return m.toast("ok", "Audio device changed")
 			}
 		case msg.Type == tea.KeyEsc:
 			m.stopMic()
@@ -751,6 +883,8 @@ func (m *Model) joinRoom() {
 	m.draft.clear()
 	m.anchor = -1
 	m.debugLines = nil
+	m.sel.clear()
+	m.toastText, m.toastKind = "", ""
 	m.screen = screenRoom
 	room, err := m.host.Join(m.pendingRoom, m.host.Settings.Name(), m.host.Settings.Color(), m.devInput, m.devOutput)
 	if err != nil {
@@ -783,18 +917,19 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 		case tea.KeyEnter:
 			if m.modalIdx < len(m.modalItems) && m.room != nil {
 				choice := m.modalItems[m.modalIdx]
-				if m.modal == "screen" {
-					m.lastScreen = choice.ID
-					_ = m.room.StartScreen(choice.ID)
-				} else {
-					_ = m.room.StartCamera(choice.ID)
+				kind := m.modal
+				m.modal = ""
+				if kind == "screen" {
+					return m.startScreen(choice.ID, choice.Label)
 				}
+				return m.startCamera(choice.ID)
 			}
 			m.modal = ""
 		}
 		return nil
 	}
 	if msg.Type == tea.KeyTab {
+		m.sel.clear()
 		m.rs.InputFocused = !m.rs.InputFocused
 		if m.rs.InputFocused {
 			return m.blink()
@@ -819,6 +954,11 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 			m.clearArmed = false
 			return m.blink()
 		case tea.KeyEsc:
+			if _, _, ok := m.draftSelection(); ok {
+				// Escape puts a selection away before it does anything to the draft.
+				m.sel.clear()
+				return nil
+			}
 			if m.draft.value == "" {
 				return nil
 			}
@@ -834,17 +974,78 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 		case tea.KeyDown:
 			m.scroll(1)
 		case tea.KeyBackspace:
-			m.draft.backspace()
+			if !m.dropDraftSelection() {
+				m.draft.backspace()
+			}
 			m.clearArmed = false
 			return m.blink()
+		case tea.KeyDelete:
+			if !m.dropDraftSelection() {
+				m.draft.cut(m.draft.cursor, m.draft.cursor+1)
+			}
+			m.clearArmed = false
+			return m.blink()
+		case tea.KeyCtrlW, tea.KeyCtrlH:
+			// Delete the word behind the caret. ctrl+w is the tty's own werase everywhere;
+			// ctrl+h is the byte Windows Terminal sends for ctrl+backspace — measured there,
+			// where plain Backspace is 0x7f and these two cannot be confused. On a terminal
+			// speaking the kitty protocol, internal/keyboard normalises ctrl+backspace to
+			// ctrl+w and this arm is never reached for it.
+			if !m.dropDraftSelection() {
+				m.draft.cut(m.draft.wordStart(), m.draft.cursor)
+			}
+			return m.blink()
+		case tea.KeyCtrlU:
+			// Delete to the start of the line — which is what Ghostty sends for cmd+backspace.
+			m.dropDraftSelection()
+			m.draft.cut(0, m.draft.cursor)
+			return m.blink()
+		case tea.KeyCtrlA:
+			// Select all, which is what this chord means on every system that has it.
+			if n := m.draft.length(); n > 0 {
+				m.sel = selection{active: true, region: "input", anchor: TextPos{0, 0}, cursor: TextPos{0, n}}
+				m.draft.cursor = n
+			} else {
+				m.sel.clear()
+			}
+			return m.blink()
 		case tea.KeyLeft:
+			if from, _, ok := m.draftSelection(); ok {
+				m.draft.cursor = from
+				m.sel.clear()
+				return m.blink()
+			}
 			m.draft.left()
 			return m.blink()
 		case tea.KeyRight:
+			if _, to, ok := m.draftSelection(); ok {
+				m.draft.cursor = to
+				m.sel.clear()
+				return m.blink()
+			}
 			m.draft.right()
 			return m.blink()
+		case tea.KeyShiftLeft:
+			m.growDraftSelection(-1)
+			return m.blink()
+		case tea.KeyShiftRight:
+			m.growDraftSelection(1)
+			return m.blink()
 		default:
+			// alt+b and alt+f are what a terminal sends for option+←/→ on a Mac: by a word.
+			if msg.Alt && isRune(msg, "b") {
+				m.draft.cursor = m.draft.wordStart()
+				m.sel.clear()
+				return m.blink()
+			}
+			if msg.Alt && isRune(msg, "f") {
+				m.draft.cursor = m.draft.wordEnd()
+				m.sel.clear()
+				return m.blink()
+			}
 			if s, ok := typed(msg); ok {
+				// Typing over a selection replaces it, as a paste does: both land here.
+				m.dropDraftSelection()
 				m.draft.insert(s)
 				m.clearArmed = false
 				return m.blink()
@@ -885,14 +1086,16 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 		if m.rs.ScreenSharing {
 			m.room.StopScreen()
 			m.lastScreen = ""
-		} else if m.lastScreen != "" {
-			_ = m.room.StartScreen(m.lastScreen)
-		} else if m.host.Screens != nil {
+			return m.toast("ok", "Screen share stopped")
+		}
+		if m.lastScreen != "" {
+			return m.startScreen(m.lastScreen, "")
+		}
+		if m.host.Screens != nil {
 			screens := m.host.Screens()
 			switch {
 			case len(screens) == 1:
-				m.lastScreen = screens[0].ID
-				_ = m.room.StartScreen(screens[0].ID)
+				return m.startScreen(screens[0].ID, screens[0].Label)
 			case len(screens) > 1:
 				m.modal, m.modalItems, m.modalIdx = "screen", screens, 0
 			}
@@ -900,11 +1103,13 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 	case isRune(msg, "v") && m.rs.WebcamEnabled && m.room != nil:
 		if m.rs.Me.CamOn {
 			m.room.StopCamera()
-		} else if m.host.Cameras != nil {
+			return m.toast("ok", "Camera off")
+		}
+		if m.host.Cameras != nil {
 			cams := m.host.Cameras()
 			switch {
 			case len(cams) == 1:
-				_ = m.room.StartCamera(cams[0].ID)
+				return m.startCamera(cams[0].ID)
 			case len(cams) > 1:
 				m.modal, m.modalItems, m.modalIdx = "camera", cams, 0
 			}
@@ -933,6 +1138,46 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 		m.nudgeVolume(0.02)
 	}
 	return nil
+}
+
+// startScreen and startCamera are where a share is begun from, whichever way it was asked
+// for. The chip's label changing is how the room reads afterwards; the toast is what says
+// the thing you just asked for actually happened — or, more usefully, did not.
+func (m *Model) startScreen(id, label string) tea.Cmd {
+	if m.room == nil {
+		return nil
+	}
+	if err := m.room.StartScreen(id); err != nil {
+		m.lastScreen = ""
+		return m.toast("warn", "Could not share: "+err.Error())
+	}
+	m.lastScreen = id
+	if label != "" {
+		return m.toast("ok", "Sharing "+label)
+	}
+	return m.toast("ok", "Sharing your screen")
+}
+
+func (m *Model) startCamera(id string) tea.Cmd {
+	if m.room == nil {
+		return nil
+	}
+	if err := m.room.StartCamera(id); err != nil {
+		return m.toast("warn", "Could not start the camera: "+err.Error())
+	}
+	return m.toast("ok", "Camera on")
+}
+
+// growDraftSelection moves the loose end of the composer's selection by one rune, starting
+// one at the caret when there is none — shift+← and shift+→.
+func (m *Model) growDraftSelection(d int) {
+	if m.sel.region != "input" || !m.sel.active {
+		at := TextPos{0, m.draft.cursor}
+		m.sel = selection{active: true, region: "input", anchor: at, cursor: at}
+	}
+	to := clampInt(m.sel.cursor.Off+d, 0, m.draft.length())
+	m.sel.cursor = TextPos{0, to}
+	m.draft.cursor = to
 }
 
 func (m *Model) nudgeVolume(d float64) {
@@ -1008,6 +1253,9 @@ func (m *Model) View() string {
 		rs.Anchor = m.anchor
 		rs.ClearArmed, rs.LeaveArmed = m.clearArmed, m.leaveArmed
 		rs.DebugLines = m.debugLines
+		rs.Toast, rs.ToastKind = m.toastText, m.toastKind
+		rs.Selecting = !m.sel.empty()
+		rs.CopyKey = m.copyKey
 		DrawRoom(c, rs)
 		if m.modal != "" {
 			title := "Share a screen"
@@ -1018,9 +1266,15 @@ func (m *Model) View() string {
 			for i, it := range m.modalItems {
 				labels[i] = it.Label
 			}
-			DrawModal(c, title, labels, m.modalIdx, []KeyHint{{Key: "esc", Label: "cancel"}})
+			DrawModal(c, title, labels, m.modalIdx, []KeyHint{{Key: "esc", Label: "cancel"}}, "modal")
 		}
 	}
+	// The selection is painted over the frame that was drawn rather than woven into the
+	// drawing, so a frame without one costs what it always did and no screen has to know.
+	if from, to, ok := m.SelectionRange(); ok {
+		c.PaintSelection(m.sel.region, from, to, ThemeSelection)
+	}
+	m.frame = c
 	return c.Render()
 }
 

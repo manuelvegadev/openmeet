@@ -45,12 +45,18 @@ type App struct {
 	OpusComplexity int `json:"opusComplexity,omitempty"`
 	// A ceiling on a share's whole upload, in kbps; 0 (absent) is none, which is the
 	// default: screenSendKbps is then what each person watching gets.
-	ScreenUploadKbps int     `json:"screenUploadKbps,omitempty"`
-	PauseRendering   string  `json:"pauseRendering"`
-	AutoUpdate       string  `json:"autoUpdate"`
-	LastUpdateCheck  int64   `json:"lastUpdateCheck"`
-	LatestSeen       *string `json:"latestSeen"`
-	LastRunVersion   *string `json:"lastRunVersion"`
+	ScreenUploadKbps int `json:"screenUploadKbps,omitempty"`
+	// "on" or "off": whether the terminal's mouse belongs to the application. Absent is on.
+	// Off hands click, drag and wheel back to the terminal, and with them its own selection.
+	Mouse string `json:"mouse,omitempty"`
+	// "on" or "off": whether letting go of a drag puts the selection on the clipboard by
+	// itself. Absent is off — the clipboard is somewhere things are put on purpose.
+	CopyOnSelect    string  `json:"copyOnSelect,omitempty"`
+	PauseRendering  string  `json:"pauseRendering"`
+	AutoUpdate      string  `json:"autoUpdate"`
+	LastUpdateCheck int64   `json:"lastUpdateCheck"`
+	LatestSeen      *string `json:"latestSeen"`
+	LastRunVersion  *string `json:"lastRunVersion"`
 }
 
 func Defaults() App {
@@ -58,7 +64,7 @@ func Defaults() App {
 		AudioBackend: "auto", AudioInputChannels: "auto",
 		AudioSendKbps: 128, AudioReceiveKbps: 128, ScreenSendKbps: 2500, ScreenReceiveKbps: 2500,
 		VoiceGate: true, PauseRendering: "minimized", AutoUpdate: "auto",
-		AudioProcessing: "system", MicLevel: "auto", OpusComplexity: 10,
+		AudioProcessing: "system", MicLevel: "auto", OpusComplexity: 10, Mouse: "on", CopyOnSelect: "off",
 	}
 }
 

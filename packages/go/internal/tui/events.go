@@ -33,6 +33,15 @@ type Left struct{ Reason string }
 // UpdateAvailable: a newer version, ready or only known (see internal/update).
 type UpdateAvailable UpdateInfo
 
+// Copy is Cmd+C, or whatever chord the terminal could only deliver through the kitty
+// keyboard protocol (internal/keyboard). It copies the selection, and does nothing when
+// there is none — unlike ctrl+c, which has a second job.
+type Copy struct{}
+
+// CopyKey is the terminal telling us which chord it can actually send, so the room can name
+// the right one. Until it arrives the answer is ctrl+c, which every terminal can send.
+type CopyKey struct{ Name string }
+
 // UpToDate: an update check that found nothing newer. Only the home screen's `u` says so out
 // loud; the one at startup passes in silence.
 type UpToDate struct{}

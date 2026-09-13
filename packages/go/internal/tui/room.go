@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 )
 
 // The room, drawn as room-view.tsx drew it: the header, then the chat on the left and the
@@ -88,6 +90,16 @@ type RoomState struct {
 	// The debug panel under the participants, when on.
 	Debug      bool
 	DebugLines []ChatEntry
+
+	// A line of transient feedback on the notice row over the composer: a share that
+	// started, a device that changed, a selection that went to the clipboard. The room log
+	// is the record of what happened in the room; this is the receipt for what you just did.
+	Toast     string
+	ToastKind string // "ok" | "warn" | "info"
+	// Something is selected in the conversation, so the key that copies it is worth showing,
+	// by the name of the chord this terminal can actually send.
+	Selecting bool
+	CopyKey   string
 }
 
 // FormatClock is HH:MM, or HH:MM:SS.
@@ -170,6 +182,7 @@ func drawRoomHeader(c *Canvas, inner Rect, s RoomState) {
 		left = append(left, Span{" ", Plain}, Span{"|", Muted}, Span{" ", Plain}, Span{FormatElapsed(s.Now.Sub(s.JoinedAt)), Muted})
 	}
 	c.PutSpans(x, y, left, right)
+	HotChips(c, x, y, left)
 
 	var rs []Span
 	if st := s.Stats; st != nil {
@@ -209,6 +222,13 @@ func trimFloat(f float64) string {
 
 // ── the chat pane ────────────────────────────────────────────────────────────
 
+// debugSpans is one line of the debug panel. Like entrySpans it is the single definition of
+// what that line reads as, so what is drawn and what a selection counts its offsets in are
+// the same string.
+func debugSpans(l ChatEntry) []Span {
+	return []Span{{"[" + FormatClock(l.At, true) + "] ", Muted}, {l.Text, Style{FG: ThemeAccentAlt}}}
+}
+
 func entrySpans(e ChatEntry) []Span {
 	spans := []Span{
 		{"[" + FormatClock(e.At, false) + "] ", Muted},
@@ -229,9 +249,35 @@ func entrySpans(e ChatEntry) []Span {
 func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	textX := pane.X + 1
 	textW := pane.W - 2
-	// The composer takes the last three rows: the notice row, its rule, the input.
+
+	// The composer is measured first, because how tall it is decides where the log ends. It
+	// is the one row it always was while the draft fits on one, and grows upward as the draft
+	// wraps — up to a cap, past which it scrolls to keep the cursor in view. A message you
+	// cannot read while you write it is a message you cannot write.
+	chipLabel := "chat"
+	if s.InputFocused {
+		chipLabel = "controls"
+	}
+	chip := ChipSpans(KeyHint{Key: "tab", Label: chipLabel})
+	chipW := spansWidth(chip)
+	draftW := max(1, textW-chipW-3)
+	rows, cy, cx := wrapDraft([]rune(s.Draft), draftW, s.DraftCursor)
+	shown := min(len(rows), composerRows(pane.H))
+	scrolled, skipped := false, 0
+	if top := cy - shown + 1; top > 0 {
+		for _, row := range rows[:top] {
+			skipped += len(row)
+		}
+		rows = rows[top : top+shown]
+		cy -= top
+		scrolled = true
+	} else {
+		rows = rows[:shown]
+	}
+
 	inputY := pane.Y + pane.H - 1
-	ruleY := inputY - 1
+	inputTop := inputY - (shown - 1)
+	ruleY := inputTop - 1
 	noticeY := ruleY - 1
 	logRows := noticeY - pane.Y
 
@@ -242,16 +288,27 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		end = s.Anchor
 	}
 	below := last - end
-	var lines [][]Span
+	// Each row carries the entry it came from and how far into that entry's own text it
+	// starts, which is what lets a message wrapped over four rows be selected and copied as
+	// the one line it is. Rows that are not part of the conversation carry -1.
+	type logRow struct {
+		spans []Span
+		src   int
+		off   int
+	}
+	var lines []logRow
 	if len(s.Entries) == 0 {
-		lines = [][]Span{{{"No messages yet", Muted}}}
+		lines = []logRow{{[]Span{{"No messages yet", Muted}}, -1, 0}}
 	} else {
 		first := end + 1 - logRows
 		if first < 0 {
 			first = 0
 		}
-		for _, e := range s.Entries[first : end+1] {
-			lines = append(lines, Wrap(entrySpans(e), textW)...)
+		for i := first; i <= end; i++ {
+			wrapped, offs := WrapOffsets(entrySpans(s.Entries[i]), textW)
+			for j, line := range wrapped {
+				lines = append(lines, logRow{line, i, offs[j]})
+			}
 		}
 	}
 	if below > 0 {
@@ -259,18 +316,30 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		if below == 1 {
 			word = "entry"
 		}
-		lines = append(lines, []Span{{fmt.Sprintf("↓ %d more %s below", below, word), Muted}})
+		lines = append(lines, logRow{[]Span{{fmt.Sprintf("↓ %d more %s below", below, word), Muted}}, -1, 0})
 	}
 	if len(lines) > logRows {
 		lines = lines[len(lines)-logRows:]
 	}
+	logArea := Rect{textX, pane.Y, textW, logRows}
+	c.Hot(logArea, Action{Kind: ActScroll, ID: "chat"})
+	c.Hot(logArea, Action{Kind: ActText, ID: "chat"})
 	y := noticeY - len(lines)
 	for _, line := range lines {
-		c.PutSpans(textX, y, line, textX+textW)
+		c.PutSpans(textX, y, line.spans, textX+textW)
+		c.MarkText("chat", TextRow{X: textX, Y: y, MaxX: textX + textW, Spans: line.spans, Src: line.src, Off: line.off})
 		y++
 	}
 
 	// The composer.
+	switch {
+	case s.Toast != "":
+		c.Put(textX, noticeY, toastMark(s.ToastKind)+s.Toast, toastStyle(s.ToastKind), textX+textW)
+	case s.Selecting:
+		// Copying is a key here rather than a side effect of letting go of the button, so the
+		// key has to be on screen while there is something to press it on.
+		c.PutSpans(textX, noticeY, []Span{KeyChip(s.CopyKey), {" copy selection", Muted}}, textX+textW)
+	}
 	if s.ClearArmed {
 		msg := "esc again to clear"
 		c.Put(textX+textW-Width(msg), noticeY, msg, Muted, textX+textW)
@@ -286,15 +355,127 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	if s.InputFocused {
 		promptStyle = Style{FG: ThemeOK, Bold: true}
 	}
-	chipLabel := "chat"
-	if s.InputFocused {
-		chipLabel = "controls"
+	// The prompt marks where the draft begins; once it has scrolled past, it says so instead
+	// of claiming the middle of a message is the start of one.
+	if scrolled {
+		c.Put(textX, inputTop, "… ", Muted, textX+textW)
+	} else {
+		c.Put(textX, inputTop, "> ", promptStyle, textX+textW)
 	}
-	chip := ChipSpans(KeyHint{Key: "tab", Label: chipLabel})
-	chipW := spansWidth(chip)
-	x := c.Put(textX, inputY, "> ", promptStyle, textX+textW)
-	c.PutSpans(x, inputY, TextInputSpans(s.Draft, s.DraftCursor, "Type message...", s.InputFocused, s.Cursor), textX+textW-chipW-1)
+	maxX := textX + 2 + draftW
+	// The draft is text too, and its own selectable region: a click in it moves the caret,
+	// a drag selects, and what is selected is replaced by the next thing typed or pasted.
+	c.Hot(Rect{textX + 2, inputTop, draftW, shown}, Action{Kind: ActText, ID: "input"})
+	// Each row is the single-line input this interface already has, drawn once per row: only
+	// the row the caret is on is the focused one, and the placeholder belongs to a draft that
+	// is empty rather than to a row that happens to be.
+	placeholder := ""
+	if s.Draft == "" {
+		placeholder = "Type message..."
+	}
+	at := 0
+	for i, row := range rows {
+		y := inputTop + i
+		c.MarkText("input", TextRow{X: textX + 2, Y: y, MaxX: maxX, Spans: []Span{{string(row), Plain}}, Src: 0, Off: skipped + at})
+		at += len(row)
+		onCaret := s.InputFocused && i == cy
+		c.PutSpans(textX+2, y, TextInputSpans(string(row), cx, placeholder, onCaret, s.Cursor), maxX)
+	}
 	c.PutSpans(textX+textW-chipW, inputY, chip, textX+textW)
+	HotChips(c, textX+textW-chipW, inputY, chip)
+	c.Hot(Rect{textX, inputTop, textW, shown}, Action{Kind: ActFocus, ID: "input"})
+}
+
+// The composer will not take more than this many rows, nor more than a third of the pane:
+// the conversation is what the pane is for.
+const maxComposerRows = 6
+
+func composerRows(paneH int) int {
+	return max(1, min(maxComposerRows, min(paneH/3, paneH-3)))
+}
+
+// wrapDraft breaks the draft into rows of at most width cells and says which row the cursor
+// is on and how many runes into it. Unlike Wrap, which is the log's and follows Ink's rules,
+// this one keeps every rune: an editor may not quietly drop what was typed into it.
+func wrapDraft(text []rune, width, cursor int) (rows [][]rune, cy, cx int) {
+	if width < 1 {
+		width = 1
+	}
+	type span struct{ from, to int }
+	var spans []span
+	for i := 0; i < len(text); {
+		w, j := 0, i
+		for j < len(text) {
+			rw := runeCells(text[j])
+			if w+rw > width {
+				break
+			}
+			w += rw
+			j++
+		}
+		// Break after the last space on the row rather than through a word, when there is one.
+		if j < len(text) && text[j] != ' ' {
+			for k := j - 1; k > i; k-- {
+				if text[k] == ' ' {
+					j = k + 1
+					break
+				}
+			}
+		}
+		// A space that did not fit hangs off the end of the row it follows. The canvas clips
+		// it and nothing is lost; opening the next row with it would indent the line instead.
+		for j < len(text) && text[j] == ' ' {
+			j++
+		}
+		spans = append(spans, span{i, j})
+		i = j
+	}
+	if len(spans) == 0 {
+		spans = append(spans, span{0, 0})
+	}
+	cursor = clampInt(cursor, 0, len(text))
+	last := spans[len(spans)-1]
+	if cursor >= last.to {
+		cy, cx = len(spans)-1, last.to-last.from
+	} else {
+		for r, sp := range spans {
+			if cursor >= sp.from && cursor < sp.to {
+				cy, cx = r, cursor-sp.from
+				break
+			}
+		}
+	}
+	// A cursor at or past the edge of its row shows at the start of the next one, which is
+	// where the next character will go — and is the only place it can be seen.
+	if sp := spans[cy]; cellsOf(text[sp.from:sp.from+cx]) >= width {
+		if cy == len(spans)-1 {
+			spans = append(spans, span{sp.to, sp.to})
+		}
+		cy, cx = cy+1, 0
+	}
+	rows = make([][]rune, len(spans))
+	for r, sp := range spans {
+		rows[r] = text[sp.from:sp.to]
+	}
+	return rows, cy, cx
+}
+
+// runeCells is how wide one rune is drawn, counted without turning it into a string: this
+// runs over every rune of the draft on every repaint, and Width would allocate each time.
+// A control rune is one cell either way — the canvas draws it as a space.
+func runeCells(r rune) int {
+	if w := runewidth.RuneWidth(r); w > 0 {
+		return w
+	}
+	return 1
+}
+
+func cellsOf(rs []rune) int {
+	n := 0
+	for _, r := range rs {
+		n += runeCells(r)
+	}
+	return n
 }
 
 // ── the people pane ──────────────────────────────────────────────────────────
@@ -343,6 +524,9 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	right := x + w
 	y := pane.Y
 
+	// Clicking anywhere in this pane is asking to work the controls, which is what tab does.
+	c.Hot(pane, Action{Kind: ActFocus, ID: "controls"})
+
 	// You: the dot, the name, your tags; your send rate on the right.
 	me := []Span{dotSpan(s.Me.Speaking && !s.Me.Muted), NameSpan(s.Me.Name, s.Me.Color, false)}
 	me = append(me, tagSpans(s.Me.Muted, s.VideoEnabled && s.WebcamEnabled && s.Me.CamOn, false, s.ScreenSharing, false)...)
@@ -371,10 +555,12 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	y++
 
 	// The peers.
+	peersTop := y
 	for i, p := range s.Peers {
 		if y >= pane.Y+pane.H {
 			break
 		}
+		c.Hot(Rect{pane.X, y, pane.W, 1}, Action{Kind: ActRow, ID: "peers", Idx: i})
 		line := []Span{dotSpan(p.Speaking && !p.Muted)}
 		if i == s.SelectedPeer {
 			line = append(line, Span{"▸ ", Style{FG: ThemeAccent}})
@@ -404,6 +590,9 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		}
 		c.PutSpans(right-spansWidth(nums), y, nums, right)
 		y++
+	}
+	if y > peersTop {
+		c.Hot(Rect{pane.X, peersTop, pane.W, y - peersTop}, Action{Kind: ActScroll, ID: "peers"})
 	}
 
 	// Pinned to the bottom: the divider and the keys that act on the selected peer.
@@ -438,9 +627,17 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		dy := blockTop - len(lines)
 		if len(lines) == 0 {
 			c.Put(x, blockTop-1, "Nothing yet", Muted, right)
+		} else {
+			c.Hot(Rect{x, dy, w, len(lines)}, Action{Kind: ActText, ID: "debug"})
 		}
-		for _, l := range lines {
-			c.PutSpans(x, dy, []Span{{"[" + FormatClock(l.At, true) + "] ", Muted}, {l.Text, Style{FG: ThemeAccentAlt}}}, right)
+		// The panel shows the tail of a ring, so a row's index is into the whole of it.
+		base := len(s.DebugLines) - len(lines)
+		for i, l := range lines {
+			spans := debugSpans(l)
+			c.PutSpans(x, dy, spans, right)
+			// A debug line is drawn clipped rather than wrapped, so what is copied is the
+			// whole line and what is painted stops at the pane.
+			c.MarkText("debug", TextRow{X: x, Y: dy, MaxX: right, Spans: spans, Src: base + i})
 			dy++
 		}
 	}
@@ -500,7 +697,9 @@ func camLabel(on bool) string {
 // DrawModal paints a panel over the room, centred: a rounded frame in the accent, the
 // title, the list, the hints, on the theme background — opaque, so the room shows around
 // it and not through it (modal.tsx). Padding two cells across, one down, as Ink had it.
-func DrawModal(c *Canvas, title string, items []string, idx int, hints []KeyHint) {
+func DrawModal(c *Canvas, title string, items []string, idx int, hints []KeyHint, list string) {
+	// The screen behind it stands down for the mouse as it does for the keys.
+	c.Modal()
 	w := Width(title)
 	for _, it := range items {
 		if lw := Width(it) + 2; lw > w {
@@ -535,7 +734,7 @@ func DrawModal(c *Canvas, title string, items []string, idx int, hints []KeyHint
 	cx, cy := box.X+2, box.Y+1
 	c.Put(cx, cy, title, Style{FG: ThemeAccent, Bold: true}, box.X+box.W-3)
 	cy += 2
-	DrawSelect(c, Rect{cx, cy, w, len(items)}, items, idx)
+	DrawSelect(c, Rect{cx, cy, w, len(items)}, items, idx, list)
 	cy += len(items) + 1
 	DrawHints(c, cx, cy, w, hints)
 }
