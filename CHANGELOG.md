@@ -12,6 +12,58 @@ matrix in the README, not a version of its own.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-15
+
+### Added
+
+- **Files can be shared in a room.** Drag one onto the composer and it attaches as a chip
+  next to what you are typing; Enter sends it, and it appears as a row in everyone's log with
+  its name, its size and a three-letter mark for what it is — `aud`, `vid`, `img`, `zip` or
+  `doc`. `f` opens the list of everything the room has offered: Enter downloads one that is
+  not here yet and previews one that is, `o` opens it in whatever the system opens it with,
+  and `r` shows it in its folder. Received files land in `~/Downloads/openmeet`
+  (`%USERPROFILE%\Downloads\openmeet` on Windows) under a name that is checked before it is
+  used, numbered rather than overwritten if one of that name is already there, and verified
+  against the size and digest that were announced.
+- **A screenshot can be shared from the clipboard**, with `ctrl+v` — `ctrl+p` on Windows,
+  where the terminal keeps `ctrl+v` for its own paste. A terminal application can never
+  receive an image from a paste, because the terminal turns the clipboard into text and a
+  clipboard holding a PNG has no text to give, so the clipboard is read directly instead. A
+  file copied in the Finder or in Explorer attaches as that file. Neither works over SSH,
+  where the clipboard is on the other machine, and the app says so rather than failing
+  silently.
+- **Nothing is pushed, and nothing passes through the server.** A file is announced over the
+  signaling connection and then moves only when somebody asks for it, over a data channel on
+  the peer connection the call already has — so it is encrypted by the same handshake that
+  protects the voice, and the server never holds a file or sees one. Between two machines on
+  the same network it goes directly between them at the speed of the link; anywhere else it
+  is held to 2000 kbps, because a transfer is not the call and the uplink has to carry both.
+  A transfer never delays the audio pump.
+- `--headless` gained `--send-file <path>` and `--accept-files`, which are how a transfer is
+  driven from a script and tested between two machines. Accepting a file is a keypress
+  everywhere else; with no keyboard there, the flag is what asks for it.
+
+### Changed
+
+- **The conversation is drawn as bubbles.** A message is a box on the side it came from —
+  yours on the right in the theme's colour, theirs on the left in grey — with the name in
+  brackets and the time on the outer edge. Several messages in a row from one person share a
+  box, so a conversation costs fewer rows than a box each. A room event (somebody joining,
+  muting, sharing a screen) is centred and plain, because nobody said it. And the composer
+  floats in a rounded box of its own, which takes the theme's colour while it has the focus,
+  so tab moving between the conversation and the composer is visible at a glance.
+- **A shared file is a card across the whole width**, with what it is, how big, who shared it
+  and when, and its buttons inside it: download, or open, show in the folder, and — on macOS,
+  which has Quick Look — preview. It no longer prints where it saved the file: every file
+  lands in the same folder and "in folder" is the button that goes there. A file that has
+  arrived is marked with a green check beside its name.
+- **Below 90×28 the room says the window is too small** instead of drawing itself squeezed
+  into a frame with its middle missing.
+- **The WebRTC connection contract now has a fourth m-line.** Every offer this client makes
+  is audio, webcam, screen, then the control data channel — in that order, always. A client
+  from before this release offers no such section, and a room with one in it works exactly as
+  it did minus the files. Nothing else about the contract moved.
+
 ## [0.7.0] - 2026-09-13
 
 ### Added
@@ -208,7 +260,8 @@ Versions before 0.6.0 were the Node client, published to npm as `openmeet-termin
 `terminal-v*` tags. They are not restated here; their releases remain on the
 [tags page](https://github.com/manuelvegadev/openmeet/tags).
 
-[Unreleased]: https://github.com/manuelvegadev/openmeet/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/openmeet/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/manuelvegadev/openmeet/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/manuelvegadev/openmeet/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/manuelvegadev/openmeet/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/manuelvegadev/openmeet/compare/v0.6.1...v0.6.2
