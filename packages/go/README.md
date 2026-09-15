@@ -47,7 +47,10 @@ land in `~/Downloads/openmeet`.
 
 **Nothing is pushed.** A file moves only when somebody asks for it, over a data channel on
 the peer connection, so the server never holds one and never sees one; on a local network it
-goes straight between the two machines at the speed of the link. The whole of it is in
+goes straight between the two machines at the speed of the link. Off it, the call comes first
+— and since the file and the voice share one socket, no QoS mark can say so, so the transfer
+watches the peer's round trip and gets out of the way when a queue builds. `File Transfer` in
+the settings picks that (`voice first`), `unlimited`, or a flat 2 Mbps. The whole of it is in
 [`docs/websocket-webrtc-architecture.md`](../../docs/websocket-webrtc-architecture.md) under
 "Files".
 

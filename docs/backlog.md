@@ -47,13 +47,14 @@ here.
   opened — but playing one *inside* the app means going through the mixer, which lives in the
   20 ms pump. That is audio work under the rules in `internal/audio`, not chat work, and it
   should not arrive as a side effect of a feature about files.
-- **The transfer ceiling has never been over a real WAN link.** A file moves at whatever the
-  channel takes on a local network, and is held to 2000 kbps anywhere else (`files.RemoteKbps`,
-  chosen by `rtc.LocalPair`). Both paths are tested — the ceiling in `internal/files`, the
-  local one between the Mac and the Windows box — but the number itself was picked against a
-  screen share's 2500, not measured against a call on a real uplink. Whether a transfer is
-  audible in the voice at that rate is the thing to find out, and it is what would make it a
-  setting rather than a constant.
+- **The transfer's adaptive ceiling has never been over a real WAN link.** Off the local
+  network a transfer now follows the peer's round trip over its own baseline, backing off when
+  a queue builds and climbing when it does not (`engine.adjustFileBudget`), because the file
+  and the voice share one socket and no QoS mark can separate them. The rule is unit-tested
+  and the modes are a setting, but the constants — 80 ms of slack, 60% off, 50% back on, a
+  500 kbps floor — were reasoned, not measured. What to find out: on a real uplink, does the
+  voice stay clean while a 5 GB file is in flight, and how long does the ceiling take to find
+  the link. Until somebody does, `capped` is there for whoever does not trust it.
 - **A file row in the log is not clickable**, where every key chip is. Registering it would
   have to share the row with the text selection that already owns the conversation, which is
   the part to think about; `f` and its chip are the way in for now.

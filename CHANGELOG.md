@@ -12,6 +12,25 @@ matrix in the README, not a version of its own.
 
 ## [Unreleased]
 
+### Added
+
+- **A `File Transfer` setting, and a transfer that gets out of the voice's way.** Until now a
+  file was held to 2 Mbps whenever the other person was not on your network, which made a
+  5 GB file a six-hour affair however fast your link. The default is now `voice first`: the
+  transfer takes whatever the link has spare and gives it back the moment the call starts to
+  suffer. `unlimited` never gives it back, and `2 Mbps` is the old flat ceiling for anyone who
+  prefers it. On your own network nothing has changed — there was never a ceiling there.
+
+  Worth knowing why it is done this way: a file and the voice travel in the same encrypted
+  connection on the same socket, so no amount of network priority marking can tell a router
+  which is which. The only thing that can is the app, by watching the call's round trip and
+  backing off when a queue starts building — which is what `voice first` does.
+
+### Changed
+
+- Bubbles sit against each other in the conversation instead of with a blank row between
+  them, which fits more of it on screen.
+
 ## [0.8.0] - 2026-09-15
 
 ### Added

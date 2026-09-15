@@ -105,10 +105,23 @@ would be waste, because most of the time nobody wants the file at all.
 
 Flow control is the channel's own: the sender waits while `BufferedAmount` is over a
 megabyte, so the disk is read at the speed of the wire and a file never passes through this
-process's memory. On top of that there is a rate ceiling — 2000 kbps — because a transfer is
-not the call and the uplink has to carry both. **On the local network there is none**: when
-the nominated candidate pair is host-to-host with a private address (`rtc.LocalPair`), there
-is no uplink to protect and a ceiling would be an invented limit.
+process's memory. **On the local network that is the whole of it** — when the nominated
+candidate pair is host-to-host with a private address (`rtc.LocalPair`) there is no uplink to
+protect and any ceiling would be invented.
+
+Off it, the call comes first, and **a QoS mark cannot deliver that**. The data channel's SCTP
+and the audio's SRTP ride the same DTLS association on the same socket, with the same DSCP EF
+on every packet: nothing between here and the other end can tell one from the other. The only
+thing that can is this end. A file filling the uplink queue shows up as that peer's round trip
+growing over its own baseline, which the stats loop already measures every two seconds — so
+the transfer's ceiling follows it, backing off to 60% when the round trip is 80 ms over the
+baseline and taking half as much again when it is within 30 ms of it, floor 500 kbps and no
+upper limit. `Send` asks for the ceiling before every chunk rather than being given one,
+because the right answer is not a number known in advance.
+
+The `File Transfer` setting decides which of the three: `voice-first` (the above, and the
+default), `unlimited` (never backs off), or `capped` (a flat 2 Mbps, for when the adaptive one
+is not trusted).
 
 Every part of this is on goroutines of its own. The 20 ms audio pump never waits on a
 transfer, which is the same rule the video paths follow.
