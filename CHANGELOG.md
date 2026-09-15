@@ -12,6 +12,8 @@ matrix in the README, not a version of its own.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-15
+
 ### Added
 
 - **A `File Transfer` setting, and a transfer that gets out of the voice's way.** Until now a
@@ -279,7 +281,8 @@ Versions before 0.6.0 were the Node client, published to npm as `openmeet-termin
 `terminal-v*` tags. They are not restated here; their releases remain on the
 [tags page](https://github.com/manuelvegadev/openmeet/tags).
 
-[Unreleased]: https://github.com/manuelvegadev/openmeet/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/openmeet/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/manuelvegadev/openmeet/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/manuelvegadev/openmeet/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/manuelvegadev/openmeet/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/manuelvegadev/openmeet/compare/v0.6.2...v0.6.3
