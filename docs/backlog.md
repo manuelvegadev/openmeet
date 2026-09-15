@@ -43,6 +43,20 @@ here.
   that is the user's choice, not ours. The way to have both would be to *ask*: the installer
   offering to register a shortcut against a terminal you name, and a setting in the app to
   change it later. Worth doing only with the asking part, never by picking a default.
+- **A voice note, played in the chat.** Files can be shared, so a recording can be sent and
+  opened — but playing one *inside* the app means going through the mixer, which lives in the
+  20 ms pump. That is audio work under the rules in `internal/audio`, not chat work, and it
+  should not arrive as a side effect of a feature about files.
+- **The transfer ceiling has never been over a real WAN link.** A file moves at whatever the
+  channel takes on a local network, and is held to 2000 kbps anywhere else (`files.RemoteKbps`,
+  chosen by `rtc.LocalPair`). Both paths are tested — the ceiling in `internal/files`, the
+  local one between the Mac and the Windows box — but the number itself was picked against a
+  screen share's 2500, not measured against a call on a real uplink. Whether a transfer is
+  audible in the voice at that rate is the thing to find out, and it is what would make it a
+  setting rather than a constant.
+- **A file row in the log is not clickable**, where every key chip is. Registering it would
+  have to share the row with the text selection that already owns the conversation, which is
+  the part to think about; `f` and its chip are the way in for now.
 - **Settings from inside a room.** Today it is reachable only from the home screen, which is
   why every row can say "applies when you next join". Opening it in a call would make that
   mark mean something: what changes live (devices, volume) against what waits.

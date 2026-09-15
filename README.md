@@ -43,7 +43,8 @@ Then `openmeet`. Nothing else is needed for a call; screen and camera sharing ne
 - **A voice gate** — nothing is sent while you are silent, which is most of a call
 - **Devices that follow the system** — Bluetooth headphones that switch profile mid-call are reopened, not left robotic; Apple's Voice Isolation and echo cancellation are on by default on macOS; Wave Link and NVIDIA Broadcast are recognised and offered first
 - **Screen and camera** — hardware H.264 (VideoToolbox on the Mac, NVENC on Windows), the screen in its own aspect ratio up to 1080 px on the short side at 30 fps, the camera up to 720 px, each on its own track, encoded once for the room; received in native ffplay windows
-- **Chat** — one conversation: messages and room events (joins, mutes, shares) in a single stream
+- **Chat** — one conversation: messages and room events (joins, mutes, shares, files) in a single stream
+- **Files** — drag one onto the composer, or attach a screenshot straight from the clipboard, and it appears in everyone's log to download, preview or open. Nothing is pushed and nothing passes through the server: a file moves only when somebody asks for it, over a data channel on the peer connection, which on a local network means directly between the two machines at the speed of the link
 - **Per-peer volume, speaking dots and latency estimates**
 - **Pick a name and a colour, once** — no sign-up; you show up as `[name]` in your colour for everyone
 - **Reconnection** — the signaling link comes back with backoff and the room is rejoined
@@ -53,8 +54,8 @@ Then `openmeet`. Nothing else is needed for a call; screen and camera sharing ne
 
 | Platform | Status | Features |
 |----------|--------|----------|
-| macOS 15 (Sequoia) or later, Apple Silicon | Supported | Audio, chat, camera, screen sharing |
-| Windows 11 (x64) | Supported | Audio, chat, screen sharing. Camera not available yet |
+| macOS 15 (Sequoia) or later, Apple Silicon | Supported | Audio, chat, files, camera, screen sharing |
+| Windows 11 (x64) | Supported | Audio, chat, files, screen sharing. Camera not available yet |
 | Linux | Paused | The code compiles; nothing is built or tested |
 
 One version number for every platform, in [`packages/go/VERSION`](packages/go/VERSION). Version 1.0 will mean feature parity between macOS and Windows.

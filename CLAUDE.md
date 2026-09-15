@@ -20,9 +20,10 @@ Client A <──WebRTC P2P──> Client B
 ```
 
 - **Topology**: P2P mesh — each client connects directly to every other client
-- **Signaling**: WebSocket for SDP/ICE exchange, chat messages, mute state, and screen share state
+- **Signaling**: WebSocket for SDP/ICE exchange, chat messages, mute state, screen share state, and file offers (the description of a file, never the file)
 - **Media (Go client)**: WebRTC with Opus audio (48 kHz, 20 ms frames, mono at the Audio Send setting — 128 kbps by default, `--audio-kbps` overrides — in-band FEC, **one encoder whose packets go to every peer**) and H.264 video from the GPU encoder (webcam in the camera's own aspect ratio, height ≤ 720; screen in the screen's own aspect ratio, short side ≤ 1080 and long side ≤ 3840, 30 fps; one encoded stream per kind shared by every connection, budget 6000 kbps split by peers, floor 800). The retired Node client spoke stereo Opus with RED and VP8, so Node↔Go rooms carry audio and chat but no video
 - **Screen sharing**: Simultaneous webcam + screen share via 3 transceivers per connection
+- **Files**: announced over the WebSocket, fetched over an SCTP data channel on the same peer connection — never pushed, never through the server. One `control` channel per connection (created by the offerer, after the three transceivers), then a channel of its own per transfer. Received files land in `~/Downloads/openmeet`
 
 ## Tech Stack
 
@@ -75,13 +76,14 @@ The client. Module `github.com/manuelvegadev/openmeet/packages/go`, Go 1.25, cgo
 
 | Package | Purpose |
 |---|---|
-| `cmd/openmeet` | Flags (`--server`, `--room`, `--input-device`/`--output-device` by substring, `--list-devices`, `--no-voice-gate`, `--audio-kbps` and `--opus-complexity` (both 0 — meaning the saved setting, 128 kbps and 10, stands), `--no-voice-processing`, `--voice-processing-bypass`, `--no-priority`, `--no-video`, `--video-device`, `--test-screen`/`--test-camera`, `--headless`, `--debug`, `--cpuprofile`, `--no-auto-update`, `--version`); the settings store and device source the TUI talks to (effects devices — Wave Link FX, NVIDIA Broadcast — labelled and first; a raw Wave mic points at its FX sibling; the Bluetooth note); the updater wiring; the Bubble Tea program fed through an events channel (never `program.Send` before `Run`: it deadlocks) |
+| `cmd/openmeet` | Flags (`--server`, `--room`, `--input-device`/`--output-device` by substring, `--list-devices`, `--no-voice-gate`, `--audio-kbps` and `--opus-complexity` (both 0 — meaning the saved setting, 128 kbps and 10, stands), `--no-voice-processing`, `--voice-processing-bypass`, `--no-priority`, `--no-video`, `--video-device`, `--test-screen`/`--test-camera`, `--headless` with `--send-file`/`--accept-files`, `--debug`, `--cpuprofile`, `--no-auto-update`, `--version`); the settings store and device source the TUI talks to (effects devices — Wave Link FX, NVIDIA Broadcast — labelled and first; a raw Wave mic points at its FX sibling; the Bluetooth note); the updater wiring; the Bubble Tea program fed through an events channel (never `program.Send` before `Run`: it deadlocks) |
 | `internal/signal` | The WebSocket protocol, field for field with `packages/server/src/protocol.ts`; `Dial`, `Send`, `Incoming` |
-| `internal/rtc` | pion: one PeerConnection per peer, three transceivers in order on both offerer and answerer paths, `polite = myID < peerID`, retries, ICE RTTs; Opus PT 111 (`minptime=10;useinbandfec=1`), H.264 PT 102 (`42e01f`, packetization-mode 1); **one `TrackLocalStaticRTP` (audio) and two `TrackLocalStaticSample` (webcam, screen) bound to every connection** — encode once; `LeanInterceptors` (RTCP reports only); the `transport.Net` wrapper marking sockets DSCP EF / `SO_NET_SERVICE_TYPE` voice |
+| `internal/rtc` | pion: one PeerConnection per peer, three transceivers in order on both offerer and answerer paths, `polite = myID < peerID`, retries, ICE RTTs; Opus PT 111 (`minptime=10;useinbandfec=1`), H.264 PT 102 (`42e01f`, packetization-mode 1); **one `TrackLocalStaticRTP` (audio) and two `TrackLocalStaticSample` (webcam, screen) bound to every connection** — encode once; `LeanInterceptors` (RTCP reports only); the `transport.Net` wrapper marking sockets DSCP EF / `SO_NET_SERVICE_TYPE` voice. `data.go` is the data channels, detached (`se.DetachDataChannels()`): the offerer creates `control` in `addContract` *after* the transceivers, so every offer is audio 0, webcam 1, screen 2, control 3; a file then gets a channel of its own labelled `file:<id>`, which costs no renegotiation because SCTP is already up. `LocalPair` reads the nominated candidate pair — host↔host with a private address means the local network, which is what decides a transfer's rate |
+| `internal/files` | Sharing a file, with no network in it: `Kind` (aud/vid/img/zip/doc by extension), `Describe` (size + SHA-256), `Send`/`Receive` (16 KiB chunks, a token bucket, `.part` until the digest checks out, and a refusal to take more than was offered), `SafeName`/`Destination` (a peer chose that name and none of it is trusted: no path parts, no reserved device names, no trailing dots, numbered rather than overwritten), `Attach` (a dropped path as each terminal escapes it — backslashes on Unix, quotes on Windows Terminal, all of them or none), `Clipboard` (osascript on macOS, PowerShell over `-EncodedCommand` on Windows), and `Open`/`Reveal`/`Preview` — Quick Look on macOS, and on Windows, which has none, the default application |
 | `internal/audio` | `shim.c` compiles miniaudio in with `MA_NO_*` trims; the device callbacks stay in C and copy into lock-free `ma_pcm_rb` rings — **no audio thread ever enters Go** (a Go callback cost 1.9% for the devices alone against 0.3% in C). `Pump` runs every 20 ms on a locked OS thread at audio priority: capture ring → voice gate (`gate.go`, a port of the Node one, same tests) → Opus (FEC on) → packets with capture-clock timestamps; playout (`playout.go`: per-peer RFC 3550 jitter target 2–6 frames, `DecodeFEC`, PLC, quiet-frame catch-up) → mixer → playback ring prefilled with silence. `vpio_darwin.c` is Apple's Voice Processing I/O unit (Voice Isolation, AEC, gain) as the default macOS path; on Windows the same setting opens the capture in `AudioCategory_Communications`, which is how the endpoint driver's own echo cancellation, noise suppression and gain — and Windows Studio Effects on a machine with an NPU — are asked for (it needs eight marked lines of patch in vendored miniaudio, written down in `internal/audio/miniaudio/PATCHES.md`, because the category can only be set between creating the audio client and initialising it). What that is worth depends on the endpoint: a laptop's microphone usually brings an APO, a USB interface often brings nothing. `agc.go` is ours for those: it levels the voice and nothing else, adapting only while there is a voice to measure. Devices open at their **own** rate and `resample.go` — a port of the Node client's polyphase resampler, 83–89 dB SNR — converts both directions, because miniaudio's own converter is linear interpolation and a 44.1 kHz interface sounded duller through it than through Apple's unit. `om_watch` installs CoreAudio listeners (nominal rate, default devices) **before** opening, miniaudio's stop/reroute notifications cover Windows; either → sleep 300 ms → reopen by name (default fallback) → drain duplicates — this is what keeps a Bluetooth profile switch (44.1 k → 16 k) from turning robotic. Adaptive playback headroom (+20 ms after late ticks, first second ignored). `priority_*.go`: `HIGH_PRIORITY_CLASS` + MMCSS Pro Audio on Windows, QoS user-interactive on macOS |
 | `internal/video` | ffmpeg captures and encodes H.264 with the hardware encoder (`-init_hw_device videotoolbox … hwupload,scale_vt` keeps scaling on the GPU: 29% of a core against 103–133% for the CPU chains; NVENC via `ddagrab` D3D11, gdigrab fallback), Annex-B with AUDs split into access units in Go, keyframe every second, 8 s silence watchdog; `Receiver` rebuilds frames with pion's `samplebuilder` and pipes to `ffplay -f h264`. Screens: avfoundation + `system_profiler` names on macOS, PowerShell `AllScreens` on Windows, cached 60 s. `Encoder()` picks videotoolbox / nvenc / amf / qsv / libx264 |
-| `internal/tui` | Ink's output, redrawn — with one deliberate exception, the settings screen, which has sections (Audio, Video, Advanced, Other; ←→) and the cost/quality bars under them, so `testdata/settings*.txt` are our own frames rather than Ink's: `canvas.go` (cells, spans, wrap), `theme.go` (the palette from `theme.ts`, `ColorForName`), `chips.go`, `frame.go` (`Centered` with Ink's rounding — centred Text floors, chip rows ceil, an extra row in centred screens), one file per screen, `model.go` (every key the Node client had; the `Room` and `Host` interfaces), `golden_test.go` against `testdata/*.{txt,json}` captured from the Node app at 120x34 — text, colours and bold. Bubble Tea writes only changed lines: 139 B/s in a call. The mouse is mode 1002 (`hitmap.go`, `mouse.go`): screens register what they draw as they draw it — `DrawHints` every chip, `DrawSelect` every row, `DrawTabs` every tab — and a click **sends the key the chip already shows** through the ordinary key handler, so nothing is stated twice and a disabled chip registers nothing. `selection.go` is our own selection, two positions in the conversation rather than cells on screen, bridged by the offsets `WrapOffsets` records: it can only contain text, and a wrapped message copies as one line. `toast.go` is the notice row over the composer, which is also where the key that copies a selection is shown. The composer is a text field: it wraps and grows upward as a draft does, up to six rows or a third of the pane, then scrolls with the cursor (`wrapDraft`, which unlike `Wrap` keeps every rune — an editor may not drop what was typed), and it is a selectable region like the log, so the caret follows a click and what is selected is what a backspace or a paste replaces |
-| `internal/engine` | The room session: dial, rejoin with backoff (1 s → 30 s) as a newcomer, message handling (screen state re-broadcast to joiners, `camOn` on mute-state), stats loop (kbps, RTT, loss, latency), snapshots for the TUI, screen budget |
+| `internal/tui` | Ink's output, redrawn — with two deliberate exceptions. **The room's conversation is ours**: `bubbles.go` draws a message as a box on the side it came from (yours right in the accent, theirs left in grey, the name and the time on the outer edge), a run from one person in one box (same sender, two minutes, anything in between closes it), a file as a card across the whole width with its buttons inside it, and a room event centred and plain. Bubbles are 80% of the column, and the whole of it below 60 cells, the way a phone draws a conversation; the composer floats in a rounded box off the pane's bottom edge; below `MinWidth`×`MinHeight` the room is not drawn squeezed, it says the window is too small. The other exception is the settings screen, which has sections (Audio, Video, Advanced, Other; ←→) and the cost/quality bars under them, so `testdata/settings*.txt` are our own frames rather than Ink's: `canvas.go` (cells, spans, wrap), `theme.go` (the palette from `theme.ts`, `ColorForName`), `chips.go`, `frame.go` (`Centered` with Ink's rounding — centred Text floors, chip rows ceil, an extra row in centred screens), one file per screen, `model.go` (every key the Node client had; the `Room` and `Host` interfaces), `golden_test.go` against `testdata/*.{txt,json}` captured from the Node app at 120x34 — text, colours and bold; the room's three are ours, regenerated on purpose by `OPENMEET_REGEN=1 go test ./internal/tui -run GenerateRoomGoldens`, which is a decision to change the design and not a way to make a red test green. Bubble Tea writes only changed lines: 139 B/s in a call. The mouse is mode 1002 (`hitmap.go`, `mouse.go`): screens register what they draw as they draw it — `DrawHints` every chip, `DrawSelect` every row, `DrawTabs` every tab — and a click **sends the key the chip already shows** through the ordinary key handler, so nothing is stated twice and a disabled chip registers nothing. the composer's attachment chips and the files list `f` opens live in `files.go` beside them; `selection.go` is our own selection, two positions in the conversation rather than cells on screen, bridged by the offsets `WrapOffsets` records: it can only contain text, and a wrapped message copies as one line. `toast.go` is the notice row over the composer, which is also where the key that copies a selection is shown. The composer is a text field: it wraps and grows upward as a draft does, up to six rows or a third of the pane, then scrolls with the cursor (`wrapDraft`, which unlike `Wrap` keeps every rune — an editor may not drop what was typed), and it is a selectable region like the log, so the caret follows a click and what is selected is what a backspace or a paste replaces |
+| `internal/engine` | The room session: dial, rejoin with backoff (1 s → 30 s) as a newcomer, message handling (screen state re-broadcast to joiners, `camOn` on mute-state), stats loop (kbps, RTT, loss, latency), snapshots for the TUI, screen budget. `files.go` is the file half: offer, serve on request, take only a file we asked for from the peer who offered it, and mark a leaver's offers gone |
 | `internal/settings` | The same `settings.json` as the Node client, field for field (+ `audioProcessing`, `mouse`, `copyOnSelect`), BOM-tolerant |
 | `internal/keyboard` | The kitty keyboard protocol, for the one thing the legacy encoding cannot express: a chord with Cmd in it. A `Reader` between the tty and Bubble Tea asks the terminal (`CSI ? u`), turns the protocol on where it answers (`CSI = 1 u`), and translates what that changes — `Esc` becomes `CSI 27 u`, `Ctrl+C` becomes `CSI 99;5u` — back into the bytes Bubble Tea has always been handed, keeping `Cmd+C` (`CSI 99;9u`), which never had any. Measured in Ghostty, not read off a spec |
 | `internal/clip` | The clipboard: OSC 52 through the renderer's own writer always — the only route home from a session over SSH — plus `pbcopy`/PowerShell/`wl-copy` when the session is local. Apple's Terminal is the one terminal here that ignores OSC 52, and is covered by `pbcopy` |
@@ -115,7 +117,7 @@ in step — changing one without the other is how a room goes quiet with no erro
 an optional field is safe in both directions, since the client updates itself while the server is
 deployed separately; renaming or repurposing one is not.
 
-**Message types**: `join-room`, `room-joined`, `participant-joined`, `participant-left`, `offer`, `answer`, `ice-candidate`, `mute-state`, `screen-share-state`, `chat-message`, `chat-broadcast`, `error`
+**Message types**: `join-room`, `room-joined`, `participant-joined`, `participant-left`, `offer`, `answer`, `ice-candidate`, `mute-state`, `screen-share-state`, `chat-message`, `chat-broadcast`, `file-offer`, `file-offer-broadcast`, `error`
 
 **Common interfaces**: `Participant` (id, username, joinedAt, optional `color`), `Room` (id, name, createdAt, participantCount). `join-room` and `ChatMessage` carry the same optional `color`; the server copies it from the join onto every chat broadcast, like `username`, so a client never trusts a message's own claim
 
@@ -132,6 +134,7 @@ Express v5 HTTP server + WebSocket signaling + in-memory Maps.
 | `src/room-manager.ts` | In-memory Maps for rooms/participants, room removed when empty |
 | `src/signaling.ts` | WebSocket connection management, message routing |
 | `src/chat.ts` | Chat message broadcasting |
+| `src/files.ts` | File offer broadcasting — the description only. The server never holds a file, never sees one, and keeps no record that one exists |
 | `src/types.ts` | `ConnectedClient` (ws, participantId, roomId, username) |
 
 ### REST API
@@ -145,7 +148,7 @@ Express v5 HTTP server + WebSocket signaling + in-memory Maps.
 1. Client sends `join-room` → server adds to in-memory map, responds with `room-joined` (includes `yourId` + existing participants), broadcasts `participant-joined` to others
 2. Signaling messages (`offer`, `answer`, `ice-candidate`) → forwarded directly to target peer by `toId`
 3. `mute-state` and `screen-share-state` → broadcast to all other room members
-4. `chat-message` → broadcast as `chat-broadcast` to all room members
+4. `chat-message` → broadcast as `chat-broadcast` to all room members; `file-offer` → broadcast as `file-offer-broadcast` the same way, sender included, with `fromId`/`username`/`color` set from the connection
 5. On disconnect → broadcast `participant-left`, remove from map. If room is empty, remove room.
 
 ### Important server details
@@ -297,9 +300,13 @@ says otherwise; what was specific to the retired Node client went with it.
 
 ### The room and the connection
 
-1. **Three transceivers, same order, both sides**: audio (0), webcam (1), screen (2),
-   created before the offer and bound before the answer. Do not reorder or skip: the m-lines
-   are matched by position.
+1. **Three transceivers, same order, both sides — and then the data channel**: audio (0),
+   webcam (1), screen (2), created before the offer and bound before the answer, then the
+   `control` channel, which is what puts `application` at m-line 3. Do not reorder or skip:
+   the m-lines are matched by position. Only the **offering** side creates the channel — an
+   answer's m-lines mirror the offer's, so one created there is never negotiated — and a peer
+   whose binary predates it offers no such section, which costs the room its files and
+   nothing else.
 2. **Audio is `sendrecv` even while muted.** Anything else and the remote `OnTrack` never
    fires, so a peer's state is unknown until they speak.
 3. **Screen share state is a WebSocket broadcast, not a renegotiation**, and it is
@@ -436,3 +443,35 @@ says otherwise; what was specific to the retired Node client went with it.
     and the updater compares it with the tag it downloaded, so a mismatch would loop; CI
     refuses the tag instead.
 35. **`pnpm prune` in Docker needs `CI=true`** for a non-interactive environment.
+
+### Files
+
+36. **A paste can never carry an image to a terminal application.** Cmd+V is the terminal
+    turning the clipboard into *text*, and a clipboard holding a PNG has no text to give, so
+    the image cannot arrive through the keyboard at all. Reading it is ours, out of band —
+    `osascript` on macOS, PowerShell over `-EncodedCommand` on Windows — under a key of its
+    own, because the terminal eats Cmd+V (and Ctrl+V on Windows Terminal) before we see it.
+    None of it works over SSH: the tool would run on the wrong machine and OSC 52 is
+    write-only in practice. `clip.Remote()` already knows which case it is in.
+37. **A file offer arrives before the connection it will be fetched over exists.** The
+    announcement goes over the WebSocket, which is fast; the peer connection is still
+    gathering candidates. So anything that asks a peer for something waits for the connection
+    *and* the channel (`rtc.control`), rather than failing on a nil conn — failing there made
+    a file look broken when it was only early.
+38. **The name on an arriving file was chosen by somebody the room never authenticated.**
+    Never build a path from it: take the basename, sanitise it, generate the destination, and
+    check the result is still inside the download folder. Write to `.part`, verify the size
+    and the digest, and only then rename, so a failed transfer leaves nothing that looks
+    complete. Accepting is always a keypress; `--accept-files` is the one exception and it
+    has to be asked for.
+39. **A dropped file is typed in, one key at a time.** A terminal that accepts a drop writes
+    the file's *path* into the application as ordinary key events — not a paste, so nothing
+    frames it, and Windows Terminal does not deliver it in one piece. Two consequences, both
+    of which shipped broken. Watching a single insert misses it: what has to be watched is
+    what the **draft has become** (`refreshDraftFile`), which catches every delivery shape.
+    And if the composer does not have focus, those keys are *commands* — a Windows path run
+    through this room's keymap starts a screen share, mutes, and opens the device picker,
+    which is exactly what one drop did. So the characters a path can begin with (`"`, `'`,
+    `/`, `~`, `\`, `:`, or a capital) move the focus to the composer instead of falling
+    through to the controls. The hole that is left is a drop while a *modal* is up, where the
+    keys are the modal's; it can open a file window, and nothing worse.

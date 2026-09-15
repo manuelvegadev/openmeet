@@ -4,7 +4,7 @@ One static binary per platform: the client. It speaks the repo's own signaling s
 the WebRTC contract in [`docs/websocket-webrtc-architecture.md`](../../docs/websocket-webrtc-architecture.md);
 what it costs, and how to measure that again, is in [`docs/performance.md`](../../docs/performance.md).
 
-**Status: audio, screen and camera, with the full interface, September 2026.** Every screen the Node
+**Status: audio, screen, camera and files, with the full interface, September 2026.** Every screen the Node
 client has — first start, home, settings and its pickers, the audio setup with the mic test,
 the room with its chat, participants, keys and debug panel — drawn cell for cell the same:
 `internal/tui/testdata` holds frames captured from the Node client at 120x34 and
@@ -26,6 +26,30 @@ packages/go/openmeet                      # the home screen; --room standup goes
 transmits continuously; the Audio Send setting (128 kbps by default) is the one encoder's bitrate and `--audio-kbps` overrides it for a run;
 `--opus-complexity` its CPU lever (10 by default). Build with `-tags nolibopusfile` on a
 machine without libopusfile; the client never uses it.
+
+`--headless` has two flags of its own for files, because there is no keyboard there to ask:
+`--send-file <path>` shares one on joining, and `--accept-files` downloads everything the
+room offers. Accepting is a keypress everywhere else, and these make that explicit rather
+than assumed — they are also how a transfer is tested between two machines.
+
+### Sharing a file
+
+Drag a file onto the composer and it attaches as a chip; Enter sends it. Or press `ctrl+v`
+(`ctrl+p` on Windows, where the terminal keeps `ctrl+v` for its own paste) to attach whatever
+is on the clipboard — a file copied in the Finder or in Explorer, or an image, which is how a
+screenshot gets shared: a terminal application can never receive one from a paste, so the
+clipboard is read directly.
+
+A file shared appears as a row in everyone's log. `f` opens the list: Enter downloads one
+that is not here and previews one that is — Quick Look on macOS, the default application on
+Windows, which has no Quick Look — `o` opens it and `r` shows it in its folder. Downloads
+land in `~/Downloads/openmeet`.
+
+**Nothing is pushed.** A file moves only when somebody asks for it, over a data channel on
+the peer connection, so the server never holds one and never sees one; on a local network it
+goes straight between the two machines at the speed of the link. The whole of it is in
+[`docs/websocket-webrtc-architecture.md`](../../docs/websocket-webrtc-architecture.md) under
+"Files".
 
 ### Windows, cross-built from the Mac
 
@@ -92,7 +116,8 @@ formula to keep in step.
 | package | what |
 |---|---|
 | `internal/signal` | The WebSocket protocol, field for field with `packages/server/src/protocol.ts` |
-| `internal/rtc` | pion: one PeerConnection per peer, the three-transceiver contract, `polite = myID < peerID`, and **one `TrackLocalStaticRTP` bound to every connection** — the encode-once fan-out |
+| `internal/rtc` | pion: one PeerConnection per peer, the three-transceiver contract, `polite = myID < peerID`, and **one `TrackLocalStaticRTP` bound to every connection** — the encode-once fan-out. `data.go` is the data channels: one `control` per connection, then a channel of its own per file |
+| `internal/files` | Sharing a file: what it is called and how big it is, the chunking and the backpressure, where a received one lands and how carefully it is named, and what each system means by opening or previewing it |
 | `internal/audio` | miniaudio compiled in from `shim.c`, its callbacks in C feeding lock-free rings; a Go pump every 20 ms does capture → voice gate → Opus and keeps the playback ring fed from the playout (per-peer jitter buffer, Opus decode with PLC, mixer). No audio thread ever enters Go |
 | `internal/tui` | The interface: a cell canvas drawn the way Ink drew it (`canvas.go`), the palette (`theme.go`), the chrome (`frame.go`, `chips.go`), one file per screen, and the Bubble Tea model with every key the Node client has (`model.go`). Bubble Tea writes only the lines that changed |
 | `internal/engine` | The room session: signaling, the mesh, the pump, the stats, and the snapshots the interface draws from |

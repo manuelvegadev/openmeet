@@ -11,9 +11,10 @@ Client A <──── WebRTC P2P (media) ────> Client B
 ```
 
 - **WebSocket** carries the handshake (SDP, ICE) and the room's own messages: chat, mute
-  state, screen-share state.
-- **WebRTC** carries the media, directly between peers. **The server never sees a byte of
-  it**, and that is a constraint on every future change, not an implementation detail.
+  state, screen-share state, and the announcement that somebody has a file.
+- **WebRTC** carries the media and the files, directly between peers. **The server never sees
+  a byte of either**, and that is a constraint on every future change, not an implementation
+  detail.
 - **Topology**: a full mesh, every client connected to every other, capped at 6 people.
 
 ## The WebSocket layer
@@ -30,6 +31,7 @@ The server (`packages/server/src/signaling.ts`) routes:
 | `offer`, `answer`, `ice-candidate` | forwarded to `toId`, one to one |
 | `mute-state`, `screen-share-state` | broadcast to the rest of the room |
 | `chat-message` | broadcast as `chat-broadcast` |
+| `file-offer` | broadcast as `file-offer-broadcast`, to the sender as well — the description only, never the file |
 
 It pings every client every 25 s so reverse proxies do not time the connection out, keeps
 rooms in memory, and forgets a room when the last person leaves. The shapes are one
@@ -38,7 +40,8 @@ field in `internal/signal`.
 
 ## The WebRTC layer
 
-`internal/rtc` holds one `PeerConnection` per peer and, across all of them, **three tracks**:
+`internal/rtc` holds one `PeerConnection` per peer and, across all of them, **three tracks**
+and a data channel:
 
 | track | what |
 |---|---|
@@ -55,14 +58,20 @@ machine's hardware encoder produces rather than by what a browser would prefer.
 ### The connection contract
 
 Both sides must end up with the same three transceivers in the same order — audio, webcam,
-screen — or the m-lines do not line up:
+screen — followed by the data channel's `application` section, or the m-lines do not line up:
 
 1. The **newcomer** offers. It creates three `sendrecv` transceivers from the tracks above,
-   in that order, and sends the offer.
+   in that order, then the `control` data channel, and sends the offer. So every offer this
+   client makes is audio 0, webcam 1, screen 2, control 3.
 2. The **answerer** binds the same three tracks before answering, so `setRemoteDescription`
-   matches them in the same order.
+   matches them in the same order. It does **not** create a channel of its own: an answer's
+   m-lines mirror the offer's, so one created there would never be negotiated, and one
+   control channel per connection leaves no question about which to send on.
 3. Audio is `sendrecv` even while muted, so the remote `OnTrack` fires and a peer's state is
    known before they say anything.
+
+A peer whose binary predates the data channel offers no `application` section; nothing opens,
+and the room works as it did minus the files.
 
 ### Glare, retries and state
 
@@ -76,6 +85,33 @@ screen — or the m-lines do not line up:
   sharing. When it goes false, watchers close that peer's window.
 - **Mute state** carries the microphone and the camera (`isAudioMuted`, `camOn`); a muted
   microphone stops at the gate, so a muted participant costs every peer nothing at all.
+
+### Files
+
+A file is **announced** over the WebSocket and **fetched** over the connection — never
+pushed. In a mesh a push is the same multiplication a screen share is, and almost all of it
+would be waste, because most of the time nobody wants the file at all.
+
+1. The sender reads the file's size and SHA-256, and broadcasts a `file-offer`. The server
+   sets who it is from, the way it does for chat, and forwards the description to everyone —
+   the sender included, so every row in the room is drawn by the same path.
+2. A receiver who wants it sends `{"t":"get","id":…}` on the `control` channel.
+3. The sender opens **a channel of its own for that transfer**, labelled `file:<id>`, and
+   writes the file to it in 16 KiB messages. SCTP is already up, so the second channel costs
+   no renegotiation — and it means a chunk is a chunk: no transfer id repeated on every
+   message, no interleaving, and cancelling is closing the channel.
+4. The receiver writes to `<name>.part`, checks the size and the digest, and only then
+   renames. A transfer that fails leaves nothing that looks complete.
+
+Flow control is the channel's own: the sender waits while `BufferedAmount` is over a
+megabyte, so the disk is read at the speed of the wire and a file never passes through this
+process's memory. On top of that there is a rate ceiling — 2000 kbps — because a transfer is
+not the call and the uplink has to carry both. **On the local network there is none**: when
+the nominated candidate pair is host-to-host with a private address (`rtc.LocalPair`), there
+is no uplink to protect and a ceiling would be an invented limit.
+
+Every part of this is on goroutines of its own. The 20 ms audio pump never waits on a
+transfer, which is the same rule the video paths follow.
 
 ### Playout
 
