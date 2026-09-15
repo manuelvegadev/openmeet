@@ -51,7 +51,13 @@ type App struct {
 	Mouse string `json:"mouse,omitempty"`
 	// "on" or "off": whether letting go of a drag puts the selection on the clipboard by
 	// itself. Absent is off — the clipboard is somewhere things are put on purpose.
-	CopyOnSelect    string  `json:"copyOnSelect,omitempty"`
+	CopyOnSelect string `json:"copyOnSelect,omitempty"`
+	// What a file transfer is allowed to take. "voice-first" is no fixed ceiling: it uses
+	// what is there and gives it back the moment the call starts to suffer, which is the
+	// only way to give the voice priority — a data channel and the audio ride the same
+	// socket, so nothing a router can see tells them apart. "unlimited" never gives it back.
+	// "capped" is a flat 2 Mbps, for when the adaptive one is not trusted.
+	FileTransfer    string  `json:"fileTransfer,omitempty"`
 	PauseRendering  string  `json:"pauseRendering"`
 	AutoUpdate      string  `json:"autoUpdate"`
 	LastUpdateCheck int64   `json:"lastUpdateCheck"`
@@ -65,6 +71,7 @@ func Defaults() App {
 		AudioSendKbps: 128, AudioReceiveKbps: 128, ScreenSendKbps: 2500, ScreenReceiveKbps: 2500,
 		VoiceGate: true, PauseRendering: "minimized", AutoUpdate: "auto",
 		AudioProcessing: "system", MicLevel: "auto", OpusComplexity: 10, Mouse: "on", CopyOnSelect: "off",
+		FileTransfer: "voice-first",
 	}
 }
 

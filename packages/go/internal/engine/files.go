@@ -213,18 +213,12 @@ func (e *Engine) serveFile(peerID, id string) {
 		e.logf("file %s to %s: %v", f.offer.Name, rtc.Short(peerID), err)
 		return
 	}
-	// On the local network there is no uplink to protect and a ceiling would be invented;
-	// off it, a transfer gets well under what a screen share takes, because it is not the
-	// call. Either way it is a goroutine of its own and the 20 ms pump never waits on it.
-	rate := files.RemoteKbps
-	how := fmt.Sprintf("over the internet, capped at %d kbps", rate)
-	if e.peers.LocalPair(peerID) {
-		rate = files.LocalKbps
-		how = "over the local network, no ceiling"
-	}
-	e.logf("sending %s to %s %s", f.offer.Name, rtc.Short(peerID), how)
+	// What it may take is asked for again before every chunk, because on a link shared with
+	// a call the right answer changes as the call does (fileBudget). Either way this is a
+	// goroutine of its own and the 20 ms pump never waits on it.
+	e.logf("sending %s to %s (%s)", f.offer.Name, rtc.Short(peerID), e.budgetName(peerID))
 	e.updateFile(id, func(f *fileEntry) { f.sending++; f.state = tui.FileSending; f.done = 0 })
-	err = files.Send(f.path, s, rate, f.offer.Size, func(n int64) {
+	err = files.Send(f.path, s, func() int { return e.fileBudget(peerID) }, f.offer.Size, func(n int64) {
 		e.updateFile(id, func(f *fileEntry) { f.done = n })
 	})
 	s.Drain(30 * time.Second)
@@ -298,4 +292,73 @@ func (e *Engine) peerName(peerID string) string {
 		return p.p.Username
 	}
 	return "Someone"
+}
+
+// ── what a transfer is allowed to take ──────────────────────────────────────
+
+// The budget a transfer starts on, the floor it will not go below, and how much the round
+// trip may grow over its own baseline before the file is told to get out of the way.
+const (
+	fileStartKbps = 2000
+	fileFloorKbps = 500
+	rttSlackMs    = 80
+	rttCalmMs     = 30
+)
+
+// adjustFileBudget moves one peer's budget, once per stats tick. Called with e.mu held.
+//
+// This is the whole of "the voice has priority". It cannot be done with a QoS mark: the data
+// channel's SCTP and the audio's SRTP ride the same DTLS association on the same socket, with
+// the same DSCP EF on every packet, so nothing between here and the other end can tell them
+// apart. What can tell them apart is us — a file filling the uplink queue shows up as the
+// round trip growing, and that is the signal to give the room back.
+func (e *Engine) adjustFileBudget(p *peerInfo) {
+	if p.fileKbps == 0 {
+		p.fileKbps = fileStartKbps
+	}
+	if p.prevRTT <= 0 || p.baseRTT <= 0 {
+		return
+	}
+	switch {
+	case p.prevRTT > p.baseRTT+rttSlackMs:
+		// The queue is building and the call is the one paying for it.
+		p.fileKbps = max(fileFloorKbps, p.fileKbps*6/10)
+	case p.prevRTT <= p.baseRTT+rttCalmMs:
+		// Nothing is waiting on us; take more and find out where the ceiling really is.
+		p.fileKbps = p.fileKbps * 3 / 2
+	}
+}
+
+// budgetName is what the debug line calls the mode, for reading a transfer back afterwards.
+func (e *Engine) budgetName(peerID string) string {
+	switch {
+	case e.opts.FileTransfer == "unlimited":
+		return "unlimited"
+	case e.opts.FileTransfer == "capped":
+		return fmt.Sprintf("capped at %d kbps", files.CappedKbps)
+	case e.peers.LocalPair(peerID):
+		return "local network, no ceiling"
+	}
+	return "voice first, adapting"
+}
+
+// fileBudget is the ceiling a transfer to this peer has right now, in kbps; 0 is none.
+func (e *Engine) fileBudget(peerID string) int {
+	switch e.opts.FileTransfer {
+	case "unlimited":
+		return files.NoCeiling
+	case "capped":
+		return files.CappedKbps
+	}
+	// Voice first. On the local network there is no uplink to protect, so there is nothing
+	// to give back and no reason to start slowly.
+	if e.peers.LocalPair(peerID) {
+		return files.NoCeiling
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if p := e.people[peerID]; p != nil && p.fileKbps > 0 {
+		return p.fileKbps
+	}
+	return fileStartKbps
 }

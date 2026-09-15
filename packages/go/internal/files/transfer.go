@@ -12,13 +12,12 @@ import (
 // ChunkSize matches the data channel's: one read from the disk is one message on the wire.
 const ChunkSize = 16 * 1024
 
-// Rates. A transfer is not the call, so on a link that has to carry both it gets a ceiling
-// well under what a screen share takes. On the local network there is no uplink to protect
-// and the ceiling is an invented limit, so there is none — see rtc.LocalPair, which is what
-// decides between these.
+// Rates. Zero is no ceiling at all: the file goes as fast as the channel drains, which on a
+// local network is the right answer and anywhere else is only right if something is watching
+// the call. CappedKbps is the flat one, for when nothing is.
 const (
-	RemoteKbps = 2000
-	LocalKbps  = 0 // as fast as the channel drains
+	CappedKbps = 2000
+	NoCeiling  = 0
 )
 
 // Progress is called as bytes move, already thinned: a whole percent must have changed *and*
@@ -49,11 +48,15 @@ func (t *throttle) tick(done int64) {
 	}
 }
 
-// Send streams a file onto a writer, no faster than rateKbps and never holding more of it in
-// memory than one chunk. The writer blocks when the channel is already carrying enough, so
-// the disk is read at the speed of the wire: a file larger than this process is not a
-// problem, because it never passes through it.
-func Send(path string, w io.Writer, rateKbps int, size int64, report Progress) error {
+// Send streams a file onto a writer, never holding more of it in memory than one chunk. The
+// writer blocks when the channel is already carrying enough, so the disk is read at the speed
+// of the wire: a file larger than this process is not a problem, because it never passes
+// through it.
+//
+// `rate` is asked for a ceiling in kbps before every chunk rather than given once, because on
+// a link shared with a call the right ceiling is not a number known in advance — it is
+// whatever the call can spare this second. Zero means none.
+func Send(path string, w io.Writer, rate func() int, size int64, report Progress) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -70,6 +73,10 @@ func Send(path string, w io.Writer, rateKbps int, size int64, report Progress) e
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
+			rateKbps := 0
+			if rate != nil {
+				rateKbps = rate()
+			}
 			if rateKbps > 0 {
 				now := time.Now()
 				allowance += now.Sub(last).Seconds() * float64(rateKbps) * 1000 / 8

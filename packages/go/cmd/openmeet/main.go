@@ -154,6 +154,8 @@ func (st *store) Rows() []tui.SettingsRow {
 			Help: "What each person watching gets, whoever else is watching: the share is encoded once, on the GPU, and the same picture goes to everyone. Only the upload multiplies — measured, the sender's CPU does not move with the number of peers."},
 		tui.SettingsRow{Tab: "Advanced", Label: "Upload Ceiling", Choices: uploadLabels(), Choice: slices.Index(uploadSteps, s.ScreenUploadKbps), Suffix: "Mbps for a share, everyone together",
 			Help: "Off means each viewer gets the rate you chose and your upload carries the rest: five people watching at 2500 kbps is 12.5 Mbps up. Set it and everyone's rate comes down together instead; it is read when a share starts."},
+		tui.SettingsRow{Tab: "Advanced", Label: "File Transfer", Choices: []string{"voice first", "unlimited", "2 Mbps"}, Choice: slices.Index(fileTransferValues, orFirst(s.FileTransfer, fileTransferValues)),
+			Help: "Voice first takes whatever the link has spare and gives it back the moment the call starts to suffer — a transfer and the voice ride the same socket, so nothing a router can see tells them apart and this is the only thing that can. Unlimited never gives it back. 2 Mbps is a flat ceiling."},
 		tui.SettingsRow{Tab: "Advanced", Label: "Mouse", Choices: []string{"on", "off"}, Choice: boolChoice(st.Mouse()),
 			Help: "Click the buttons, scroll the pane under the pointer, and drag across the conversation to select and copy it. " + mouseHelpText()},
 		tui.SettingsRow{Tab: "Advanced", Label: "Copy on Select", Choices: []string{"off", "on"}, Choice: boolChoice(!st.CopyOnSelect()),
@@ -183,6 +185,18 @@ func uploadLabels() []string {
 // What the encoder costs, on the one scale both tabs draw it on; the Audio tab adds the
 // rest of its path on top.
 func opusCPU(complexity int) float64 { return 0.10 + float64(complexity)*0.02 }
+
+// fileTransferValues are the settings.json values, in the order the row cycles them.
+var fileTransferValues = []string{"voice-first", "unlimited", "capped"}
+
+// orFirst is a stored value that is one of the listed ones, or the first when it is neither —
+// an older settings.json has no key at all, and a hand-edited one may have anything.
+func orFirst(v string, list []string) string {
+	if slices.Contains(list, v) {
+		return v
+	}
+	return list[0]
+}
 
 func boolChoice(on bool) int {
 	if on {
@@ -347,6 +361,8 @@ func (st *store) Run(idx int) string {
 		s.MicLevel = cycle(micLevelValues, s.MicLevel)
 	case "Upload Ceiling":
 		s.ScreenUploadKbps = cycleNumber(uploadSteps, s.ScreenUploadKbps)
+	case "File Transfer":
+		s.FileTransfer = cycle(fileTransferValues, orFirst(s.FileTransfer, fileTransferValues))
 	case "Mouse":
 		s.Mouse = cycle(mouseValues, s.Mouse)
 	case "Copy on Select":
@@ -856,6 +872,7 @@ func main() {
 				MicLevel:     st.s.MicLevel != "off",
 				VideoEnabled: videoEnabled, VideoDisabledWhy: videoWhy, WebcamEnabled: webcamEnabled,
 				ScreenSendKbps: st.s.ScreenSendKbps, ScreenUploadKbps: st.s.ScreenUploadKbps,
+				FileTransfer: orFirst(st.s.FileTransfer, fileTransferValues),
 			}, emit)
 			if err := e.Start(); err != nil {
 				return nil, err

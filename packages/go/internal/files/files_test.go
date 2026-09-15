@@ -172,7 +172,7 @@ func TestSendAndReceive(t *testing.T) {
 
 	var wire bytes.Buffer
 	var lastSent int64
-	if err := Send(src, &wire, 0, meta.Size, func(n int64) { lastSent = n }); err != nil {
+	if err := Send(src, &wire, nil, meta.Size, func(n int64) { lastSent = n }); err != nil {
 		t.Fatal(err)
 	}
 	if lastSent != meta.Size {
@@ -243,6 +243,27 @@ func TestDescribeRefusesWhatCannotBeSent(t *testing.T) {
 	}
 }
 
+// A ceiling that moves while the transfer runs is the whole point of asking for it per
+// chunk: the call decides what the file may have, second by second.
+func TestSendFollowsACeilingThatMoves(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "payload.bin")
+	if err := os.WriteFile(src, bytes.Repeat([]byte("x"), 8*ChunkSize), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	var wire bytes.Buffer
+	if err := Send(src, &wire, func() int { asked++; return 0 }, 8*ChunkSize, nil); err != nil {
+		t.Fatal(err)
+	}
+	if asked < 8 {
+		t.Errorf("the ceiling was asked for %d times, want one per chunk", asked)
+	}
+	if wire.Len() != 8*ChunkSize {
+		t.Errorf("sent %d bytes", wire.Len())
+	}
+}
+
 // The rate ceiling is what keeps a transfer from taking the call's uplink with it.
 func TestSendHonoursItsCeiling(t *testing.T) {
 	dir := t.TempDir()
@@ -254,7 +275,7 @@ func TestSendHonoursItsCeiling(t *testing.T) {
 	}
 	var wire bytes.Buffer
 	done := make(chan error, 1)
-	go func() { done <- Send(src, &wire, 512, 64*1024, nil) }()
+	go func() { done <- Send(src, &wire, func() int { return 512 }, 64*1024, nil) }()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}

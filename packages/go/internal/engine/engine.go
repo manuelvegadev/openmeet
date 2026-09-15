@@ -41,6 +41,8 @@ type Options struct {
 	ScreenSendKbps   int
 	// A ceiling on everything a share puts on the wire at once; 0 is no ceiling.
 	ScreenUploadKbps int
+	// What a file transfer may take: "voice-first", "unlimited" or "capped".
+	FileTransfer string
 }
 
 type peerInfo struct {
@@ -54,6 +56,12 @@ type peerInfo struct {
 	latency  int
 	bytes    int64
 	prevRTT  int
+	// The delay baseline and the budget a transfer to this peer currently has. A transfer
+	// and the call share one socket, so a queue building on our uplink shows up as this
+	// peer's round trip growing — which is the only signal there is that the file is in the
+	// voice's way, and the one the budget follows.
+	baseRTT  int
+	fileKbps int
 	// Their video, as they say it (signaling) and as we receive it (tracks).
 	webcam  *video.Receiver
 	screen  *video.Receiver
@@ -654,7 +662,11 @@ func (e *Engine) statsLoop() {
 				prevLoss[id] = [2]int{st.Concealed + st.Recovered, st.Received + st.Concealed + st.Recovered}
 				if rtt, ok := rtts[id]; ok {
 					p.prevRTT = rtt
+					if p.baseRTT == 0 || rtt < p.baseRTT {
+						p.baseRTT = rtt
+					}
 				}
+				e.adjustFileBudget(p)
 				if e.debug {
 					for _, r := range []*video.Receiver{p.screen, p.webcam} {
 						if r != nil {
