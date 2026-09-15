@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import { WebSocket, WebSocketServer } from 'ws';
 import { handleChatMessage } from './chat.js';
 import { config } from './config.js';
+import { handleFileOffer } from './files.js';
 import type { WSMessage } from './protocol.js';
 import { addParticipant, ensureRoom, getParticipants, getRoomState, removeParticipant } from './room-manager.js';
 import type { ConnectedClient } from './types.js';
@@ -121,6 +122,14 @@ export function setupSignaling(server: Server): void {
             const room = getRoomState(client.roomId);
             if (!room) return;
             handleChatMessage(message, client, room.clients);
+            break;
+          }
+
+          case 'file-offer': {
+            if (!client) return;
+            const room = getRoomState(client.roomId);
+            if (!room) return;
+            handleFileOffer(message, client, room.clients);
             break;
           }
         }

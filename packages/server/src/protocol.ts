@@ -108,6 +108,36 @@ export interface ChatBroadcastMessage {
   message: ChatMessage;
 }
 
+// === File Messages ===
+
+// A file someone is offering to the room. Only this announcement crosses the server: the
+// request for it and the bytes themselves go over the peer connections, on a data channel,
+// so the server never holds a file and never sees one. `fromId`, `username` and `color` are
+// set by the server from the connection, like a chat message's, so a client never trusts a
+// sender's claim about who it is.
+export interface FileOffer {
+  type: 'file-offer';
+  /** The sender's id for it, unique in the room, and what a request over the data channel names. */
+  id: string;
+  roomId: string;
+  fromId: string;
+  username: string;
+  color?: string;
+  /** The basename as the sender sees it. Never used to build a path on the receiving side. */
+  name: string;
+  size: number;
+  /** How the row draws it, by extension: audio, video, an archive, or anything else. */
+  kind: 'aud' | 'vid' | 'img' | 'zip' | 'doc';
+  /** Hex, checked by the receiver once the transfer ends. */
+  sha256: string;
+  timestamp: number;
+}
+
+export interface FileOfferBroadcastMessage {
+  type: 'file-offer-broadcast';
+  offer: FileOffer;
+}
+
 // === Media State Messages ===
 
 export interface MuteStateMessage {
@@ -144,4 +174,6 @@ export type WSMessage =
   | ScreenShareStateMessage
   | ChatMessage
   | ChatBroadcastMessage
+  | FileOffer
+  | FileOfferBroadcastMessage
   | ErrorMessage;
