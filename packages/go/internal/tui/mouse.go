@@ -98,6 +98,12 @@ func (m *Model) listCursor(id string) (*int, int) {
 // ── pressing things ─────────────────────────────────────────────────────────
 
 func (m *Model) press(e tea.MouseEvent) tea.Cmd {
+	// A file card's buttons, before the text: they sit inside the log, which is a text
+	// region, and they are the one thing in there that is a thing to press.
+	if a, ok := m.frame.HitTest(e.X, e.Y, ActRow); ok && strings.HasPrefix(a.ID, "file:") {
+		m.sel.clear()
+		return m.pressFile(a.ID, a.Idx)
+	}
 	// Text first, but only inside a text region: that is the one place a press means
 	// something other than pressing a thing.
 	if a, ok := m.frame.HitTest(e.X, e.Y, ActText); ok {

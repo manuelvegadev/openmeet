@@ -11,10 +11,19 @@ import (
 // The frames in testdata were captured from the Node client at 120x34: each screen here must
 // come out cell for cell the same, which is how the interface people learnt cannot drift.
 //
-// Two of them are no longer Node's, and deliberately: the settings grew sections and the
-// cost/quality bars, and the home screen grew a key for asking about updates, which Node had
-// no equivalent of. Their frames are ours, regenerated on purpose — so a difference in either
-// still fails, it just fails against the design we chose rather than against Ink.
+// Three of them are no longer Node's, and deliberately. The settings grew sections and the
+// cost/quality bars; the home screen grew a key for asking about updates, which Node had no
+// equivalent of; and **the room** is now bubbles — a message in a box on the side it came
+// from, a file as a card across the width, an event centred and plain (bubbles.go) — where
+// Node drew one log line per entry. Their frames are ours, regenerated on purpose, so a
+// difference in any of them still fails; it just fails against the design we chose rather
+// than against Ink.
+//
+// Regenerate the room's three with:
+//
+//	OPENMEET_REGEN=1 go test ./internal/tui -run GenerateRoomGoldens
+//
+// which is a decision to change the design, not a way to make a red test green.
 
 func golden(t *testing.T, name string) string {
 	t.Helper()
@@ -169,7 +178,7 @@ func poseRoom() RoomState {
 	}
 }
 
-func TestRoomMatchesNode(t *testing.T) {
+func TestRoomFrame(t *testing.T) {
 	c := NewCanvas(120, 34)
 	DrawRoom(c, poseRoom())
 	compare(t, "room", c)

@@ -46,10 +46,6 @@ func (m *Model) SelectionRange() (TextPos, TextPos, bool) {
 	return from, to, true
 }
 
-// entryText is the line one entry reads as on screen, with none of how it was drawn: the
-// string the selection counts its offsets in, and the string a copy puts on the clipboard.
-func entryText(e ChatEntry) string { return PlainText(entrySpans(e)) }
-
 // lineText is one line of whichever region the selection is in, as its own text.
 func (m *Model) lineText(src int) string {
 	switch m.sel.region {

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/manuelvegadev/openmeet/packages/go/internal/files"
 )
 
 // The Bubble Tea model: which screen is up, what each one is doing, and the keys — the same
@@ -34,6 +36,11 @@ type Room interface {
 	StartCamera(id string) error
 	StopCamera()
 	TogglePeerWindow(peerID, kind string) error
+	// Files: offer one to the room, ask for one that was offered, and do something with one
+	// that is here — how is "preview", "open" or "reveal".
+	ShareFile(path string) error
+	GetFile(id string) error
+	OpenFile(id, how string) error
 	Close()
 }
 
@@ -65,6 +72,18 @@ type Host struct {
 	// can send a better one. The interface draws what it is given: which chord a platform
 	// calls what is not something this package can know.
 	CopyKey string
+	// Attach resolves what was dropped or pasted into the composer — a path, or several,
+	// however this terminal escapes them — into files that can be sent. It answers false for
+	// anything that is not a path to a file that exists, which is then ordinary text.
+	Attach func(raw string) ([]Attachment, bool)
+	// AttachClipboard is the same for whatever is on the clipboard: a file copied in the
+	// Finder or in Explorer, or an image — a screenshot — written out to a file first. The
+	// string is why there was nothing to attach, for the times there was not.
+	AttachClipboard func() ([]Attachment, string)
+	// The chord this platform's terminal leaves free for that. Cmd+V never reaches an
+	// application, and on Windows Terminal neither does Ctrl+V, so which key it is is not
+	// something this package can know.
+	AttachKey string
 	// Where to start: the room to join straight away, if the CLI said so.
 	InitialRoom string
 	InputFlag   string
@@ -268,6 +287,10 @@ type Model struct {
 	modalItems []VideoChoice
 	modalIdx   int
 	lastScreen string
+	// The files the room has seen, in order. The log's entries point at these same structs,
+	// so a transfer moving updates the row and the list at once.
+	files      []*FileInfo
+	attach     []Attachment
 	draft      textField
 	anchor     int
 	clearArmed bool
@@ -382,6 +405,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case Snapshot:
 		m.applySnapshot(msg)
 		return m, nil
+	case FileShared:
+		info := msg.File
+		m.files = append(m.files, &info)
+		e := ChatEntry{At: msg.At, Kind: KindFile, Who: Clean(msg.Who), Color: msg.Color, File: m.files[len(m.files)-1]}
+		m.rs.Entries = append(m.rs.Entries, e)
+		return m, nil
+	case FileUpdate:
+		for _, f := range m.files {
+			if f.ID == msg.ID {
+				f.State, f.Done, f.Error = msg.State, msg.Done, msg.Error
+				if msg.Saved != "" {
+					f.Saved = msg.Saved
+				}
+				break
+			}
+		}
+		return m, nil
 	case Line:
 		// Cleaned on arrival as well as on the way out: a message from another client is
 		// data, and the wrap wants real spaces where its newlines were.
@@ -472,7 +512,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case screenDevices:
 			return m, m.keyDevices(msg)
 		case screenRoom:
-			return m, m.keyRoom(msg)
+			cmd := m.keyRoom(msg)
+			// A dropped path may arrive one key at a time, so what the draft has become is
+			// checked after every key rather than only when a whole path lands in one.
+			m.refreshDraftFile()
+			return m, cmd
 		}
 	}
 	return m, nil
@@ -493,6 +537,13 @@ func (m *Model) applySnapshot(s Snapshot) {
 	m.rs.VideoEnabled = s.VideoEnabled
 	m.rs.WebcamEnabled = s.WebcamEnabled
 	m.rs.ScreenSharing = s.ScreenSharing
+}
+
+// startsAPath: one typed character that can only be the start of a path. The grammar is the
+// files package's (files.StartsAPath) — a drop form added there is added everywhere.
+func startsAPath(s string) bool {
+	r := []rune(s)
+	return len(r) == 1 && files.StartsAPath(r[0])
 }
 
 func isRune(msg tea.KeyMsg, r string) bool {
@@ -883,6 +934,9 @@ func (m *Model) joinRoom() {
 	m.draft.clear()
 	m.anchor = -1
 	m.debugLines = nil
+	// A room's files belong to that room: the peers that had them are not in this one, and a
+	// draft's attachments were meant for the message that never got sent.
+	m.files, m.attach, m.modal = nil, nil, ""
 	m.sel.clear()
 	m.toastText, m.toastKind = "", ""
 	m.screen = screenRoom
@@ -905,7 +959,22 @@ func (m *Model) leaveRoom() {
 // ── room ────────────────────────────────────────────────────────────────────
 
 func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
+	// A file dropped on a terminal is written in as text, one key at a time — and wherever
+	// the focus is, those keys are that screen's commands. A Windows path run through the
+	// room's keymap started a screen share, muted and opened the device picker; run through a
+	// modal's it opens whatever that modal opens. The characters a path can begin with mean
+	// the room is being written to, so they close any modal, take the focus to the composer,
+	// and let refreshDraftFile make an attachment of what follows.
+	if s, ok := typed(msg); ok && startsAPath(s) {
+		m.modal = ""
+		m.rs.InputFocused = true
+		m.draft.insert(s)
+		return m.blink()
+	}
 	// A modal takes every key while it is up; the room behind it stands down.
+	if m.modal == "files" {
+		return m.keyFiles(msg)
+	}
 	if m.modal != "" {
 		switch msg.Type {
 		case tea.KeyEsc:
@@ -947,9 +1016,19 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 	if m.rs.InputFocused {
 		switch msg.Type {
 		case tea.KeyEnter:
-			if text := strings.TrimSpace(m.draft.value); text != "" && m.room != nil {
-				m.room.SendChat(m.draft.value)
+			if m.room != nil {
+				if text := strings.TrimSpace(m.draft.value); text != "" {
+					m.room.SendChat(m.draft.value)
+				}
+				for _, a := range m.attach {
+					if err := m.room.ShareFile(a.Path); err != nil {
+						m.attach = nil
+						m.draft.clear()
+						return tea.Batch(m.blink(), m.toast("warn", err.Error()))
+					}
+				}
 			}
+			m.attach = nil
 			m.draft.clear()
 			m.clearArmed = false
 			return m.blink()
@@ -974,6 +1053,14 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 		case tea.KeyDown:
 			m.scroll(1)
 		case tea.KeyBackspace:
+			// With nothing left to delete, backspace takes the last attachment off, which is
+			// where the eye goes when the draft is empty and a chip is sitting above it.
+			if m.draft.value == "" && len(m.attach) > 0 {
+				if _, _, ok := m.draftSelection(); !ok {
+					m.attach = m.attach[:len(m.attach)-1]
+					return m.blink()
+				}
+			}
 			if !m.dropDraftSelection() {
 				m.draft.backspace()
 			}
@@ -995,6 +1082,11 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 				m.draft.cut(m.draft.wordStart(), m.draft.cursor)
 			}
 			return m.blink()
+		case tea.KeyCtrlV, tea.KeyCtrlP:
+			// Attach what is on the clipboard. Not Cmd+V: that never reaches an application,
+			// and a clipboard holding an image has no text for a paste to carry anyway — this
+			// reads the clipboard itself. Both chords, because Windows Terminal keeps Ctrl+V.
+			return m.attachClipboard()
 		case tea.KeyCtrlU:
 			// Delete to the start of the line — which is what Ghostty sends for cmd+backspace.
 			m.dropDraftSelection()
@@ -1044,6 +1136,11 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 				return m.blink()
 			}
 			if s, ok := typed(msg); ok {
+				// A dropped path becomes an attachment through refreshDraftFile, which runs
+				// after every key in this room and watches what the draft has become. Doing it
+				// here as well was the design that replaced — and the two disagreed about a
+				// path with a sentence around it, which is a message.
+				//
 				// Typing over a selection replaces it, as a paste does: both land here.
 				m.dropDraftSelection()
 				m.draft.insert(s)
@@ -1114,6 +1211,8 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 				m.modal, m.modalItems, m.modalIdx = "camera", cams, 0
 			}
 		}
+	case isRune(msg, "f") && len(m.files) > 0:
+		m.modal, m.modalIdx = "files", len(m.files)-1
 	case isRune(msg, "w") && m.rs.VideoEnabled && m.room != nil:
 		if m.rs.SelectedPeer < len(m.rs.Peers) {
 			p := m.rs.Peers[m.rs.SelectedPeer]
@@ -1213,6 +1312,13 @@ func (m *Model) View() string {
 		return ""
 	}
 	c := NewCanvas(max(20, m.width), max(6, m.height))
+	// Below the minimum the room is not drawn squeezed, it is not drawn: a frame with its
+	// middle squashed out reads as a bug rather than as a window that wants pulling wider.
+	if m.screen == screenRoom && TooSmall(m.width, m.height) {
+		DrawTooSmall(c, m.width, m.height)
+		m.frame = c
+		return c.Render()
+	}
 	switch m.screen {
 	case screenProfile:
 		m.profile.Cursor = m.blinkOn
@@ -1256,8 +1362,13 @@ func (m *Model) View() string {
 		rs.Toast, rs.ToastKind = m.toastText, m.toastKind
 		rs.Selecting = !m.sel.empty()
 		rs.CopyKey = m.copyKey
+		rs.Attachments = m.attach
+		rs.AttachKey = m.host.AttachKey
+		rs.FileCount = len(m.files)
 		DrawRoom(c, rs)
-		if m.modal != "" {
+		if m.modal == "files" {
+			DrawModal(c, "Files in this room", FileRows(m.files), m.modalIdx, FileHints(m.selectedFile()), "modal")
+		} else if m.modal != "" {
 			title := "Share a screen"
 			if m.modal == "camera" {
 				title = "Share a camera"

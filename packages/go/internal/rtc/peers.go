@@ -42,6 +42,9 @@ type conn struct {
 	makingOffer bool
 	pending     []webrtc.ICECandidateInit
 	retries     int
+	// The control channel of the contract: one per connection, created by the offering
+	// side, and nil until it opens. See internal/rtc/data.go.
+	ctrl *Stream
 }
 
 type Manager struct {
@@ -54,12 +57,18 @@ type Manager struct {
 	onAudio func(peerID string, pkt *rtp.Packet)
 	onVideo func(peerID string, kind string, track *webrtc.TrackRemote)
 	onState func(peerID string, state string)
-	log     func(format string, args ...any)
+	// The data channels: one control message, and one file arriving on a channel of its own.
+	onControl func(peerID string, data []byte)
+	onStream  func(peerID, id string, s *Stream)
+	log       func(format string, args ...any)
 
 	mu    sync.Mutex
 	conns map[string]*conn
-	seq   uint16
-	ssrc  uint32
+	// Closed and replaced whenever a control channel opens, so anything waiting for one
+	// wakes on the event instead of asking again every hundred milliseconds.
+	ctrlChanged chan struct{}
+	seq         uint16
+	ssrc        uint32
 }
 
 type Options struct {
@@ -69,7 +78,11 @@ type Options struct {
 	// A peer's video track, "webcam" or "screen" by the contract's transceiver order.
 	OnVideo func(peerID string, kind string, track *webrtc.TrackRemote)
 	OnState func(peerID string, state string)
-	Log     func(format string, args ...any)
+	// OnControl is one message from a peer's control channel; OnStream is a file arriving,
+	// on the channel opened for it. Both run on their own goroutines.
+	OnControl func(peerID string, data []byte)
+	OnStream  func(peerID, id string, s *Stream)
+	Log       func(format string, args ...any)
 }
 
 func NewManager(o Options) (*Manager, error) {
@@ -138,19 +151,26 @@ func NewManager(o Options) (*Manager, error) {
 	if n, err := newQOSNet(); err == nil {
 		se.SetNet(n)
 	}
+	// Detached data channels: a transfer is then ordinary io on a goroutine of its own
+	// rather than a callback per 16 KiB, which is the difference between a file moving at
+	// the speed of the link and one moving at the speed of the scheduler.
+	se.DetachDataChannels()
 	return &Manager{
-		myID:    o.MyID,
-		api:     webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithInterceptorRegistry(reg), webrtc.WithSettingEngine(se)),
-		track:   track,
-		webcam:  webcam,
-		screen:  screen,
-		onVideo: o.OnVideo,
-		send:    o.Send,
-		onAudio: o.OnAudio,
-		onState: o.OnState,
-		log:     o.Log,
-		conns:   map[string]*conn{},
-		ssrc:    0x4f4d4554, // "OMET"; rewritten per binding anyway
+		myID:        o.MyID,
+		api:         webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithInterceptorRegistry(reg), webrtc.WithSettingEngine(se)),
+		track:       track,
+		webcam:      webcam,
+		screen:      screen,
+		onVideo:     o.OnVideo,
+		send:        o.Send,
+		onAudio:     o.OnAudio,
+		onState:     o.OnState,
+		onControl:   o.OnControl,
+		onStream:    o.OnStream,
+		log:         o.Log,
+		conns:       map[string]*conn{},
+		ctrlChanged: make(chan struct{}),
+		ssrc:        0x4f4d4554, // "OMET"; rewritten per binding anyway
 	}, nil
 }
 
@@ -186,6 +206,7 @@ func (m *Manager) newPeerConnection(peerID string) (*conn, error) {
 		return nil, err
 	}
 	c := &conn{pc: pc}
+	m.wireData(c, peerID)
 	pc.OnICECandidate(func(cand *webrtc.ICECandidate) {
 		if cand == nil {
 			return
@@ -208,13 +229,13 @@ func (m *Manager) newPeerConnection(peerID string) (*conn, error) {
 					kind = "screen"
 				}
 			}
-			m.log("%s track from %s (%s)", kind, short(peerID), track.Codec().MimeType)
+			m.log("%s track from %s (%s)", kind, Short(peerID), track.Codec().MimeType)
 			if m.onVideo != nil {
 				m.onVideo(peerID, kind, track)
 			}
 			return
 		}
-		m.log("audio track from %s (%s)", short(peerID), track.Codec().MimeType)
+		m.log("audio track from %s (%s)", Short(peerID), track.Codec().MimeType)
 		for {
 			pkt, _, err := track.ReadRTP()
 			if err != nil {
@@ -224,7 +245,7 @@ func (m *Manager) newPeerConnection(peerID string) (*conn, error) {
 		}
 	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		m.log("%s: %s", short(peerID), s)
+		m.log("%s: %s", Short(peerID), s)
 		if m.onState != nil {
 			m.onState(peerID, s.String())
 		}
@@ -247,17 +268,28 @@ func (m *Manager) newPeerConnection(peerID string) (*conn, error) {
 	return c, nil
 }
 
-// addTracks creates the three transceivers of the contract — audio, webcam, screen — each
+// addContract creates the three transceivers of the contract — audio, webcam, screen — each
 // sendrecv and carrying the shared track, so a share needs no renegotiation to start: its
 // frames simply begin, and the screen-share-state message says so.
-func (m *Manager) addTracks(pc *webrtc.PeerConnection) error {
+//
+// The control channel goes here too, and only on the offering side: it is what puts the
+// `application` m-line in the SDP, and it must land after the three media sections every
+// time (gotcha 1 — the m-lines are matched by position, so audio 0, webcam 1, screen 2,
+// control 3, on every connection this client makes). The answering side takes the channel it
+// is given: an answer's m-lines mirror the offer's, so one created there would never be
+// negotiated. A peer whose binary predates all this offers no such section, we open no
+// channel to them, and the room works exactly as it did minus the files.
+func (m *Manager) addContract(c *conn, peerID string, offering bool) error {
 	init := webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv}
 	for _, t := range []webrtc.TrackLocal{m.track, m.webcam, m.screen} {
-		if _, err := pc.AddTransceiverFromTrack(t, init); err != nil {
+		if _, err := c.pc.AddTransceiverFromTrack(t, init); err != nil {
 			return err
 		}
 	}
-	return nil
+	if !offering {
+		return nil
+	}
+	return m.addControl(c, peerID)
 }
 
 // WriteVideo hands one encoded access unit to every peer, on the camera or the screen track.
@@ -330,7 +362,7 @@ func (m *Manager) offer(peerID string, retries int) {
 	c, err := m.newPeerConnection(peerID)
 	if err != nil {
 		m.mu.Unlock()
-		m.log("peer connection for %s: %v", short(peerID), err)
+		m.log("peer connection for %s: %v", Short(peerID), err)
 		return
 	}
 	c.retries = retries
@@ -339,8 +371,8 @@ func (m *Manager) offer(peerID string, retries int) {
 	m.mu.Unlock()
 
 	pc := c.pc
-	if err := m.addTracks(pc); err != nil {
-		m.log("transceivers for %s: %v", short(peerID), err)
+	if err := m.addContract(c, peerID, true); err != nil {
+		m.log("transceivers for %s: %v", Short(peerID), err)
 		return
 	}
 	offer, err := pc.CreateOffer(nil)
@@ -351,7 +383,7 @@ func (m *Manager) offer(peerID string, retries int) {
 	c.makingOffer = false
 	m.mu.Unlock()
 	if err != nil {
-		m.log("offer to %s: %v", short(peerID), err)
+		m.log("offer to %s: %v", Short(peerID), err)
 		return
 	}
 	_ = m.send(signal.Message{
@@ -367,11 +399,11 @@ func (m *Manager) HandleOffer(peerID string, sdp *signal.SessionDescription) {
 	collision := c != nil && (c.makingOffer || c.pc.SignalingState() != webrtc.SignalingStateStable)
 	if collision && !m.polite(peerID) {
 		m.mu.Unlock()
-		m.log("glare with %s: impolite, ignoring their offer", short(peerID))
+		m.log("glare with %s: impolite, ignoring their offer", Short(peerID))
 		return
 	}
 	if c != nil && (collision || c.pc.ConnectionState() == webrtc.PeerConnectionStateFailed) {
-		m.log("glare with %s: polite, yielding", short(peerID))
+		m.log("glare with %s: polite, yielding", Short(peerID))
 		_ = c.pc.Close()
 		delete(m.conns, peerID)
 		c = nil
@@ -381,15 +413,16 @@ func (m *Manager) HandleOffer(peerID string, sdp *signal.SessionDescription) {
 		c, err = m.newPeerConnection(peerID)
 		if err != nil {
 			m.mu.Unlock()
-			m.log("peer connection for %s: %v", short(peerID), err)
+			m.log("peer connection for %s: %v", Short(peerID), err)
 			return
 		}
 		m.conns[peerID] = c
 		// The three transceivers, in the contract's order, before the remote description:
-		// pion matches them to the offer's m-lines by kind, in order.
-		if err := m.addTracks(c.pc); err != nil {
+		// pion matches them to the offer's m-lines by kind, in order. The control channel
+		// is the offerer's to create, so nothing is added here for it.
+		if err := m.addContract(c, peerID, false); err != nil {
 			m.mu.Unlock()
-			m.log("transceivers for %s: %v", short(peerID), err)
+			m.log("transceivers for %s: %v", Short(peerID), err)
 			return
 		}
 	}
@@ -397,7 +430,7 @@ func (m *Manager) HandleOffer(peerID string, sdp *signal.SessionDescription) {
 
 	pc := c.pc
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp.SDP}); err != nil {
-		m.log("offer from %s: %v", short(peerID), err)
+		m.log("offer from %s: %v", Short(peerID), err)
 		return
 	}
 	m.flushCandidates(c)
@@ -406,7 +439,7 @@ func (m *Manager) HandleOffer(peerID string, sdp *signal.SessionDescription) {
 		err = pc.SetLocalDescription(answer)
 	}
 	if err != nil {
-		m.log("answer to %s: %v", short(peerID), err)
+		m.log("answer to %s: %v", Short(peerID), err)
 		return
 	}
 	_ = m.send(signal.Message{
@@ -423,7 +456,7 @@ func (m *Manager) HandleAnswer(peerID string, sdp *signal.SessionDescription) {
 		return
 	}
 	if err := c.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp.SDP}); err != nil {
-		m.log("answer from %s: %v", short(peerID), err)
+		m.log("answer from %s: %v", Short(peerID), err)
 		return
 	}
 	m.flushCandidates(c)
@@ -450,7 +483,7 @@ func (m *Manager) HandleCandidate(peerID string, cand *signal.ICECandidate) {
 	}
 	m.mu.Unlock()
 	if err := c.pc.AddICECandidate(init); err != nil {
-		m.log("candidate from %s: %v", short(peerID), err)
+		m.log("candidate from %s: %v", Short(peerID), err)
 	}
 }
 
@@ -510,12 +543,14 @@ func (m *Manager) Stats() string {
 	defer m.mu.Unlock()
 	parts := make([]string, 0, len(m.conns))
 	for id, c := range m.conns {
-		parts = append(parts, fmt.Sprintf("%s:%s", short(id), c.pc.ConnectionState()))
+		parts = append(parts, fmt.Sprintf("%s:%s", Short(id), c.pc.ConnectionState()))
 	}
 	return strings.Join(parts, " ")
 }
 
-func short(id string) string {
+// Short is a peer id as a log line names it. Exported because internal/engine logs the same
+// ids, and two lines about one peer that shorten it differently look unrelated.
+func Short(id string) string {
 	if len(id) > 6 {
 		return id[:6]
 	}

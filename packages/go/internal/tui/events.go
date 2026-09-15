@@ -45,3 +45,22 @@ type CopyKey struct{ Name string }
 // UpToDate: an update check that found nothing newer. Only the home screen's `u` says so out
 // loud; the one at startup passes in silence.
 type UpToDate struct{}
+
+// FileShared is a file someone put in the room: one entry appended to the log, with the
+// transfer's state hanging off it from then on.
+type FileShared struct {
+	At    time.Time
+	Who   string
+	Color string
+	File  FileInfo
+}
+
+// FileUpdate moves an existing file entry along: a transfer that started, got somewhere,
+// finished, or failed. It carries only what changed, and the room finds the entry by ID.
+type FileUpdate struct {
+	ID    string
+	State string
+	Done  int64
+	Saved string
+	Error string
+}

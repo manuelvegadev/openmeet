@@ -27,10 +27,44 @@ const (
 	KindScreen  EntryKind = "screen"
 	KindMute    EntryKind = "mute"
 	KindInfo    EntryKind = "info"
+	KindFile    EntryKind = "file"
 )
 
-var entryIcons = map[EntryKind]string{KindMessage: "›", KindJoin: "+", KindLeave: "-", KindScreen: "▣", KindMute: "♪", KindInfo: "·"}
-var entryIconColors = map[EntryKind]string{KindMessage: ThemeMuted, KindJoin: ThemeOK, KindLeave: ThemeDanger, KindScreen: ThemeInfo, KindMute: ThemeWarn, KindInfo: ThemeAccent}
+// The states a file passes through, as the row says them.
+const (
+	FileOffered   = "offered"   // someone shared it; nobody here has asked for it
+	FileWaiting   = "waiting"   // we asked, the sender has not started
+	FileReceiving = "receiving" // it is arriving
+	FileSending   = "sending"   // ours, and somebody is taking it
+	FileSaved     = "saved"     // it is on this disk, at Saved
+	FileFailed    = "failed"    // Error says why
+	FileGone      = "gone"      // whoever had it left the room
+)
+
+// FileInfo is a file somebody shared, as the room draws it. It hangs off the entry that
+// announced it, so the log stays the record of what happened and the state of a transfer
+// lives in one place rather than in a list beside it.
+type FileInfo struct {
+	ID    string
+	Name  string
+	Size  int64
+	Kind  string // "aud" | "vid" | "img" | "zip" | "doc"
+	From  string // who shared it
+	Mine  bool
+	State string
+	Done  int64  // bytes moved so far
+	Saved string // where it landed, once it has
+	Error string
+}
+
+// Percent is how far along a transfer is, 0–100.
+func (f FileInfo) Percent() int {
+	if f.Size <= 0 {
+		return 0
+	}
+	p := int(f.Done * 100 / f.Size)
+	return clampInt(p, 0, 100)
+}
 
 // ChatEntry is one line of the conversation.
 type ChatEntry struct {
@@ -39,6 +73,8 @@ type ChatEntry struct {
 	Who   string // empty for a notice about nobody
 	Color string
 	Text  string
+	// Set on a KindFile entry: what was shared and where its transfer has got to.
+	File *FileInfo
 }
 
 type Peer struct {
@@ -76,6 +112,11 @@ type RoomState struct {
 	SelectedPeer  int
 
 	Entries []ChatEntry
+	// How many files the room has seen — enough to decide whether `f` is worth offering.
+	// The list itself is built where it is drawn, not copied into every frame.
+	FileCount int
+	// Files attached to the draft and not yet sent.
+	Attachments []Attachment
 	// The last visible entry's index while scrolled up, -1 to follow the tail.
 	Anchor int
 
@@ -100,6 +141,8 @@ type RoomState struct {
 	// by the name of the chord this terminal can actually send.
 	Selecting bool
 	CopyKey   string
+	// The chord that attaches what is on the clipboard, by the name this terminal can send.
+	AttachKey string
 }
 
 // FormatClock is HH:MM, or HH:MM:SS.
@@ -222,28 +265,11 @@ func trimFloat(f float64) string {
 
 // ── the chat pane ────────────────────────────────────────────────────────────
 
-// debugSpans is one line of the debug panel. Like entrySpans it is the single definition of
+// debugSpans is one line of the debug panel: the single definition of
 // what that line reads as, so what is drawn and what a selection counts its offsets in are
 // the same string.
 func debugSpans(l ChatEntry) []Span {
 	return []Span{{"[" + FormatClock(l.At, true) + "] ", Muted}, {l.Text, Style{FG: ThemeAccentAlt}}}
-}
-
-func entrySpans(e ChatEntry) []Span {
-	spans := []Span{
-		{"[" + FormatClock(e.At, false) + "] ", Muted},
-		{entryIcons[e.Kind] + " ", Style{FG: entryIconColors[e.Kind]}},
-	}
-	textStyle := Plain
-	if e.Kind != KindMessage {
-		textStyle = Muted
-	}
-	if e.Who != "" {
-		spans = append(spans, NameSpan(e.Who, e.Color, e.Kind == KindMessage), Span{" " + e.Text, textStyle})
-	} else {
-		spans = append(spans, Span{e.Text, textStyle})
-	}
-	return spans
 }
 
 func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
@@ -260,7 +286,9 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	}
 	chip := ChipSpans(KeyHint{Key: "tab", Label: chipLabel})
 	chipW := spansWidth(chip)
-	draftW := max(1, textW-chipW-3)
+	// The composer floats: a rounded box of its own, off the pane's bottom edge, with the
+	// draft inside it. So the width a draft has is the box's inside, less the prompt.
+	draftW := max(1, textW-5)
 	rows, cy, cx := wrapDraft([]rune(s.Draft), draftW, s.DraftCursor)
 	shown := min(len(rows), composerRows(pane.H))
 	scrolled, skipped := false, 0
@@ -275,40 +303,44 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		rows = rows[:shown]
 	}
 
-	inputY := pane.Y + pane.H - 1
+	// The box sits on the pane's last row. What makes it read as floating is the box itself
+	// and the clear row above it, not a gap underneath: a gap there is just a gap, with the
+	// frame's own bottom edge right below it.
+	boxBottom := pane.Y + pane.H - 1
+	inputY := boxBottom - 1
 	inputTop := inputY - (shown - 1)
-	ruleY := inputTop - 1
-	noticeY := ruleY - 1
+	// Attachments go inside the box, above the draft: they are part of the message being
+	// written, not part of the log above it.
+	attachY := -1
+	boxTop := inputTop - 1
+	if len(s.Attachments) > 0 && boxTop-1 > pane.Y {
+		attachY = boxTop
+		boxTop--
+	}
+	noticeY := boxTop - 1
 	logRows := noticeY - pane.Y
 
-	// The log: entries up to the anchor, bottom-aligned, the newest at the bottom.
+	// The log: blocks up to the anchor, bottom-aligned, the newest at the bottom. A block is
+	// a bubble, a file or an event (bubbles.go); it is laid out whole and never split, so a
+	// pane too short to hold one simply starts further down it.
 	last := len(s.Entries) - 1
 	end := last
 	if s.Anchor >= 0 && s.Anchor < last {
 		end = s.Anchor
 	}
 	below := last - end
-	// Each row carries the entry it came from and how far into that entry's own text it
-	// starts, which is what lets a message wrapped over four rows be selected and copied as
-	// the one line it is. Rows that are not part of the conversation carry -1.
-	type logRow struct {
-		spans []Span
-		src   int
-		off   int
-	}
+
 	var lines []logRow
 	if len(s.Entries) == 0 {
-		lines = []logRow{{[]Span{{"No messages yet", Muted}}, -1, 0}}
+		lines = []logRow{{spans: []Span{{"No messages yet", Muted}}, src: -1}}
 	} else {
-		first := end + 1 - logRows
-		if first < 0 {
-			first = 0
-		}
-		for i := first; i <= end; i++ {
-			wrapped, offs := WrapOffsets(entrySpans(s.Entries[i]), textW)
-			for j, line := range wrapped {
-				lines = append(lines, logRow{line, i, offs[j]})
+		// Only as many blocks as can be shown: the work of a repaint is the size of the pane,
+		// not the size of the room's history.
+		for i, blk := range logRowsUpTo(s.Entries, s.Me.Name, textW, end, logRows) {
+			if i > 0 {
+				lines = append(lines, logRow{src: -1})
 			}
+			lines = append(lines, blk...)
 		}
 	}
 	if below > 0 {
@@ -316,7 +348,7 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		if below == 1 {
 			word = "entry"
 		}
-		lines = append(lines, logRow{[]Span{{fmt.Sprintf("↓ %d more %s below", below, word), Muted}}, -1, 0})
+		lines = append(lines, logRow{spans: []Span{{fmt.Sprintf("↓ %d more %s below", below, word), Muted}}, src: -1})
 	}
 	if len(lines) > logRows {
 		lines = lines[len(lines)-logRows:]
@@ -327,7 +359,16 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	y := noticeY - len(lines)
 	for _, line := range lines {
 		c.PutSpans(textX, y, line.spans, textX+textW)
-		c.MarkText("chat", TextRow{X: textX, Y: y, MaxX: textX + textW, Spans: line.spans, Src: line.src, Off: line.off})
+		if line.src >= 0 {
+			c.MarkText("chat", TextRow{X: textX + line.textX, Y: y, MaxX: textX + line.textX + line.textW,
+				Spans: line.text, Src: line.src, Off: line.off})
+		}
+		// A file's buttons are registered after the text region, and press() looks for them
+		// first: they sit inside the log, which is selectable, and they are the one thing in
+		// there that is a thing to press.
+		for _, h := range line.hots {
+			c.Hot(Rect{textX + h.x, y, h.w, 1}, Action{Kind: ActRow, ID: h.id, Idx: h.idx})
+		}
 		y++
 	}
 
@@ -339,36 +380,67 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		// Copying is a key here rather than a side effect of letting go of the button, so the
 		// key has to be on screen while there is something to press it on.
 		c.PutSpans(textX, noticeY, []Span{KeyChip(s.CopyKey), {" copy selection", Muted}}, textX+textW)
+	case s.InputFocused && s.Draft == "" && len(s.Attachments) == 0 && s.AttachKey != "":
+		// An empty composer is where there is room to say how a file gets into a message,
+		// and the gesture nobody would guess — dragging one in — goes with the key. It says
+		// "from the clipboard" rather than "attach", because the system's own paste is a
+		// different key doing a different thing and is left alone.
+		c.PutSpans(textX, noticeY, []Span{KeyChip(s.AttachKey), {" attach from the clipboard, or drag a file in", Muted}}, textX+textW)
 	}
 	if s.ClearArmed {
 		msg := "esc again to clear"
 		c.Put(textX+textW-Width(msg), noticeY, msg, Muted, textX+textW)
 	}
-	// Its rule ends on the divider.
-	c.Set(0, ruleY, '├', ruleStyle)
-	for x := 1; x < dividerX; x++ {
-		c.Set(x, ruleY, '─', ruleStyle)
+	// No rule under the log any more: the box below is its own edge, and the divider now
+	// runs unbroken from the header to the frame's bottom.
+
+	// The box. Rounded, and it takes the accent when it has the focus, because tab moving
+	// between the conversation and the composer is otherwise only visible in the prompt's one
+	// character — and because the accent is what this room already means by "yours".
+	boxStyle := Style{FG: ThemeMuted}
+	if s.InputFocused {
+		boxStyle = Style{FG: ThemeAccent}
 	}
-	c.Set(dividerX, ruleY, '┤', ruleStyle)
+	right := textX + textW - 1
+	RoundedBox(c, Rect{textX, boxTop, textW, boxBottom - boxTop + 1}, boxStyle)
+	// The key that swaps focus lives on the bottom edge, the way a bubble's time does.
+	c.PutSpans(right-chipW-1, boxBottom, chip, right)
+	HotChips(c, right-chipW-1, boxBottom, chip)
+
+	if attachY >= 0 {
+		spans := []Span{}
+		for i, a := range s.Attachments {
+			if i > 0 {
+				spans = append(spans, Span{" ", Plain})
+			}
+			spans = append(spans, attachSpans(a)...)
+		}
+		hint := "⌫ removes"
+		if spansWidth(spans)+Width(hint)+4 <= textW-4 {
+			c.PutSpans(textX+2, attachY, spans, right-Width(hint)-2)
+			c.Put(right-Width(hint)-1, attachY, hint, Muted, right)
+		} else {
+			c.PutSpans(textX+2, attachY, spans, right)
+		}
+	}
 
 	promptStyle := Style{FG: ThemeMuted, Bold: true}
 	if s.InputFocused {
-		promptStyle = Style{FG: ThemeOK, Bold: true}
+		// The same accent as the box around it. It was green, from the single-row composer
+		// the Node client had, where there was no box for the focus to show on.
+		promptStyle = Style{FG: ThemeAccent, Bold: true}
 	}
 	// The prompt marks where the draft begins; once it has scrolled past, it says so instead
 	// of claiming the middle of a message is the start of one.
 	if scrolled {
-		c.Put(textX, inputTop, "… ", Muted, textX+textW)
+		c.Put(textX+2, inputTop, "… ", Muted, right)
 	} else {
-		c.Put(textX, inputTop, "> ", promptStyle, textX+textW)
+		c.Put(textX+2, inputTop, "> ", promptStyle, right)
 	}
-	maxX := textX + 2 + draftW
+	maxX := textX + 4 + draftW
 	// The draft is text too, and its own selectable region: a click in it moves the caret,
 	// a drag selects, and what is selected is replaced by the next thing typed or pasted.
-	c.Hot(Rect{textX + 2, inputTop, draftW, shown}, Action{Kind: ActText, ID: "input"})
-	// Each row is the single-line input this interface already has, drawn once per row: only
-	// the row the caret is on is the focused one, and the placeholder belongs to a draft that
-	// is empty rather than to a row that happens to be.
+	c.Hot(Rect{textX + 4, inputTop, draftW, shown}, Action{Kind: ActText, ID: "input"})
 	placeholder := ""
 	if s.Draft == "" {
 		placeholder = "Type message..."
@@ -376,14 +448,12 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	at := 0
 	for i, row := range rows {
 		y := inputTop + i
-		c.MarkText("input", TextRow{X: textX + 2, Y: y, MaxX: maxX, Spans: []Span{{string(row), Plain}}, Src: 0, Off: skipped + at})
+		c.MarkText("input", TextRow{X: textX + 4, Y: y, MaxX: maxX, Spans: []Span{{string(row), Plain}}, Src: 0, Off: skipped + at})
 		at += len(row)
 		onCaret := s.InputFocused && i == cy
-		c.PutSpans(textX+2, y, TextInputSpans(string(row), cx, placeholder, onCaret, s.Cursor), maxX)
+		c.PutSpans(textX+4, y, TextInputSpans(string(row), cx, placeholder, onCaret, s.Cursor), maxX)
 	}
-	c.PutSpans(textX+textW-chipW, inputY, chip, textX+textW)
-	HotChips(c, textX+textW-chipW, inputY, chip)
-	c.Hot(Rect{textX, inputTop, textW, shown}, Action{Kind: ActFocus, ID: "input"})
+	c.Hot(Rect{textX, boxTop, textW, boxBottom - boxTop + 1}, Action{Kind: ActFocus, ID: "input"})
 }
 
 // The composer will not take more than this many rows, nor more than a third of the pane:
@@ -544,6 +614,9 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	}
 	if s.WebcamEnabled {
 		mine = append(mine, KeyHint{Key: "v", Label: camLabel(s.Me.CamOn)})
+	}
+	if s.FileCount > 0 {
+		mine = append(mine, KeyHint{Key: "f", Label: "files"})
 	}
 	y += DrawHints(c, x, y, w, disable(mine, s.InputFocused))
 	// The section break: a rule from the divider to the frame.
@@ -718,19 +791,7 @@ func DrawModal(c *Canvas, title string, items []string, idx int, hints []KeyHint
 	// terminal has no way to dim what is behind, so the margin is what separates them.
 	c.Fill(box.Inset(-1, -1), Style{BG: ThemeBG})
 	c.Fill(box, Plain)
-	st := Style{FG: ThemeAccent}
-	c.Set(box.X, box.Y, '╭', st)
-	c.Set(box.X+box.W-1, box.Y, '╮', st)
-	c.Set(box.X, box.Y+box.H-1, '╰', st)
-	c.Set(box.X+box.W-1, box.Y+box.H-1, '╯', st)
-	for i := 1; i < box.W-1; i++ {
-		c.Set(box.X+i, box.Y, '─', st)
-		c.Set(box.X+i, box.Y+box.H-1, '─', st)
-	}
-	for j := 1; j < box.H-1; j++ {
-		c.Set(box.X, box.Y+j, '│', st)
-		c.Set(box.X+box.W-1, box.Y+j, '│', st)
-	}
+	RoundedBox(c, box, Style{FG: ThemeAccent})
 	cx, cy := box.X+2, box.Y+1
 	c.Put(cx, cy, title, Style{FG: ThemeAccent, Bold: true}, box.X+box.W-3)
 	cy += 2

@@ -44,6 +44,23 @@ type ChatMessage struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// FileOffer is a file someone is offering to the room. The server forwards this description
+// and nothing else: the request for the file and its bytes go over the peer connections, on
+// a data channel, so the server never holds one and never sees one. `FromID`, `Username` and
+// `Color` are set by the server from the connection, like a chat message's.
+type FileOffer struct {
+	ID        string `json:"id"`
+	RoomID    string `json:"roomId"`
+	FromID    string `json:"fromId"`
+	Username  string `json:"username"`
+	Color     string `json:"color,omitempty"`
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	Kind      string `json:"kind"`
+	SHA256    string `json:"sha256"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // Message is the discriminated union, flattened: every field of every message type, with
 // `Type` saying which apply. Decoding into one struct is simpler than a tagged decode and
 // the protocol is small enough for it.
@@ -81,6 +98,14 @@ type Message struct {
 	Timestamp int64  `json:"timestamp,omitempty"`
 	// chat-broadcast (received)
 	ChatMessage *ChatMessage `json:"message,omitempty"`
+
+	// file-offer (sent) carries these beside ID, RoomID, Username and Timestamp above
+	Name   string `json:"name,omitempty"`
+	Size   int64  `json:"size,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
+	// file-offer-broadcast (received)
+	FileOffer *FileOffer `json:"offer,omitempty"`
 
 	// error
 	ErrorMessage string `json:"-"`

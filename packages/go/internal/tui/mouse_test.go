@@ -43,10 +43,14 @@ func (fakeDevices) StartMicTest(_, _ string) (MicTest, error) { return nil, nil 
 func (fakeDevices) Resolve(saved string, _ []string) string   { return saved }
 
 type fakeRoom struct {
-	muted   bool
-	sent    []string
-	screens []string
-	stopped bool
+	muted    bool
+	sent     []string
+	screens  []string
+	stopped  bool
+	shared   []string
+	got      []string
+	opened   [][2]string
+	shareErr error
 }
 
 func (r *fakeRoom) ToggleMute()                        { r.muted = !r.muted }
@@ -59,7 +63,19 @@ func (r *fakeRoom) StopScreen()                        { r.stopped = true }
 func (r *fakeRoom) StartCamera(string) error           { return nil }
 func (r *fakeRoom) StopCamera()                        {}
 func (r *fakeRoom) TogglePeerWindow(_, _ string) error { return nil }
-func (r *fakeRoom) Close()                             {}
+func (r *fakeRoom) ShareFile(path string) error {
+	if r.shareErr != nil {
+		return r.shareErr
+	}
+	r.shared = append(r.shared, path)
+	return nil
+}
+func (r *fakeRoom) GetFile(id string) error { r.got = append(r.got, id); return nil }
+func (r *fakeRoom) OpenFile(id, how string) error {
+	r.opened = append(r.opened, [2]string{id, how})
+	return nil
+}
+func (r *fakeRoom) Close() {}
 
 // inRoom is a model sitting in a room, drawn once so it has a frame for the mouse to work on.
 func inRoom(t *testing.T, entries []ChatEntry, peers []Peer) (*Model, *fakeRoom) {
@@ -225,20 +241,35 @@ func TestTheFrameIsNotSelectable(t *testing.T) {
 	}
 }
 
+// cellOf is where a given rune offset of an entry ended up on screen. A bubble draws the
+// name on its top edge and the text on the rows under it, so a row no longer begins at
+// offset zero — the row that carries the offset has to be found rather than assumed.
+func cellOf(t *testing.T, m *Model, src, off int) (x, y int) {
+	t.Helper()
+	text := []rune(m.lineText(src))
+	for _, r := range m.frame.TextRows("chat") {
+		if r.Src != src {
+			continue
+		}
+		n := rowRunes(r)
+		if off >= r.Off && off < r.Off+n {
+			return r.X + Width(string(text[r.Off:off])), r.Y
+		}
+	}
+	t.Fatalf("offset %d of entry %d was not drawn", off, src)
+	return 0, 0
+}
+
 func TestDoubleClickSelectsAWord(t *testing.T) {
 	entries := []ChatEntry{{At: time.Now(), Kind: KindMessage, Who: "ana", Text: "hola mundo entero"}}
 	m, _ := inRoom(t, entries, nil)
-	rows := m.frame.TextRows("chat")
-	if len(rows) != 1 {
-		t.Fatalf("expected one row, got %d", len(rows))
-	}
-	// The column where "mundo" starts, found in the text rather than counted by hand.
+	// The cell where "mundo" starts, found in the text rather than counted by hand.
 	text := entryText(entries[0])
-	at := strings.Index(text, "mundo")
-	x := rows[0].X + Width(text[:at]) + 1
+	at := len([]rune(text[:strings.Index(text, "mundo")])) + 1
+	x, y := cellOf(t, m, 0, at)
 
-	click(m, x, rows[0].Y)
-	click(m, x, rows[0].Y) // the second, inside the double-click window
+	click(m, x, y)
+	click(m, x, y) // the second, inside the double-click window
 	if got := m.SelectedText(); got != "mundo" {
 		t.Errorf("double click selected %q, want %q", got, "mundo")
 	}
@@ -428,7 +459,21 @@ func typing(t *testing.T, text string) *Model {
 }
 
 // composer is where the input block is and how tall it grew.
+// composer is where the draft itself is drawn — the rows inside the box, not the box. The
+// box is what a click focuses, and it is two rows taller; what these tests are about is how
+// many rows the draft took.
 func composer(t *testing.T, m *Model) Rect {
+	t.Helper()
+	rows := m.frame.TextRows("input")
+	if len(rows) == 0 {
+		t.Fatal("the composer marked no rows")
+	}
+	first := rows[0]
+	return Rect{first.X, first.Y, first.MaxX - first.X, len(rows)}
+}
+
+// composerBox is the floating box around it, which is what a click lands on.
+func composerBox(t *testing.T, m *Model) Rect {
 	t.Helper()
 	r, ok := hotFor(m.frame, func(a Action) bool { return a.Kind == ActFocus && a.ID == "input" })
 	if !ok {
@@ -472,7 +517,7 @@ func TestALongDraftGrowsTheComposerAndStaysReadable(t *testing.T) {
 	// Every word of it is on screen, in order, across the rows it took.
 	var got strings.Builder
 	for y := area.Y; y < area.Y+area.H; y++ {
-		for x := area.X + 2; x < area.X+area.W; x++ {
+		for x := area.X; x < area.X+area.W; x++ {
 			got.WriteString(strings.TrimSpace(string(runeAt(m.frame, x, y))))
 		}
 	}

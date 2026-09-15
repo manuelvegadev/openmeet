@@ -73,8 +73,10 @@ type Engine struct {
 	myID   string
 	joined time.Time
 
-	mu        sync.Mutex
-	people    map[string]*peerInfo
+	mu     sync.Mutex
+	people map[string]*peerInfo
+	// Files shared in this room, by offer id: ours to serve, theirs to ask for.
+	files     map[string]*fileEntry
 	connected bool
 	errMsg    string
 	debug     bool
@@ -91,7 +93,7 @@ type Engine struct {
 }
 
 func New(a *audio.Engine, opts Options, emit func(interface{})) *Engine {
-	return &Engine{opts: opts, audio: a, Emit: emit, people: map[string]*peerInfo{}, done: make(chan struct{}), debug: opts.Debug}
+	return &Engine{opts: opts, audio: a, Emit: emit, people: map[string]*peerInfo{}, files: map[string]*fileEntry{}, done: make(chan struct{}), debug: opts.Debug}
 }
 
 func (e *Engine) logf(format string, args ...interface{}) {
@@ -139,8 +141,10 @@ func (e *Engine) Start() error {
 			e.mu.Unlock()
 			e.snapshot()
 		},
-		OnVideo: e.onVideoTrack,
-		Log:     e.logf,
+		OnVideo:   e.onVideoTrack,
+		OnControl: e.onControl,
+		OnStream:  e.onFileStream,
+		Log:       e.logf,
 	})
 	if err != nil {
 		return err
@@ -427,6 +431,9 @@ func (e *Engine) reconnect() bool {
 		ids = append(ids, id)
 	}
 	e.people = map[string]*peerInfo{}
+	// A reconnect joins as a newcomer with a new id and new connections, so nothing that was
+	// offered over the old ones can still be asked for.
+	e.files = map[string]*fileEntry{}
 	e.mu.Unlock()
 	for _, id := range ids {
 		e.play.RemovePeer(id)
@@ -503,6 +510,7 @@ func (e *Engine) readAll() {
 			e.mu.Unlock()
 			e.play.RemovePeer(msg.ParticipantID)
 			e.peers.Remove(msg.ParticipantID)
+			e.forgetPeerFiles(msg.ParticipantID)
 			if p != nil {
 				e.notice(tui.KindLeave, p.p.Username, p.p.Color, "left")
 			}
@@ -557,6 +565,10 @@ func (e *Engine) readAll() {
 				}
 			}
 			e.snapshot()
+		case "file-offer-broadcast":
+			if o := msg.FileOffer; o != nil {
+				e.onFileOffer(*o)
+			}
 		case "chat-broadcast":
 			if c := msg.ChatMessage; c != nil {
 				e.Emit(tui.Line{At: time.UnixMilli(c.Timestamp), Kind: tui.KindMessage, Who: c.Username, Color: c.Color, Text: c.Content})

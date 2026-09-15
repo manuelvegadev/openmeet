@@ -9,27 +9,40 @@ var ruleStyle = Style{FG: ThemeAccent}
 
 // Frame paints the background and the border. closeBottom=false leaves the last row to the
 // caller, which is how the room draws its own bottom edge with the divider's junction in it.
+// RoundedBox draws the box every panel in this interface is drawn in: rounded corners, a
+// rule between them. One definition, so the glyphs are chosen once — the room's frame, a
+// modal and the composer are all this shape.
+func RoundedBox(c *Canvas, r Rect, st Style) {
+	right, bottom := r.X+r.W-1, r.Y+r.H-1
+	c.Set(r.X, r.Y, '╭', st)
+	c.Set(right, r.Y, '╮', st)
+	c.Set(r.X, bottom, '╰', st)
+	c.Set(right, bottom, '╯', st)
+	for x := r.X + 1; x < right; x++ {
+		c.Set(x, r.Y, '─', st)
+		c.Set(x, bottom, '─', st)
+	}
+	for y := r.Y + 1; y < bottom; y++ {
+		c.Set(r.X, y, '│', st)
+		c.Set(right, y, '│', st)
+	}
+}
+
 func Frame(c *Canvas, closeBottom bool) Rect {
 	c.Fill(Rect{0, 0, c.W, c.H}, Plain)
+	if closeBottom {
+		RoundedBox(c, Rect{0, 0, c.W, c.H}, frameStyle)
+		return Rect{1, 1, c.W - 2, c.H - 2}
+	}
 	c.Set(0, 0, '╭', frameStyle)
 	c.Set(c.W-1, 0, '╮', frameStyle)
 	for x := 1; x < c.W-1; x++ {
 		c.Set(x, 0, '─', frameStyle)
 	}
-	last := c.H - 1
-	if !closeBottom {
-		last = c.H
-	}
-	for y := 1; y < last; y++ {
+	// Open at the bottom: the screen's own last row is the edge.
+	for y := 1; y < c.H; y++ {
 		c.Set(0, y, '│', frameStyle)
 		c.Set(c.W-1, y, '│', frameStyle)
-	}
-	if closeBottom {
-		c.Set(0, c.H-1, '╰', frameStyle)
-		c.Set(c.W-1, c.H-1, '╯', frameStyle)
-		for x := 1; x < c.W-1; x++ {
-			c.Set(x, c.H-1, '─', frameStyle)
-		}
 	}
 	return Rect{1, 1, c.W - 2, c.H - 2}
 }

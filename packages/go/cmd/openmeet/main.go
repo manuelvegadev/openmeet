@@ -23,6 +23,7 @@ import (
 	"github.com/manuelvegadev/openmeet/packages/go/internal/audio"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/clip"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/engine"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/files"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/keyboard"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/settings"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/tui"
@@ -585,6 +586,57 @@ func (r *roomSession) StopCamera() { r.e.StopCamera() }
 func (r *roomSession) TogglePeerWindow(peerID, kind string) error {
 	return r.e.TogglePeerWindow(peerID, kind)
 }
+func (r *roomSession) ShareFile(path string) error   { return r.e.ShareFile(path) }
+func (r *roomSession) GetFile(id string) error       { return r.e.GetFile(id) }
+func (r *roomSession) OpenFile(id, how string) error { return r.e.OpenFile(id, how) }
+
+// attach resolves what a drop or a paste put in the composer. The parsing is the files
+// package's, because how a terminal escapes a path is not the interface's business and it is
+// worth a test of its own.
+func attach(raw string) ([]tui.Attachment, bool) {
+	metas, ok := files.Attach(raw)
+	if !ok {
+		return nil, false
+	}
+	return attachments(metas), true
+}
+
+// attachClipboard is the same for what is on the clipboard: a file copied in the Finder or in
+// Explorer, or an image — a screenshot — written out to a file first.
+func attachClipboard() ([]tui.Attachment, string) {
+	if clip.Remote() {
+		return nil, "over SSH the clipboard is on the other machine — drag the file in instead"
+	}
+	path, err := files.Clipboard()
+	if err != nil {
+		return nil, err.Error()
+	}
+	m, err := files.Inspect(path)
+	if err != nil {
+		return nil, err.Error()
+	}
+	return attachments([]files.Meta{m}), ""
+}
+
+func attachments(metas []files.Meta) []tui.Attachment {
+	out := make([]tui.Attachment, 0, len(metas))
+	for _, m := range metas {
+		out = append(out, tui.Attachment{Path: m.Path, Name: m.Name, Kind: m.Kind, Size: m.Size})
+	}
+	return out
+}
+
+// attachKey is the chord this platform leaves free for that. The system's own paste is not
+// it and never will be: Cmd+V is the terminal's, it pastes text, and taking it would break
+// the one thing about pasting that already works. Cmd+V does not reach an application at all
+// anyway, and Windows Terminal keeps Ctrl+V for its own paste, so there it is Ctrl+P. Both
+// are bound; only one is worth putting on screen.
+func attachKey() string {
+	if runtime.GOOS == "windows" {
+		return "ctrl+p"
+	}
+	return "ctrl+v"
+}
 
 func choices(list []video.Device) []tui.VideoChoice {
 	out := make([]tui.VideoChoice, 0, len(list))
@@ -638,6 +690,8 @@ func main() {
 		profile  = flag.String("cpuprofile", "", "write a CPU profile here until exit")
 		version  = flag.Bool("version", false, "print the version and exit")
 		headless = flag.Bool("headless", false, "no interface: join --room, log to stdout, quit on ctrl-c (for measuring)")
+		sendFile = flag.String("send-file", "", "with --headless: share this file with the room once joined")
+		takeFile = flag.Bool("accept-files", false, "with --headless: download every file the room offers (there is no keyboard to ask)")
 		noPrio   = flag.Bool("no-priority", false, "leave process and thread priorities alone (for measuring)")
 		noVPIO   = flag.Bool("no-voice-processing", false, "macOS: raw devices instead of Apple's voice processing unit")
 		vpBypass = flag.Bool("voice-processing-bypass", false, "macOS: keep Apple's unit but skip its echo canceller, gain and noise suppression")
@@ -778,6 +832,9 @@ func main() {
 			}
 			return choices(cams)
 		},
+		Attach:          attach,
+		AttachClipboard: attachClipboard,
+		AttachKey:       attachKey(),
 		Join: func(roomID, name, color, input, output string) (tui.Room, error) {
 			// The setting decides the macOS path unless a flag said otherwise for this run.
 			if !*noVPIO && !*vpBypass {
@@ -811,7 +868,14 @@ func main() {
 		if *room == "" {
 			log.Fatal("--headless needs --room")
 		}
+
 		log.SetFlags(log.Ltime | log.Lmicroseconds)
+		r, err := host.Join(*room, st.Name(), st.Color(), dev.Resolve(*inDev, dev.Inputs()), dev.Resolve(*outDev, dev.Outputs()))
+		if err != nil {
+			log.Fatal(err)
+		}
+		// Started after the room exists, so it can simply close over it. The channel is
+		// buffered and emitting is non-blocking, so the join's own events wait in it.
 		go func() {
 			for msg := range events {
 				switch m := msg.(type) {
@@ -819,15 +883,29 @@ func main() {
 					log.Print(m.Text)
 				case tui.Line:
 					log.Printf("%s %s", m.Kind, m.Text)
+				case tui.FileShared:
+					log.Printf("file %s (%s, %s) from %s", m.File.Name, m.File.Kind, files.FormatSize(m.File.Size), m.File.From)
+					// Accepting is a keypress everywhere else. There is no keyboard here, so
+					// it is a flag instead — asked for, never assumed.
+					if *takeFile && !m.File.Mine {
+						if err := r.GetFile(m.File.ID); err != nil {
+							log.Printf("file %s: %v", m.File.ID, err)
+						}
+					}
+				case tui.FileUpdate:
+					log.Printf("file %s: %s %s%s", m.ID, m.State, m.Saved, m.Error)
+				case tui.Toast:
+					log.Printf("%s: %s", m.Kind, m.Text)
 				}
 			}
 		}()
-		r, err := host.Join(*room, st.Name(), st.Color(), dev.Resolve(*inDev, dev.Inputs()), dev.Resolve(*outDev, dev.Outputs()))
-		if err != nil {
-			log.Fatal(err)
-		}
 		if !*debug {
 			log.Print("headless: use --debug for the pump and playout lines")
+		}
+		if *sendFile != "" {
+			if err := r.ShareFile(*sendFile); err != nil {
+				log.Printf("--send-file: %v", err)
+			}
 		}
 		sigc := make(chan os.Signal, 1)
 		osSignal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
