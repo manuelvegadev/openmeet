@@ -336,10 +336,7 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	} else {
 		// Only as many blocks as can be shown: the work of a repaint is the size of the pane,
 		// not the size of the room's history.
-		for i, blk := range logRowsUpTo(s.Entries, s.Me.Name, textW, end, logRows) {
-			if i > 0 {
-				lines = append(lines, logRow{src: -1})
-			}
+		for _, blk := range logRowsUpTo(s.Entries, s.Me.Name, textW, end, logRows) {
 			lines = append(lines, blk...)
 		}
 	}

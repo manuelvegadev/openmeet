@@ -362,7 +362,7 @@ func logRowsUpTo(entries []ChatEntry, me string, width, end, maxRows int) [][]lo
 			block = messageRows(entries, b, width, cut)
 		}
 		out = append(out, block)
-		rows += len(block) + 1 // the blank row between blocks
+		rows += len(block)
 		if maxRows > 0 && rows >= maxRows {
 			break
 		}
