@@ -167,6 +167,11 @@ func (c *Canvas) PaintSelection(id string, from, to TextPos, bg string) {
 					for i := 0; i < w; i++ {
 						if x := cx + i; x >= 0 && x < c.W && row.Y >= 0 && row.Y < c.H {
 							c.cells[row.Y][x].st.BG = bg
+							// The band is a colour we chose; text that was the
+							// terminal's own would be left to chance over it.
+							if c.cells[row.Y][x].st.FG == ThemeDefault {
+								c.cells[row.Y][x].st.FG = ThemeSelectionText
+							}
 						}
 					}
 				}

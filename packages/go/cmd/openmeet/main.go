@@ -163,6 +163,19 @@ func (st *store) Rows() []tui.SettingsRow {
 			Help: "Off, a selection waits and ctrl+c copies it, so a stray drag cannot overwrite what you were carrying. On, letting go of the button is enough.", Disabled: !st.Mouse()},
 		tui.SettingsRow{Tab: "Advanced", Label: "Opus Complexity", Choices: numbers(complexitySteps), Choice: slices.Index(complexitySteps, s.OpusComplexity),
 			Help: "How hard the encoder works for the same bitrate: 10 is the best sound per kbps and the most CPU, 1 the cheapest. It never changes what is sent."},
+		tui.SettingsRow{Tab: "Look", Label: "Accent", Choices: tui.AccentNames(), ChoiceColors: tui.AccentSwatches(),
+			Choice: accentIndex(s.Accent), Live: true,
+			Help: "The colour this interface is drawn in: the frame, the key caps, the pointer, your own messages."},
+		tui.SettingsRow{Tab: "Look", Label: "Tone", Choices: tui.Tones, ChoiceColors: tui.ToneSwatches(),
+			Choice: slices.Index(tui.Tones, orFirst(s.Tone, tui.Tones)), Live: true,
+			Help: "The same colour said louder or more quietly — the hue never changes. Vivid takes it to full saturation, pastel washes it out. Either is pulled back if it would come out too close to the background to read, which is what keeps a pastel legible on white."},
+		tui.SettingsRow{Tab: "Look", Label: "Background", Choices: tui.Backgrounds, Choice: slices.Index(tui.Backgrounds, orFirst(s.Background, tui.Backgrounds)), Live: true,
+			Help: "What the window is painted on. Transparent paints nothing at all, so whatever your terminal has behind it — a wallpaper, a blur — shows through, and the text takes your terminal's own colour. The rest of the palette stays the dark one, so pick white rather than transparent if your terminal is light."},
+		tui.SettingsRow{Tab: "Look", Label: "Borders", Choices: tui.Weights, Choice: slices.Index(tui.Weights, orFirst(s.Borders, tui.Weights)), Live: true,
+			Help: "One line or two. Every junction the frame makes with a rule or a divider is drawn in the same weight, so the T where the room's divider meets a rule follows it too."},
+		tui.SettingsRow{Tab: "Look", Label: "Corners", Choices: tui.Corners, Choice: slices.Index(tui.Corners, orFirst(s.Corners, tui.Corners)), Live: true,
+			Disabled: !tui.RoundableWeight(orFirst(s.Borders, tui.Weights)),
+			Help:     cornersHelp(orFirst(s.Borders, tui.Weights))},
 		tui.SettingsRow{Tab: "Other", Label: "Profile", Value: tui.Bracketed(st.Name()), ValueColor: st.Color(),
 			Help: "Your name and colour, as everyone in the room sees them."},
 		tui.SettingsRow{Tab: "Other", Label: "Updates", Choices: []string{"install on exit", "tell me", "do not check"}, Choice: slices.Index(updatePolicies, s.AutoUpdate),
@@ -189,6 +202,25 @@ func opusCPU(complexity int) float64 { return 0.10 + float64(complexity)*0.02 }
 
 // fileTransferValues are the settings.json values, in the order the row cycles them.
 var fileTransferValues = []string{"voice-first", "unlimited", "capped"}
+
+func accentIndex(name string) int {
+	return slices.Index(tui.AccentNames(), tui.AccentByName(name).Name)
+}
+
+// The corner row says why it is dim rather than leaving you to work it out.
+func cornersHelp(weight string) string {
+	if !tui.RoundableWeight(weight) {
+		return "Rounded or square. Not while the borders are double: Unicode has no rounded double corner, so a double frame is square whichever is chosen here."
+	}
+	return "Rounded or square — the frame, the message bubbles, the composer and the modals, which are all drawn as the same box."
+}
+
+// theme hands the three appearance settings to the interface. It is called before the first
+// frame and again on every change, from the goroutine that draws, which is the only one that
+// reads the palette.
+func (st *store) theme() {
+	tui.SetTheme(st.s.Accent, st.s.Tone, st.s.Background, st.s.Borders, st.s.Corners)
+}
 
 // orFirst is a stored value that is one of the listed ones, or the first when it is neither —
 // an older settings.json has no key at all, and a hand-edited one may have anything.
@@ -378,6 +410,21 @@ func (st *store) Run(idx int) string {
 		s.ScreenSendKbps = cycleNumber(screenKbpsSteps, s.ScreenSendKbps)
 	case "Updates":
 		s.AutoUpdate = cycle(updatePolicies, s.AutoUpdate)
+	case "Accent":
+		s.Accent = cycle(tui.AccentNames(), s.Accent)
+		st.theme()
+	case "Tone":
+		s.Tone = cycle(tui.Tones, orFirst(s.Tone, tui.Tones))
+		st.theme()
+	case "Background":
+		s.Background = cycle(tui.Backgrounds, orFirst(s.Background, tui.Backgrounds))
+		st.theme()
+	case "Borders":
+		s.Borders = cycle(tui.Weights, orFirst(s.Borders, tui.Weights))
+		st.theme()
+	case "Corners":
+		s.Corners = cycle(tui.Corners, orFirst(s.Corners, tui.Corners))
+		st.theme()
 	}
 	_ = settings.Save(st.s)
 	return ""
@@ -803,6 +850,7 @@ func main() {
 	}
 
 	st := &store{s: settings.Load()}
+	st.theme()
 	// Before anything opens a device: the picker's mic test goes through the same pump as a
 	// call does, so it has to be on the path the call will use. A flag still overrides it.
 	if !*noVPIO && !*vpBypass {

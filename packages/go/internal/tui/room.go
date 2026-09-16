@@ -9,7 +9,7 @@ import (
 )
 
 // The room, drawn as room-view.tsx drew it: the header, then the chat on the left and the
-// participants on the right, split by a divider that the rules join with ┬ and ┴, and the
+// participants on the right, split by a divider that the rules join with a tee of their own
 // frame's own bottom edge as the room's last line.
 
 // ParticipantsWidth is the people pane, from the widest row it can hold — a name at
@@ -189,13 +189,13 @@ func DrawRoom(c *Canvas, s RoomState) {
 	bottom := c.H - 1
 
 	drawRoomHeader(c, inner, s)
-	Rule(c, inner.Y+1, '├', '┤', map[int]rune{dividerX: '┬'})
+	Rule(c, inner.Y+1, false, dividerX)
 	// The divider: the chat pane's right border, from under the rule to the bottom edge.
 	for y := inner.Y + 2; y < bottom; y++ {
-		c.Set(dividerX, y, '│', frameStyle)
+		c.Set(dividerX, y, B.V, frameStyle)
 	}
 	// The bottom edge, with the divider's junction.
-	Rule(c, bottom, '╰', '╯', map[int]rune{dividerX: '┴'})
+	Rule(c, bottom, true, dividerX)
 
 	panes := Rect{inner.X, inner.Y + 2, chatW, bottom - (inner.Y + 2)}
 	drawChat(c, panes, dividerX, s)
@@ -409,7 +409,7 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		boxStyle = Style{FG: ThemeAccent}
 	}
 	right := textX + textW - 1
-	RoundedBox(c, Rect{textX, boxTop, textW, boxBottom - boxTop + 1}, boxStyle)
+	Box(c, Rect{textX, boxTop, textW, boxBottom - boxTop + 1}, boxStyle)
 	// The key that swaps focus lives on the bottom edge, the way a bubble's time does.
 	c.PutSpans(right-chipW-1, boxBottom, chip, right)
 	HotChips(c, right-chipW-1, boxBottom, chip)
@@ -627,11 +627,7 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	}
 	y += DrawHints(c, x, y, w, disable(mine, s.InputFocused))
 	// The section break: a rule from the divider to the frame.
-	c.Set(dividerX, y, '├', ruleStyle)
-	for i := dividerX + 1; i < c.W-1; i++ {
-		c.Set(i, y, '─', ruleStyle)
-	}
-	c.Set(c.W-1, y, '┤', ruleStyle)
+	RuleFrom(c, dividerX, y)
 	y++
 
 	// The peers.
@@ -692,11 +688,7 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	blockTop := by
 	if s.Debug {
 		// The debug panel takes what is left between the list and the keys.
-		c.Set(dividerX, y, '├', ruleStyle)
-		for i := dividerX + 1; i < c.W-1; i++ {
-			c.Set(i, y, '─', ruleStyle)
-		}
-		c.Set(c.W-1, y, '┤', ruleStyle)
+		RuleFrom(c, dividerX, y)
 		y++
 		title := []Span{{"Debug", Style{Bold: true}}}
 		if s.CanOpenLogs {
@@ -821,7 +813,7 @@ func DrawModal(c *Canvas, title string, items []string, idx int, hints []KeyHint
 	// terminal has no way to dim what is behind, so the margin is what separates them.
 	c.Fill(box.Inset(-1, -1), Style{BG: ThemeBG})
 	c.Fill(box, Plain)
-	RoundedBox(c, box, Style{FG: ThemeAccent})
+	Box(c, box, Style{FG: ThemeAccent})
 	cx, cy := box.X+2, box.Y+1
 	c.Put(cx, cy, title, Style{FG: ThemeAccent, Bold: true}, box.X+box.W-3)
 	cy += 2

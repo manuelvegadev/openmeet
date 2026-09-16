@@ -356,10 +356,21 @@ func writeSGR(b *strings.Builder, st Style) {
 	if st.Inverse {
 		b.WriteString("7;")
 	}
-	b.WriteString("38;2;")
-	b.WriteString(rgb(fg))
-	b.WriteString(";48;2;")
-	b.WriteString(rgb(bg))
+	// A transparent background is 39/49 — the terminal's own colours — and not an RGB
+	// triple, because there is no triple that means "whatever is behind this window".
+	if fg == ThemeDefault {
+		b.WriteString("39;")
+	} else {
+		b.WriteString("38;2;")
+		b.WriteString(rgb(fg))
+		b.WriteByte(';')
+	}
+	if bg == ThemeDefault {
+		b.WriteString("49")
+	} else {
+		b.WriteString("48;2;")
+		b.WriteString(rgb(bg))
+	}
 	b.WriteByte('m')
 }
 

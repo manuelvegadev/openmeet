@@ -63,6 +63,57 @@ the settings picks that (`voice first`), `unlimited`, or a flat 2 Mbps. The whol
 [`docs/websocket-webrtc-architecture.md`](../../docs/websocket-webrtc-architecture.md) under
 "Files".
 
+### How it looks
+
+`Settings ▸ Look` is five rows, and they are the only settings that take effect as you choose
+them rather than when you next join a room — so the screen you are changing repaints under
+you, which is the whole point of choosing a colour.
+
+- **Accent** — the whole wheel: white, red, orange, yellow (the default), lime, green, teal,
+  cyan, blue, indigo, purple, fuchsia, pink. It is the frame, the key caps, the pointer, the
+  composer when it has focus and your own messages' edge. The chips on that row are drawn in
+  the colours they name, so you pick one by looking at it, and the row wraps onto a second
+  line rather than running off the window. Everything else follows from it: the text a key cap
+  takes is whichever of black and white reads better on the colour, and a selection is the
+  accent pulled down to the ground it sits on.
+
+  These are the same thirteen colours, in the same order, that a person's name can be — one
+  palette in the room rather than two, held together by a test. Yellow is the single
+  exception: the accent has always been `#E8B900` and the golden frames are drawn in it.
+  There is no pale entry beside a full one, because that is what Tone is for and it works on
+  any of the thirteen.
+- **Tone** — base, vivid or pastel: the same colour said louder or more quietly. The hue
+  never moves, because the hue is what you picked; vivid takes it to full saturation and to
+  the lightness where a hue carries the most colour, pastel halves the saturation and lifts
+  it towards white. Either can land somewhere unreadable — a pastel on white is the page — so
+  both are pulled back along their own hue until they clear 3:1 against the ground, which is
+  what turns a pastel on a light background into a dusty version of itself rather than into
+  nothing. The chips on the row are your accent at each of the three, and the accent row's
+  chips are drawn at the tone in force, so each row shows what choosing it would actually
+  give you.
+- **Background** — black, white, or transparent. White is a real light theme and not an
+  inversion: darker semantic colours, a light surface for the chips, and the names people
+  chose darkened enough to be read on it while keeping their hue, since a name's colour
+  belongs to the person and travels with them. Transparent paints nothing at all — the cells
+  are written with SGR 39/49, so a terminal's wallpaper or blur shows through — and leaves
+  plain text to the terminal's own colour. Everything that paints a background of its own
+  carries its own foreground, so it stays readable over a terminal of either kind; the rest
+  of the palette stays the dark one, so a light terminal wants white rather than transparent.
+- **Borders** — one line or two. Every junction is drawn from the same set: where the room's
+  divider meets the header's rule and the bottom edge, the tee is `╦` and `╩` rather than a
+  cross of the wrong weight.
+- **Corners** — rounded or square. Not available while the borders are double, and the row
+  goes flat there and says why: Unicode has no rounded double corner, so a double frame is
+  square whichever is chosen.
+
+Both reach the message bubbles, the composer and the modals as well as the frame — the glyphs
+are chosen once, in `internal/tui/frame.go`, and every box in the interface is drawn through
+`Box` and `Rule`.
+
+They are `accent`, `tone`, `background`, `borders` and `corners` in `settings.json`; an absent
+or unrecognised value is the interface as it has always been, which is what the golden frames
+are drawn in.
+
 ### Windows, cross-built from the Mac
 
 ```bash
@@ -131,7 +182,7 @@ formula to keep in step.
 | `internal/rtc` | pion: one PeerConnection per peer, the three-transceiver contract, `polite = myID < peerID`, and **one `TrackLocalStaticRTP` bound to every connection** — the encode-once fan-out. `data.go` is the data channels: one `control` per connection, then a channel of its own per file |
 | `internal/files` | Sharing a file: what it is called and how big it is, the chunking and the backpressure, where a received one lands and how carefully it is named, and what each system means by opening or previewing it |
 | `internal/audio` | miniaudio compiled in from `shim.c`, its callbacks in C feeding lock-free rings; a Go pump every 20 ms does capture → voice gate → Opus and keeps the playback ring fed from the playout (per-peer jitter buffer, Opus decode with PLC, mixer). No audio thread ever enters Go |
-| `internal/tui` | The interface: a cell canvas drawn the way Ink drew it (`canvas.go`), the palette (`theme.go`), the chrome (`frame.go`, `chips.go`), one file per screen, and the Bubble Tea model with every key the Node client has (`model.go`). Bubble Tea writes only the lines that changed |
+| `internal/tui` | The interface: a cell canvas drawn the way Ink drew it (`canvas.go`), the palette (`theme.go`: the accent, the background and everything derived from them, rebuilt by `SetTheme`), the chrome (`frame.go` — the border set and the one `Box`/`Rule` every panel is drawn through — and `chips.go`), one file per screen, and the Bubble Tea model with every key the Node client has (`model.go`). Bubble Tea writes only the lines that changed |
 | `internal/engine` | The room session: signaling, the mesh, the pump, the stats, and the snapshots the interface draws from |
 | `internal/settings` | The same `settings.json` the Node client keeps, field for field |
 

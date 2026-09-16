@@ -198,11 +198,11 @@ func messageRows(entries []ChatEntry, b logBlock, width int, cut bool) []logRow 
 	nameX := left + 3 + Width(when) + 1
 	if b.mine {
 		nameX = left + 1 + pad + 2
-		top = []Span{{strings.Repeat(" ", left), Plain}, {"╭", edge}, {strings.Repeat("─", pad), edge},
-			{"─ ", edge}, nameSpan, {" ", edge}, whenSpan, {" ", edge}, {"╮", edge}}
+		top = []Span{{strings.Repeat(" ", left), Plain}, {string(B.TL), edge}, {strings.Repeat(string(B.H), pad), edge},
+			{string(B.H) + " ", edge}, nameSpan, {" ", edge}, whenSpan, {" ", edge}, {string(B.TR), edge}}
 	} else {
-		top = []Span{{strings.Repeat(" ", left), Plain}, {"╭", edge}, {"─ ", edge}, whenSpan,
-			{" ", edge}, nameSpan, {" ", edge}, {strings.Repeat("─", pad), edge}, {"╮", edge}}
+		top = []Span{{strings.Repeat(" ", left), Plain}, {string(B.TL), edge}, {string(B.H) + " ", edge}, whenSpan,
+			{" ", edge}, nameSpan, {" ", edge}, {strings.Repeat(string(B.H), pad), edge}, {string(B.TR), edge}}
 	}
 	// The name is drawn on the edge, so it is where the entry's first runes are: selecting a
 	// bubble from its top-left corner copies `[ana] what ana said`, the way the log did when
@@ -210,16 +210,16 @@ func messageRows(entries []ChatEntry, b logBlock, width int, cut bool) []logRow 
 	rows := []logRow{{spans: top, textX: nameX, textW: Width(name), text: []Span{nameSpan}, src: b.from, off: 0}}
 	for _, l := range body {
 		fill := max(0, inner-2-spansWidth(l.spans))
-		row := []Span{{strings.Repeat(" ", left), Plain}, {"│", edge}, {" ", Plain}}
+		row := []Span{{strings.Repeat(" ", left), Plain}, {string(B.V), edge}, {" ", Plain}}
 		row = append(row, l.spans...)
-		row = append(row, Span{strings.Repeat(" ", fill), Plain}, Span{" ", Plain}, Span{"│", edge})
+		row = append(row, Span{strings.Repeat(" ", fill), Plain}, Span{" ", Plain}, Span{string(B.V), edge})
 		rows = append(rows, logRow{spans: row, textX: left + 2, textW: inner - 2, text: l.spans, src: l.src, off: l.off})
 	}
 	if cut {
 		return rows
 	}
-	bot := []Span{{strings.Repeat(" ", left), Plain}, {"╰", edge},
-		{strings.Repeat("─", inner), edge}, {"╯", edge}}
+	bot := []Span{{strings.Repeat(" ", left), Plain}, {string(B.BL), edge},
+		{strings.Repeat(string(B.H), inner), edge}, {string(B.BR), edge}}
 	return append(rows, frameRow(bot))
 }
 
@@ -243,8 +243,8 @@ func fileRows(e ChatEntry, idx, width int) []logRow {
 	when := FormatClock(e.At, false)
 	head := name + " shared"
 	pad := max(0, inner-Width(head)-Width(when)-6)
-	top := []Span{{"╭", edge}, {"─ ", edge}, NameSpan(e.Who, e.Color, true), {" shared", Muted},
-		{" ", edge}, {strings.Repeat("─", pad), edge}, {" ", edge}, {when, Muted}, {" ─", edge}, {"╮", edge}}
+	top := []Span{{string(B.TL), edge}, {string(B.H) + " ", edge}, NameSpan(e.Who, e.Color, true), {" shared", Muted},
+		{" ", edge}, {strings.Repeat(string(B.H), pad), edge}, {" ", edge}, {when, Muted}, {" " + string(B.H), edge}, {string(B.TR), edge}}
 
 	body := []Span{{" " + f.Kind + " ", chipKey}, {" " + f.Name + " ", chipLabel}}
 	if f.State == FileSaved {
@@ -275,12 +275,12 @@ func fileRows(e ChatEntry, idx, width int) []logRow {
 		hots[i].x += at
 	}
 
-	content := append([]Span{{"│", edge}, {" ", Plain}}, body...)
+	content := append([]Span{{string(B.V), edge}, {" ", Plain}}, body...)
 	content = append(content, Span{strings.Repeat(" ", space), Plain})
 	content = append(content, bspans...)
-	content = append(content, Span{" ", Plain}, Span{"│", edge})
+	content = append(content, Span{" ", Plain}, Span{string(B.V), edge})
 
-	bot := []Span{{"╰", edge}, {strings.Repeat("─", inner), edge}, {"╯", edge}}
+	bot := []Span{{string(B.BL), edge}, {strings.Repeat(string(B.H), inner), edge}, {string(B.BR), edge}}
 	return []logRow{
 		frameRow(top),
 		{spans: content, src: -1, hots: hots},

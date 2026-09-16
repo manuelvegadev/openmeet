@@ -57,7 +57,18 @@ type App struct {
 	// only way to give the voice priority — a data channel and the audio ride the same
 	// socket, so nothing a router can see tells them apart. "unlimited" never gives it back.
 	// "capped" is a flat 2 Mbps, for when the adaptive one is not trusted.
-	FileTransfer    string  `json:"fileTransfer,omitempty"`
+	FileTransfer string `json:"fileTransfer,omitempty"`
+	// How the interface looks, and the only settings here that take effect the moment they
+	// are chosen rather than when a room is next joined. Accent is a name from tui.Accents
+	// and Tone how strongly it is drawn ("base", "vivid", "pastel"); Background is "black",
+	// "white" or "transparent"; Borders is "single" or "double" and Corners "rounded" or
+	// "square" (a double frame is square either way — Unicode has no rounded double corner).
+	// Absent is the interface as it has always been: yellow on black, single and rounded.
+	Accent          string  `json:"accent,omitempty"`
+	Tone            string  `json:"tone,omitempty"`
+	Background      string  `json:"background,omitempty"`
+	Borders         string  `json:"borders,omitempty"`
+	Corners         string  `json:"corners,omitempty"`
 	PauseRendering  string  `json:"pauseRendering"`
 	AutoUpdate      string  `json:"autoUpdate"`
 	LastUpdateCheck int64   `json:"lastUpdateCheck"`
@@ -72,6 +83,7 @@ func Defaults() App {
 		VoiceGate: true, PauseRendering: "minimized", AutoUpdate: "auto",
 		AudioProcessing: "system", MicLevel: "auto", OpusComplexity: 10, Mouse: "on", CopyOnSelect: "off",
 		FileTransfer: "voice-first",
+		Accent:       "yellow", Tone: "base", Background: "black", Borders: "single", Corners: "rounded",
 	}
 }
 

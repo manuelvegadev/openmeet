@@ -18,7 +18,14 @@ type SettingsRow struct {
 	Help       string
 	Tab        string
 	ValueColor string // the name row draws its value in the name's colour
-	Disabled   bool
+	// One colour per choice, for the row where the choice *is* a colour: the chips are then
+	// drawn in the colours they name, so the palette is on screen rather than described.
+	ChoiceColors []string
+	// Live marks a row that takes effect the moment it is changed. Everything else on this
+	// screen is read when a room is next joined, which is what the dot beside the title
+	// says — so a tab whose rows are all Live does not draw the dot at all.
+	Live     bool
+	Disabled bool
 }
 
 // Meter is one bar under the settings: what the choices on this tab cost and what they buy,
@@ -76,9 +83,8 @@ func DrawSettings(c *Canvas, s SettingsState) {
 	area := Screen(c, "Settings", settingsHints)
 	right := area.X + area.W
 	x := area.X + Width("Settings") + 1
-	x = c.Put(x, area.Y-2, "●", Style{FG: ThemeWarn}, right) + 2
-	DrawHints(c, x, area.Y-2, right-x, settingsBack)
 	if s.Loading {
+		DrawHints(c, x+1, area.Y-2, right-x, settingsBack)
 		c.Put(area.X, area.Y, "Loading devices...", Style{FG: ThemeWarn}, right)
 		return
 	}
@@ -87,22 +93,37 @@ func DrawSettings(c *Canvas, s SettingsState) {
 	if s.Tab >= 0 && s.Tab < len(s.Tabs) {
 		tab = s.Tabs[s.Tab]
 	}
+	// The dot, and the line at the bottom that says what it meant, belong to the tabs where
+	// something waits for the next join. The appearance is not one of them: it changes under
+	// you as you choose it, and a note saying otherwise would be wrong.
+	deferred := false
+	for _, i := range RowsForTab(s.Rows, tab) {
+		deferred = deferred || !s.Rows[i].Live
+	}
+	if deferred {
+		x = c.Put(x, area.Y-2, "●", Style{FG: ThemeWarn}, right) + 2
+	} else {
+		x++
+	}
+	DrawHints(c, x, area.Y-2, right-x, settingsBack)
 
 	// From the bottom up: the rule the key hints sit under, the bars and their rule, and the
 	// line that says what the dot beside the title meant.
 	bottom := area.Y + area.H - 1
-	Rule(c, bottom, '├', '┤', nil)
+	Rule(c, bottom, false)
 	y := bottom
 	if len(s.Meters) > 0 {
 		y -= len(s.Meters)
 		DrawMeters(c, Rect{area.X, y, area.W, len(s.Meters)}, s.Meters)
 		y--
-		Rule(c, y, '├', '┤', nil)
+		Rule(c, y, false)
 	}
 	legendY := y - 1
-	noteX := right - Width(joinNote) - 2
-	c.Put(noteX, legendY, "●", Style{FG: ThemeWarn}, right)
-	c.Put(noteX+2, legendY, joinNote, Muted, right)
+	if deferred {
+		noteX := right - Width(joinNote) - 2
+		c.Put(noteX, legendY, "●", Style{FG: ThemeWarn}, right)
+		c.Put(noteX+2, legendY, joinNote, Muted, right)
+	}
 
 	// The selected row's line sits under the tabs, where it is read before the list rather
 	// than after it, and wraps rather than running off a narrow window. The block is as tall
@@ -129,17 +150,13 @@ func DrawSettings(c *Canvas, s SettingsState) {
 		if rowY >= body.Y+body.H {
 			break
 		}
-		// A settings row is picked by a click and acted on by the next one: the first click
-		// only brings its line of help up, which is what you came to read before changing it.
-		if !row.Disabled {
-			c.Hot(Rect{body.X, rowY, area.W, 1}, Action{Kind: ActRow, ID: "settings", Idx: i})
-		}
 		selected := i == s.Selected
 		Pointer(c, body.X, rowY, selected)
 		label := fmt.Sprintf("%-*s", settingsLabelWidth, row.Label)
 		vx := c.Put(body.X+2, rowY, label, Style{Bold: selected}, right) + 1
+		used := 1
 		if len(row.Choices) > 0 {
-			drawChoices(c, vx, rowY, right, row)
+			used = drawChoices(c, vx, rowY, right, row)
 		} else {
 			vs := Muted
 			if row.ValueColor != "" {
@@ -149,7 +166,14 @@ func DrawSettings(c *Canvas, s SettingsState) {
 			}
 			c.Put(vx, rowY, row.Value, vs, right)
 		}
-		rowY++
+		// A settings row is picked by a click and acted on by the next one: the first click
+		// only brings its line of help up, which is what you came to read before changing it.
+		// The whole of a wrapped row answers to the click, which is why this is registered
+		// after it is drawn and knows how tall it turned out.
+		if !row.Disabled {
+			c.Hot(Rect{body.X, rowY, area.W, used}, Action{Kind: ActRow, ID: "settings", Idx: i})
+		}
+		rowY += used
 	}
 	if s.PickerTitle != "" {
 		DrawModal(c, s.PickerTitle, s.Picker, s.PickerIdx, pickHints, "picker")
@@ -159,17 +183,44 @@ func DrawSettings(c *Canvas, s SettingsState) {
 // drawChoices draws every value the row can take as a chip, the current one on the accent
 // and the rest on the surface — the key chips' two tones, minus their second half. A setting
 // reads as what it is and what else it could be, without opening anything.
-func drawChoices(c *Canvas, x, y, max int, row SettingsRow) {
+//
+// A row whose choices are colours keeps that shape and swaps the tones for the colours
+// themselves: the chosen one filled with its colour, the rest written in theirs on the
+// surface. You pick a colour by looking at it.
+//
+// A row with more values than fit wraps whole chips onto the next line, aligned under the
+// first, and returns the rows it took so the list below it moves down rather than being drawn
+// over. That is the accent's row and a narrow window; every other row is one line.
+func drawChoices(c *Canvas, x, y, max int, row SettingsRow) int {
+	left, cx, rows := x, x, 1
 	for i, choice := range row.Choices {
 		st := chipOff
-		if i == row.Choice {
+		switch {
+		case row.Disabled:
+			// A row that cannot be changed shows what it is set to and says so by being
+			// flat: no chip is lit, because lighting one would offer a choice that Enter
+			// will not make.
+		case i < len(row.ChoiceColors):
+			hex := row.ChoiceColors[i]
+			st = Style{FG: hex, BG: ThemeSurface}
+			if i == row.Choice {
+				st = Style{FG: onColor(hex), BG: hex, Bold: true}
+			}
+		case i == row.Choice:
 			st = chipKey
 		}
-		x = c.Put(x, y, " "+choice+" ", st, max) + 1
+		text := " " + choice + " "
+		if w := Width(text); cx > left && cx+w > max {
+			y++
+			rows++
+			cx = left
+		}
+		cx = c.Put(cx, y, text, st, max) + 1
 	}
 	if row.Suffix != "" {
-		c.Put(x, y, row.Suffix, Muted, max)
+		c.Put(cx, y, row.Suffix, Muted, max)
 	}
+	return rows
 }
 
 // DrawTabs draws the sections as tabs: the names on one row and the rule under them on the
@@ -189,7 +240,7 @@ func DrawTabs(c *Canvas, x, y, max int, tabs []string, active int) {
 			from, to = left-1, x-1
 		}
 	}
-	Rule(c, y+1, '├', '┤', nil)
+	Rule(c, y+1, false)
 	for i := from; i < to; i++ {
 		c.Set(i, y+1, '━', Style{FG: ThemeAccent})
 	}
