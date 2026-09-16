@@ -14,6 +14,22 @@ matrix in the README, not a version of its own.
 
 ### Added
 
+- **A debug log on disk, and a window of your own for it.** `--debug` writes `debug.log` beside
+  `settings.json`, and **`openmeet --logs`** follows it wherever you put that window —
+  `--grep` to narrow it, `--all` for the whole file. One file, capped at four megabytes and
+  trimmed to its newest half, written from a goroutine of its own behind a queue that drops
+  rather than blocks: nothing in this app may wait on a disk, and a lost log line is cheaper
+  than a late one. What is never written is what anybody said — a log is for reporting a
+  fault, and a conversation is not part of one. A stream rather than a viewer of our own on
+  purpose: a terminal already has scrollback, a search and a selection that copies.
+
+- **`--demo`, the interface with nothing behind it.** A scripted room with no server, no
+  devices and no network: somebody joins, talks, shares a screen, sends a file you watch
+  arrive, and then you send one of five gigabytes that keeps going so the bar and the speed
+  have something to say. It is the same keys, the same canvas, the same selection and the same
+  mouse as a real room, which is the only honest way to judge how the interface looks — and it
+  is where a screenshot comes from, and now where the landing page's terminal comes from too.
+
 - **The interface's colours and borders are yours.** A new `Look` section in the settings,
   five rows: an **accent** — the whole wheel, white through red, orange, yellow (still the
   default), lime, green, teal, cyan, blue, indigo, purple and fuchsia to pink — a **tone** of
@@ -57,6 +73,18 @@ matrix in the README, not a version of its own.
 
 ### Changed
 
+- **A transfer's bar moves when the transfer does.** It was whole blocks over twenty cells —
+  twenty-one positions for a hundred percentages, so a percent that moved was usually a
+  percent that did not show. It is drawn in eighths now, 160 positions in the same twenty
+  cells, on the surface grey every other meter in the app uses, and the speed sits beside it,
+  updated five times a second. On a slow transfer the percentage barely moves while the speed
+  is the thing worth watching.
+
+- **The debug panel wraps instead of clipping.** The panel is thirty-odd cells wide and a
+  debug line is a sentence, so most of one was simply not there — which is no use when the
+  line is what you opened the panel to read. It still copies as the one line it is, with no
+  newline in the middle, because a wrapped row remembers which entry it came from.
+
 - **The landing page's terminal is the application's, drawn by the application.** It used to
   be a copy of the room built out of HTML by hand, which was never quite right and went out of
   date every time the room changed. It is now exported from the app itself: the same scripted
@@ -90,6 +118,23 @@ matrix in the README, not a version of its own.
   before each of your messages is sent, instead of them appearing in the room fully formed —
   a chat application that only ever shows messages arriving is showing half of itself. Type in
   the composer yourself and the script stops writing over you and does not start again.
+
+### Fixed
+
+- **An update that does not run no longer replaces the one that does.** Updating to 0.9.0
+  killed the app three times in a row: SIGKILL, CODESIGNING, "Invalid Page" — the pages macOS
+  faulted in did not match what the binary's signature said they should be, although the file
+  on disk was perfect and ran a moment later. A rename is atomic for the metadata and says
+  nothing about the data, so the new binary could be in place with its pages not yet written,
+  and relaunching straight into it is exactly when that matters. The download is now flushed
+  to disk, with its directory, before anything is renamed.
+
+- **A video window that stops responding no longer wedges the room.** After a while watching a
+  peer's screen, frames stopped arriving, the window stopped responding and could not be
+  closed — all three were one bug. Frames were written to the player while holding its lock,
+  so a player that stopped reading filled its pipe, that write never returned, and the lock
+  was never given back: closing waited for ever, the stats loop stopped, and the room's own
+  state stopped updating with it.
 
 ## [0.9.0] - 2026-09-15
 
