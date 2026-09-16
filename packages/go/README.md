@@ -18,9 +18,18 @@ brew install cmake pkg-config             # libopus is built once, statically, u
 packages/go/scripts/build.sh              # → packages/go/openmeet, stamped with the package version
 packages/go/openmeet                      # the home screen; --room standup goes straight in
                                           # name, colour and devices come from ~/.config/openmeet/settings.json
+./openmeet --demo                         # a scripted room with nobody in it, to look at
+./openmeet --logs                         # the debug log, in a window of its own
 ./openmeet --list-devices
 ./openmeet --room standup --headless --debug --cpuprofile cpu.prof
 ```
+
+`--demo` is the interface with nothing behind it: a scripted call, no server, no devices, no
+network. It is how the conversation gets looked at — a page drawn to resemble it is a drawing,
+and the difference is always in the part you were trying to judge — and where a screenshot
+comes from. `--logs` follows the debug log `--debug` writes beside `settings.json`, with
+`--grep` to narrow it and `--all` for the whole file; with the debug panel open, `l` opens
+that same log in a new window of the terminal you are already in.
 
 `--input-device` / `--output-device` match a substring of the name; `--no-voice-gate`
 transmits continuously; the Audio Send setting (128 kbps by default) is the one encoder's bitrate and `--audio-kbps` overrides it for a run;
