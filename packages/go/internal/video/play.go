@@ -23,7 +23,30 @@ type Player struct {
 	done  bool
 	// Frames written, for the stats line.
 	frames int64
+	// Access units waiting to go to ffplay, and the goroutine that puts them there. The
+	// write to a pipe is the one thing here that can block for ever — a player that stops
+	// reading fills its 64 KB and never comes back — so it happens on its own goroutine
+	// with nothing locked. It used to happen inside Write, holding this mutex, and then
+	// Close() and Closed() and Frames() all waited on a pipe that was never going to move:
+	// no new frames, a window that would not close, and a room whose state stopped
+	// updating, because a snapshot asks IsOpen.
+	queue chan []byte
+	// When something was last handed to ffplay, for the watchdog.
+	lastWrite time.Time
+	stalled   bool
+	// Set once frames have been dropped: nothing goes in until a keyframe does, because a
+	// frame that follows a dropped one is as undecodable as the one that was dropped.
+	waitKey bool
 }
+
+// What the queue holds before the player is considered too slow to keep up, and how long it
+// may take nothing at all before it is considered gone. A share is 30 fps: sixty frames is
+// two seconds of slack, and ten seconds of a full queue is not a slow player, it is a dead
+// one.
+const (
+	playerQueue    = 60
+	playerStallFor = 10 * time.Second
+)
 
 const (
 	windowMaxW = 1280
@@ -54,7 +77,8 @@ func NewPlayer(title string, fps int) (*Player, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	p := &Player{title: title, cmd: cmd, in: in}
+	p := &Player{title: title, cmd: cmd, in: in, queue: make(chan []byte, playerQueue), lastWrite: time.Now()}
+	go p.pump()
 	go func() {
 		_ = cmd.Wait()
 		p.mu.Lock()
@@ -64,19 +88,112 @@ func NewPlayer(title string, fps int) (*Player, error) {
 	return p, nil
 }
 
-// Write hands ffplay one access unit; false once the window is gone (closed by hand).
+// pump is the only thing that ever writes to ffplay, so the blocking write is somewhere it
+// can block without taking anything with it.
+func (p *Player) pump() {
+	for au := range p.queue {
+		if _, err := p.in.Write(au); err != nil {
+			p.mu.Lock()
+			p.done = true
+			p.mu.Unlock()
+			return
+		}
+		p.mu.Lock()
+		p.frames++
+		p.lastWrite = time.Now()
+		p.stalled = false
+		p.mu.Unlock()
+	}
+}
+
+// Write hands ffplay one access unit; false once the window is gone — closed by hand, or
+// given up on because it stopped taking anything.
+//
+// It never waits. A player falling behind loses frames rather than stalling the goroutine
+// reading RTP, and it loses them up to the next keyframe, so what comes back is a whole
+// picture and not half of one over the wreck of the last.
 func (p *Player) Write(au []byte) bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.done {
+		p.mu.Unlock()
 		return false
 	}
-	if _, err := p.in.Write(au); err != nil {
-		p.done = true
+	stalledFor := time.Since(p.lastWrite)
+	waiting := p.waitKey
+	p.mu.Unlock()
+
+	key := isKeyframe(au)
+	if key {
+		// A decoder can start here, so whatever was dropped stops mattering.
+		p.drain()
+		p.mu.Lock()
+		p.waitKey = false
+		p.mu.Unlock()
+		select {
+		case p.queue <- au:
+		default:
+		}
+		return true
+	}
+	if waiting {
+		return true // still nothing a decoder could use
+	}
+	select {
+	case p.queue <- au:
+		return true
+	default:
+	}
+	// The queue is full: drop what is in it and wait for the next keyframe rather than
+	// filling it again with frames that follow the ones just dropped.
+	p.drain()
+	p.mu.Lock()
+	p.stalled, p.waitKey = true, true
+	p.mu.Unlock()
+	if stalledFor > playerStallFor {
+		p.Close()
 		return false
 	}
-	p.frames++
 	return true
+}
+
+// drain empties the queue, dropping what nobody is going to see anyway.
+func (p *Player) drain() {
+	for {
+		select {
+		case <-p.queue:
+		default:
+			return
+		}
+	}
+}
+
+// isKeyframe: an access unit carrying an IDR slice (NAL type 5) or a parameter set, which
+// is where a decoder can start. Annex-B, so the units are separated by start codes.
+func isKeyframe(au []byte) bool {
+	for i := 0; i+4 < len(au); i++ {
+		if au[i] != 0 || au[i+1] != 0 {
+			continue
+		}
+		j := i + 2
+		if au[j] == 0 {
+			j++
+		}
+		if j >= len(au) || au[j] != 1 || j+1 >= len(au) {
+			continue
+		}
+		switch au[j+1] & 0x1f {
+		case 5, 7, 8: // IDR, SPS, PPS
+			return true
+		}
+	}
+	return false
+}
+
+// Stalled is whether the player has stopped taking what it is given.
+func (p *Player) Stalled() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stalled
 }
 
 func (p *Player) Closed() bool {
@@ -99,10 +216,12 @@ func (p *Player) Close() {
 	}
 	p.done = true
 	p.mu.Unlock()
-	_ = p.in.Close()
-	if p.cmd.Process != nil {
+	// Killing the process is what unblocks the pump if it is stuck in a write to a pipe
+	// nobody is reading; closing the pipe alone would not.
+	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 	}
+	_ = p.in.Close()
 }
 
 // Receiver follows one remote video track: depacketises into access units and, while a
@@ -115,8 +234,10 @@ type Receiver struct {
 	closed   bool
 	// Counters for the debug line.
 	packets, frames int64
-	OnWindowClosed  func()
-	Log             func(format string, args ...any)
+	// Why the window went, when it went on its own: the player gave up, or it was closed by
+	// hand ("").
+	OnWindowClosed func(reason string)
+	Log            func(format string, args ...any)
 }
 
 func NewReceiver(peerName string, kind Kind, track *webrtc.TrackRemote, log func(string, ...any)) *Receiver {
@@ -150,11 +271,15 @@ func (r *Receiver) run(track *webrtc.TrackRemote) {
 			p := r.player
 			r.mu.Unlock()
 			if p != nil && !p.Write(sample.Data) {
+				reason := ""
+				if p.Stalled() {
+					reason = "it stopped showing what it was given"
+				}
 				r.mu.Lock()
 				r.player = nil
 				r.mu.Unlock()
 				if r.OnWindowClosed != nil {
-					r.OnWindowClosed()
+					r.OnWindowClosed(reason)
 				}
 			}
 		}

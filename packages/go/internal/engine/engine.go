@@ -207,7 +207,15 @@ func (e *Engine) onVideoTrack(peerID, kind string, track *webrtc.TrackRemote) {
 		return
 	}
 	r := video.NewReceiver(p.p.Username, video.Kind(kind), track, e.logf)
-	r.OnWindowClosed = func() { e.snapshot() }
+	r.OnWindowClosed = func(reason string) {
+		if reason != "" {
+			// A window that went on its own looks like one that was closed on purpose, so
+			// it has to say which — the same rule the share's own watchdog follows.
+			e.notice(tui.KindInfo, "", "", fmt.Sprintf("%s's %s window closed: %s", p.p.Username, kind, reason))
+			e.Emit(tui.Toast{Kind: "warn", Text: "The " + kind + " window stopped responding and was closed"})
+		}
+		e.snapshot()
+	}
 	if kind == "screen" {
 		p.screen = r
 	} else {
@@ -765,6 +773,20 @@ func (e *Engine) UpdateDevices(in, out *audio.Device) error {
 func (e *Engine) Close() {
 	e.once.Do(func() {
 		close(e.done)
+		// The windows showing other people go with the room. ffplay does not exit when its
+		// input ends — it holds the last frame — so leaving them would leave a window per
+		// peer behind on the desktop after the app is gone.
+		e.mu.Lock()
+		var windows []*video.Receiver
+		for _, p := range e.people {
+			windows = append(windows, p.screen, p.webcam)
+		}
+		e.mu.Unlock()
+		for _, r := range windows {
+			if r != nil {
+				r.CloseWindow()
+			}
+		}
 		if e.screenCap != nil {
 			e.screenCap.Stop()
 		}
