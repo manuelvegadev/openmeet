@@ -231,7 +231,7 @@ What a change costs:
 | the room's drawing (`internal/tui`, `internal/demo`) | `go-client.yml`, which fails until the exported terminal is regenerated — and then `deploy-website.yml` too, because regenerating it writes into `packages/website` |
 | `packages/server/**` | `server.yml`, `lint.yml` |
 | `packages/website/**` | `lint.yml`, then `website.yml` on a PR or `deploy-website.yml` on `main` |
-| `packages/go/VERSION` | `go-client.yml`, and `deploy-website.yml` — the page prints the version |
+| `packages/go/VERSION` | `go-client.yml`, and `deploy-website.yml` — the page prints the version, and the exported terminal draws it in the room's header, so a bump is regenerated with it |
 | `Dockerfile` | `server.yml`, which builds the image |
 | the root manifests or the lockfile | all three Node workflows |
 | docs, `*.md` | none |

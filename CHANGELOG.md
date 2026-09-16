@@ -10,7 +10,86 @@ Windows at feature parity.
 One version number covers every platform. What each platform actually supports is the support
 matrix in the README, not a version of its own.
 
-## [Unreleased]
+## [0.10.0] - 2026-09-16
+
+### Added
+
+- **The interface's colours and borders are yours.** A new `Look` section in the settings,
+  five rows: an **accent** — the whole wheel, white through red, orange, yellow (still the
+  default), lime, green, teal, cyan, blue, indigo, purple and fuchsia to pink — a **tone** of
+  base, vivid or pastel, a **background** of black, white or transparent, **borders** of one
+  line or two, and **corners** rounded or square. Unlike everything else on
+  that screen these take effect as you choose them, so the screen repaints under you rather
+  than waiting for the next room.
+
+  The accent is the frame, the key caps, the pointer and your own messages, and its thirteen
+  colours are the same thirteen a name can be — one palette in the room rather than two. The
+  tone is the
+  same colour said louder or more quietly — the hue never moves — and both directions are
+  pulled back along their own hue if they would come out too close to the background to read,
+  which is what keeps a pastel legible on white instead of invisible. Both rows show their
+  choices in the colours they would give you: the accent chips are drawn at the tone in force,
+  and the tone chips are your own accent at each of the three.
+
+  White is a real light theme rather than an inversion: the semantic colours darken, the chips
+  move onto a light surface, and the colour someone chose for their name is darkened enough to
+  read on white while keeping the hue you recognise them by. Transparent paints no background
+  at all, so a terminal's wallpaper or blur shows through, and leaves plain text the
+  terminal's own colour — the rest of the palette stays the dark one, so a light terminal
+  wants white rather than transparent.
+
+  Borders and corners reach the message bubbles, the composer and the modals as well as the
+  frame, and every junction comes from the same set: where the room's divider meets a rule it
+  is `╦` and `╩` under double, never a cross of the wrong weight. Corners has no effect while
+  the borders are double — Unicode has no rounded double corner — and the row goes flat and
+  says so rather than offering something that cannot be drawn.
+
+  They are `accent`, `tone`, `background`, `borders` and `corners` in `settings.json`. An
+  absent value — which is every file written before this version — is the interface exactly as
+  it was.
+
+- **The same settings on the landing page.** openmeet.manuelvega.dev has a compact panel in
+  the corner with the same thirteen accents, the same three tones and the same background,
+  borders and corners, running the same rules — the page repaints as you choose, and the
+  choice is kept in that browser for the next visit. The page still ships no framework: the
+  panel is markup plus one more inlined function of ours, and it does not appear at all
+  without JavaScript, since there would be nothing for it to do.
+
+### Changed
+
+- **The landing page's terminal is the application's, drawn by the application.** It used to
+  be a copy of the room built out of HTML by hand, which was never quite right and went out of
+  date every time the room changed. It is now exported from the app itself: the same scripted
+  `--demo` call, played against a canvas and written out cell by cell, so the page shows the
+  room rather than a drawing of it — the bubbles on the side they came from, the two files
+  shared and taken, the 5 GB one going out with its bar and its speed, the events centred and
+  plain, the composer being typed into before each message of yours is sent.
+
+  It cannot go stale: a test fails if the room is drawn differently from what the page is
+  showing, so the page changes in the same commit as the room or the build stops. And it still
+  follows the Look panel — the cells carry the *name* of the colour they were drawn in, not a
+  value, so choosing an accent, a pale tone, a light page or double borders repaints the
+  inside of the terminal exactly as Settings ▸ Look repaints the application.
+
+  It weighs about three kilobytes and runs no JavaScript, and it is drawn at the size and the
+  row pitch a terminal actually gives this font, so the page and a real window are the same
+  shape rather than merely similar.
+
+  On a narrow screen it is drawn smaller rather than rearranged. There is no phone client to
+  rearrange it into: what the page is showing is a desktop window, and a desktop window shown
+  small is the truth about it.
+
+- **The landing page says what the app actually does.** Sending a file had no pane of its own
+  — the one feature you cannot tell from a screenshot of a room — so it has one now: what is
+  announced over the WebSocket, what travels peer to peer, where it lands, and the setting
+  that decides whether it gets out of the voice's way. A fourth pillar and the FAQ entries
+  that go with it were added in the same pass, and the pillars sit two by two rather than a
+  row of three with one left over underneath.
+
+- **`--demo` types its own messages.** The composer is written into, a character at a time,
+  before each of your messages is sent, instead of them appearing in the room fully formed —
+  a chat application that only ever shows messages arriving is showing half of itself. Type in
+  the composer yourself and the script stops writing over you and does not start again.
 
 ## [0.9.0] - 2026-09-15
 
@@ -281,7 +360,8 @@ Versions before 0.6.0 were the Node client, published to npm as `openmeet-termin
 `terminal-v*` tags. They are not restated here; their releases remain on the
 [tags page](https://github.com/manuelvegadev/openmeet/tags).
 
-[Unreleased]: https://github.com/manuelvegadev/openmeet/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/openmeet/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/manuelvegadev/openmeet/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/manuelvegadev/openmeet/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/manuelvegadev/openmeet/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/manuelvegadev/openmeet/compare/v0.6.3...v0.7.0
