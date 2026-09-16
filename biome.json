@@ -39,6 +39,13 @@
     }
   },
   "files": {
-    "includes": ["packages/**/*.ts", "packages/**/*.tsx", "packages/**/*.json", "!**/dist", "!packages/go"]
+    "includes": [
+      "packages/**/*.ts",
+      "packages/**/*.tsx",
+      "packages/**/*.json",
+      "!**/dist",
+      "!packages/go",
+      "!packages/website/src/content/terminal.json"
+    ]
   }
 }
