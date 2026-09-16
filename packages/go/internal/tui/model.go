@@ -89,6 +89,9 @@ type Host struct {
 	// command to run instead, which the room offers on the clipboard.
 	OpenLogs     func() error
 	LogsTerminal string
+	// This session opens no audio devices, so it must not be asked which: the demo, and
+	// anything else that joins a room without a microphone in it.
+	NoDevices bool
 	// Where to start: the room to join straight away, if the CLI said so.
 	InitialRoom string
 	InputFlag   string
@@ -798,6 +801,10 @@ func (m *Model) openPicker(kind string, devices []string, saved string) {
 func (m *Model) enterDevices(room string, from screenID) {
 	m.pendingRoom = room
 	m.devFrom = from
+	if m.host.NoDevices {
+		m.joinRoom()
+		return
+	}
 	m.devInputs = m.host.Devices.Inputs()
 	m.devOutputs = m.host.Devices.Outputs()
 	if m.host.InputFlag != "" || m.host.OutputFlag != "" {

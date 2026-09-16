@@ -706,12 +706,14 @@ func main() {
 		debug    = flag.Bool("debug", false, "start with the debug panel on")
 		profile  = flag.String("cpuprofile", "", "write a CPU profile here until exit")
 		version  = flag.Bool("version", false, "print the version and exit")
+		demo     = flag.Bool("demo", false, "a scripted room with nobody in it: no server, no devices, no network — the interface as it really draws, to look at")
 		showLogs = flag.Bool("logs", false, "follow the debug log in this window and exit on ctrl-c; --grep narrows it")
 		grep     = flag.String("grep", "", "with --logs: only lines containing this")
 		allLogs  = flag.Bool("all", false, "with --logs: from the beginning of the file, not the last few hundred lines")
 		headless = flag.Bool("headless", false, "no interface: join --room, log to stdout, quit on ctrl-c (for measuring)")
 		sendFile = flag.String("send-file", "", "with --headless: share this file with the room once joined")
 		takeFile = flag.Bool("accept-files", false, "with --headless: download every file the room offers (there is no keyboard to ask)")
+		shareScr = flag.Bool("share-screen", false, "with --headless: share the first screen once joined, and watch what peers share")
 		noPrio   = flag.Bool("no-priority", false, "leave process and thread priorities alone (for measuring)")
 		noVPIO   = flag.Bool("no-voice-processing", false, "macOS: raw devices instead of Apple's voice processing unit")
 		vpBypass = flag.Bool("voice-processing-bypass", false, "macOS: keep Apple's unit but skip its echo canceller, gain and noise suppression")
@@ -927,6 +929,12 @@ func main() {
 		}
 		return
 	}
+	if *demo {
+		// Straight in, with a Join that dials nothing. Everything else — the keys, the
+		// canvas, the selection, the mouse — is the application.
+		host.InitialRoom, host.NoDevices = "demo", true
+		host.Join = func(_, _, _, _, _ string) (tui.Room, error) { return startDemo(emit) }
+	}
 	if *headless {
 		if *room == "" {
 			log.Fatal("--headless needs --room")
@@ -955,6 +963,16 @@ func main() {
 							log.Printf("file %s: %v", m.File.ID, err)
 						}
 					}
+				case tui.Snapshot:
+					if *shareScr {
+						for _, p := range m.Peers {
+							if p.Screen && !p.ScreenOpen {
+								if err := r.TogglePeerWindow(p.ID, "screen"); err != nil {
+									log.Printf("watch %s: %v", p.Name, err)
+								}
+							}
+						}
+					}
 				case tui.FileUpdate:
 					log.Printf("file %s: %s %s%s", m.ID, m.State, m.Saved, m.Error)
 				case tui.Toast:
@@ -968,6 +986,15 @@ func main() {
 		if *sendFile != "" {
 			if err := r.ShareFile(*sendFile); err != nil {
 				log.Printf("--send-file: %v", err)
+			}
+		}
+		if *shareScr {
+			if screens := video.Screens(); len(screens) > 0 {
+				if err := r.StartScreen(screens[0].ID); err != nil {
+					log.Printf("--share-screen: %v", err)
+				}
+			} else {
+				log.Print("--share-screen: no screens")
 			}
 		}
 		sigc := make(chan os.Signal, 1)
