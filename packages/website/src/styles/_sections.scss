@@ -4,9 +4,14 @@
 
 .pillars {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 48px;
+  // Two by two rather than a row of three and one left over underneath it.
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 48px 64px;
   padding-bottom: 96px;
+
+  @include below($bp-tablet) {
+    gap: 40px;
+  }
 
   @include below($bp-phone) {
     grid-template-columns: minmax(0, 1fr);
@@ -69,7 +74,7 @@
 }
 
 .pane {
-  border: 1px solid var(--line-strong);
+  border: var(--frame-w) var(--frame-style) var(--line-strong);
   background: var(--panel);
   min-width: 0;
 

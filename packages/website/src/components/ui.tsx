@@ -3,12 +3,14 @@ import { useCopy } from '../lib/i18n';
 
 /**
  * A key on a gold keycap, followed by what it does on a grey pill, as the app draws them.
- * `disabled` is the app's greyed key: both halves on the surface grey, for a key that would do
- * nothing right now (the screenshot's `w cam`, with a peer selected who has no camera on).
+ *
+ * The app's greyed-out key — both halves on the surface grey, for a key that would do nothing
+ * right now — is not here any more: the only place that showed one was the terminal, which is
+ * exported from the application now and arrives with its chips already drawn.
  */
-export function Key({ k, label, disabled }: { k: string; label: string; disabled?: boolean }) {
+export function Key({ k, label }: { k: string; label: string }) {
   return (
-    <span className={disabled ? 'key key--disabled' : 'key'}>
+    <span className="key">
       <kbd>{k}</kbd>
       <span className="pill">{label}</span>
     </span>
@@ -68,21 +70,21 @@ export function Peer({ peer, rate = true, latency = true }: { peer: PeerRow; rat
       <Name who={peer.who} />
       {peer.tag ? <span className={`tag tag--${peer.tag.toLowerCase()}`}>{peer.tag}</span> : null}
       <span className="grow" />
-      {rate && peer.rate ? <span className="info">{peer.rate}</span> : null}
+      {rate && peer.rate ? <span className="muted">{peer.rate}</span> : null}
       {latency && peer.latencyMs ? <span className={latencyTone(peer.latencyMs)}>~{peer.latencyMs}ms</span> : null}
       {peer.volume ? <span className="muted">{peer.volume}</span> : null}
     </div>
   );
 }
 
-/** The keys pinned under the participants list. `w` greys out when the peer has no camera on. */
-export function PeerKeys({ camDisabled }: { camDisabled?: boolean }) {
+/** The keys pinned under the participants list, as the story pane beside them draws them. */
+export function PeerKeys() {
   const c = useCopy();
   return (
     <div className="tui__keys">
       <Key k="↑↓" label={c.tui.keys.select} />
       <Key k="-/+" label={c.tui.keys.vol} />
-      <Key k="w" label={c.tui.keys.cam} disabled={camDisabled} />
+      <Key k="w" label={c.tui.keys.cam} />
       <Key k="e" label={c.tui.keys.screen} />
     </div>
   );

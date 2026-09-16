@@ -1,8 +1,15 @@
 @use 'tokens' as *;
 
-// The room, as docs/screenshot.png shows it: a macOS window, the gold frame, the chat on the
-// left with its composer as the pane's last row, the participants on the right with their
-// keys pinned at the foot.
+// The terminal: a grid of cells exported from the application, laid out as text.
+//
+// `content/terminal.json` is written by a Go test that plays the app's own `--demo` against a
+// canvas (packages/go/internal/tui/export_test.go). Every cell in it carries the **name** of
+// the colour it was drawn in, and this file is where a name becomes a colour — which is why
+// the Look panel reaches inside the terminal at all, and why there is no second palette here
+// to keep in step with the app's.
+//
+// Nothing runs. The frame is one element, each part that moves is a stack of versions with
+// the moment it takes over, and the whole thirty-six seconds is `animation-delay`.
 
 .tui-section {
   padding-bottom: 96px;
@@ -13,6 +20,9 @@
   border-radius: 10px;
   padding: 0 6px 6px;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  // The terminal inside is sized from the width of this box rather than the viewport's, so it
+  // fits the column it is actually in.
+  container-type: inline-size;
 
   &__bar {
     display: flex;
@@ -35,140 +45,257 @@
   }
 }
 
-.tui {
-  // The one curve: the app draws its frame with ╭╮╰╯.
-  border: 1px solid var(--accent);
-  border-radius: 6px;
+// ── the grid ────────────────────────────────────────────────────────────────
+
+.tt {
+  // A cell is one character of JetBrains Mono, whose advance is exactly 0.6 em, so 138 columns
+  // are 82.8 em and the type size that fits them is the width over 82.8. Below the size the
+  // app is comfortable at the terminal is simply drawn smaller — there is no phone client to
+  // reflow for, and a desktop window shown small is the truth about it.
+  //
+  // Every glyph in here is JetBrains Mono's, the frame included — see _fonts.scss. It has to
+  // be one font: a second one at a different advance turns the grid into a row of frame 3.6 px
+  // wider than a row of text, with no two vertical edges in line.
+  --cell: 1ch;
+  // The row pitch, and it is not a matter of taste: 1.32 em is the height JetBrains Mono
+  // declares for a line (ascender 1020 + descender 300 over 1000 units to the em), so it is
+  // the cell a terminal setting this font builds — Ghostty's included. The font then draws │
+  // 1.52 em tall on purpose, 0.1 em proud of the cell at each end, which is what makes a
+  // vertical rule continuous instead of a column of dashes. Take the pitch above 1.52 and the
+  // overlap becomes a gap; 1.538 em was doing exactly that, 3.4 px of air in every rule.
+  --lh: 1.32em;
+  font-size: min(13px, calc(100cqw / 82.8));
+  line-height: var(--lh);
+  position: relative;
+  width: calc(var(--cols) * var(--cell));
+  height: calc(var(--rows) * var(--lh));
+  // Whatever the slack comes to, it reads as the window's padding rather than as a margin
+  // down one side.
+  margin-inline: auto;
   background: var(--bg);
-  font-size: 13px;
-  line-height: 20px;
+  color: var(--text);
+  white-space: pre;
   overflow: hidden;
+  // The frame is drawn in characters, so nothing may come between them: no letter spacing, no
+  // font smoothing that leaves a seam, and no ligature turning ─│ into something else.
+  font-variant-ligatures: none;
+  tab-size: 1;
 
-  // The numbers that do not fit on a phone, each a named thing so the breakpoint drops them
-  // by name rather than by counting spans.
-  &__elapsed,
-  &__stats {
-    display: contents;
+  &__r {
+    height: var(--lh);
   }
 
-  &__head {
-    display: flex;
-    gap: 8px;
-    padding: 6px 12px;
-    white-space: nowrap;
-    overflow: hidden;
-    align-items: center;
-    border-bottom: 1px solid var(--accent);
-  }
-
-  &__body {
-    display: flex;
-  }
-
-  &__chat {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    border-right: 1px solid var(--accent);
-    min-width: 0;
-  }
-
+  // A rectangle of the screen, positioned by the cell it starts at. Its size is known from
+  // the export, so `contain` keeps the version swaps inside it: nothing a part does can
+  // reach the page's layout, and the ~120 height flips the conversation makes are scoped to
+  // the pane they happen in.
+  &__part,
   &__log {
-    flex: 1;
-    padding: 8px 12px;
+    position: absolute;
+    left: calc(var(--x) * var(--cell));
+    top: calc(var(--y) * var(--lh));
+    width: calc(var(--w) * var(--cell));
+    height: calc(var(--h) * var(--lh));
+    contain: layout paint;
   }
 
-  &__input {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    padding: 6px 12px;
-    border-top: 1px solid var(--accent);
-    white-space: nowrap;
+  // The versions of a part are stacked on top of each other and one is shown at a time.
+  //
+  // `steps(1, jump-start)` and never `end`: an `end` step puts the whole jump on the last
+  // instant of the animation, and a delay the engine cannot represent exactly never reaches
+  // it — 23.688s came out as a progress of 0.9999999999999964 — so the version never appeared
+  // at all. With jump-start the jump is at the first instant, which every delay reaches.
+  &__v {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    animation:
+      tt-in 1ms steps(1, jump-start) var(--f) forwards,
+      tt-out 1ms steps(1, jump-start) var(--t) forwards;
   }
 
-  &__ln {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  &__icon {
-    &--msg {
-      color: var(--accent);
-    }
-    &--join {
-      color: var(--ok);
-    }
-    &--screen {
-      color: var(--info);
-    }
-    &--mute {
-      color: var(--warn);
-    }
-  }
-
-  &__people {
-    width: $people-width;
-    padding: 8px 12px;
+  // The conversation: blocks against the bottom, clipped at the top, which is how the room
+  // fills the pane — the newest at the bottom and everything above it pushed up.
+  &__log {
     display: flex;
     flex-direction: column;
+    justify-content: flex-end;
+    overflow: hidden;
   }
 
-  &__keys {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin: 8px 0;
+  &__blk {
+    flex: none;
   }
 
-  // The section break between you and everyone else, frame edge to frame edge.
-  &__rule {
-    border-top: 1px solid var(--accent);
-    margin: 6px -12px 10px;
+  // A version of a block takes no room until its turn. Collapsing is what makes a message
+  // arrive at the bottom and push the rest up: left in flow, the whole conversation is drawn
+  // from the first frame with holes in it and fills downward, which is the wrong way round.
+  &__bv {
+    overflow: hidden;
+    height: 0;
+    animation:
+      tt-grow 1ms steps(1, jump-start) var(--f) forwards,
+      tt-shrink 1ms steps(1, jump-start) var(--t) forwards;
   }
 
-  // The chat lines appear one by one on load.
-  &--reveal &__ln {
-    opacity: 0;
-    // steps(1) rather than a fade: the line is either not there or fully legible, never a
-    // half-opacity grey that fails contrast for 50 ms.
-    animation: appear 0.05s steps(1, end) forwards;
-    animation-delay: calc(0.2s + var(--i) * 0.45s);
-
-    @include reduced-motion {
-      opacity: 1;
-      animation: none;
-    }
+  // The composer while a message is being written. The line is there in full and the clip
+  // moves a character at a time — the timing function is written into the element, because
+  // how many steps it takes is how many characters it is.
+  &__typed {
+    display: inline-block;
+    overflow: hidden;
+    white-space: pre;
+    vertical-align: top;
+    width: calc(var(--n) * var(--cell));
   }
 
-  @include below($bp-phone) {
-    font-size: 11px;
-    line-height: 17px;
+  // The caret stands at a column rather than after the text, so the placeholder can be read
+  // underneath it and a line being typed can have it ride the reveal.
+  &__part--draft &__r {
+    position: relative;
+  }
 
-    // Participants above the chat, the composer still the chat's last row.
-    &__body {
-      flex-direction: column-reverse;
-    }
+  &__caret {
+    position: absolute;
+    top: 0;
+    left: calc(var(--n) * var(--cell));
+    // The room draws it as an inverted cell, which is a solid block of the text colour.
+    color: var(--text);
 
-    &__chat {
-      border-right: none;
-      border-top: 1px solid var(--accent);
-    }
-
-    &__people {
-      width: auto;
-    }
-
-    // The header keeps the name, the key and the room; the numbers go.
-    &__elapsed,
-    &__stats {
-      display: none;
+    &::before {
+      content: '\2588';
     }
   }
 }
 
-@keyframes appear {
+// Reduced motion: the room as it ends, with nothing moving. A landing page is not worth a
+// migraine, and the last frame says the same thing the animation does.
+@include reduced-motion {
+  .tt__v,
+  .tt__bv,
+  .tt__typed {
+    animation: none !important;
+  }
+  .tt__v {
+    opacity: 0;
+  }
+  .tt__bv {
+    height: 0;
+  }
+  .tt__part > .tt__v:last-child {
+    opacity: 1;
+  }
+  .tt__blk > .tt__bv:last-child {
+    height: auto;
+  }
+}
+
+@keyframes tt-in {
   to {
     opacity: 1;
   }
+}
+@keyframes tt-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes tt-grow {
+  to {
+    height: calc(var(--n) * var(--lh));
+  }
+}
+@keyframes tt-shrink {
+  to {
+    height: 0;
+  }
+}
+@keyframes tt-type {
+  from {
+    width: 0;
+  }
+}
+@keyframes tt-caret {
+  from {
+    left: 0;
+  }
+}
+
+// ── the names the cells are drawn in ────────────────────────────────────────
+//
+// One rule per name the exporter can write. The app derives all of these from the five Look
+// settings in `SetTheme`, and the page derives them from the same five in `lib/theme.ts`, so
+// the terminal changes colour with the rest of the page and by the same rules.
+
+.tt {
+  .f-accent {
+    color: var(--accent);
+  }
+  .f-accent-alt {
+    color: var(--accent-alt);
+  }
+  .f-muted {
+    color: var(--muted);
+  }
+  .f-surface {
+    // The unfilled half of a transfer's bar: block characters in the colour a surface is.
+    color: var(--surface);
+  }
+  .f-on-accent {
+    color: var(--on-accent);
+  }
+  .f-on-surface {
+    color: var(--text);
+  }
+  .f-ok {
+    color: var(--ok);
+  }
+  .f-warn {
+    color: var(--warn);
+  }
+  .f-danger {
+    color: var(--danger);
+  }
+  .f-info {
+    color: var(--info);
+  }
+  .f-selection-text {
+    color: var(--text);
+  }
+
+  .b-accent {
+    background: var(--accent);
+  }
+  .b-surface {
+    background: var(--surface);
+  }
+  .b-bg {
+    background: var(--bg);
+  }
+  .b-selection {
+    background: var(--selection);
+  }
+
+  .bold {
+    font-weight: 700;
+  }
+
+  // A name belongs to the person, not to this window: it is chosen once in the profile screen
+  // and travels with join-room, so it is the one thing on screen the accent does not move.
+  @each $name in white, red, orange, yellow, lime, green, teal, cyan, blue, indigo, purple, fuchsia, pink {
+    .f-name-#{$name} {
+      color: var(--n-#{$name});
+    }
+  }
+}
+
+// ── the keys under the participants ─────────────────────────────────────────
+//
+// Drawn by `PeerKeys`, which the story panes use as well as the terminal did.
+
+.tui__keys {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
 }

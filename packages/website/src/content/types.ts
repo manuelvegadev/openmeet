@@ -1,12 +1,5 @@
 export type Lang = 'en' | 'es';
 
-/** One line of the demo conversation. The cast and the timings live in `demo.ts`. */
-export interface TuiLine {
-  time: string;
-  kind: 'msg' | 'join' | 'screen' | 'mute';
-  who: string;
-}
-
 export interface Story {
   eyebrow: string;
   title: string;
@@ -62,6 +55,11 @@ export interface Copy {
     note: string;
   };
   copy: { label: string; done: string };
+  /**
+   * The floating panel that repaints this page the way Settings ▸ Look repaints the app. The
+   * thirteen accents keep the app's own names and are not translated: they are what the
+   * setting is called in `settings.json`, and a swatch says which colour it is anyway.
+   */
   look: {
     title: string;
     lead: string;
@@ -77,25 +75,14 @@ export interface Copy {
     note: string;
   };
   tui: {
-    title: string;
-    leave: string;
-    room: string;
-    /** A `msg` line's text, keyed by its time in `TUI_SCRIPT`. */
-    messages: Record<string, string>;
-    /** What the other line kinds say, in place of a message. */
-    events: Record<Exclude<TuiLine['kind'], 'msg'>, string>;
-    keys: {
-      mute: string;
-      devices: string;
-      share: string;
-      stopCam: string;
-      select: string;
-      vol: string;
-      cam: string;
-      screen: string;
-      chat: string;
-    };
-    placeholder: string;
+    /**
+     * What the terminal is, for anything that cannot look at it. The words inside it are not
+     * here and cannot be: the demo is exported from the application, which has no languages —
+     * a Spanish visitor downloads the same English interface the page is showing them.
+     */
+    alt: string;
+    /** The keys under the participants, which the story panes draw as well as the terminal. */
+    keys: { cam: string; screen: string; select: string; vol: string };
   };
   pillars: { eyebrow: string; title: string; text: string }[];
   stories: {
@@ -105,6 +92,10 @@ export interface Copy {
     audio: Story & { pane: { title: string; rows: PaneRow[]; bars: PaneRow[]; caption: string } };
     video: Story & {
       pane: { title: string; legend: { tag: string; text: string }[]; opens: string; caption: string };
+    };
+    /** Sharing a file: the card the app draws, and the three rates the setting picks. */
+    files: Story & {
+      pane: { title: string; rows: PaneRow[]; caption: string };
     };
     /** The install sizes themselves are measurements, and live in `demo.ts`. */
     perf: Story & { pane: { title: string; facts: string[]; caption: string } };

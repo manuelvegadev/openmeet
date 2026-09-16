@@ -1,32 +1,12 @@
-import type { TuiLine } from './types';
-
 /**
- * The parts of the page that are the same in every language: the demo room's cast and script,
- * the measured install sizes, the chips. Only the words live in `en.ts` / `es.ts`, so a change
- * here reaches both pages and the two can never drift into showing different demos.
+ * The parts of the page that are the same in every language: the demo room's cast, the
+ * measured install sizes, the chips.
+ *
+ * The terminal is **not** here any more. It is `terminal.json`, exported from the application
+ * itself by a Go test that plays the same `--demo` against a canvas, so what the page shows is
+ * what the room draws rather than a copy of it somebody typed out. What is left here is the
+ * handful of rows the story panes draw beside their prose.
  */
-
-/** The conversation's skeleton. A `msg` line looks its text up in `Copy.tui.messages` by time. */
-export const TUI_SCRIPT: TuiLine[] = [
-  { time: '00:22', kind: 'join', who: 'mvega' },
-  { time: '00:24', kind: 'join', who: 'sofia' },
-  { time: '00:25', kind: 'msg', who: 'sofia' },
-  { time: '00:26', kind: 'msg', who: 'mvega' },
-  { time: '00:27', kind: 'join', who: 'diego' },
-  { time: '00:28', kind: 'msg', who: 'diego' },
-  { time: '00:30', kind: 'msg', who: 'sofia' },
-  { time: '00:31', kind: 'msg', who: 'sofia' },
-  { time: '00:32', kind: 'screen', who: 'sofia' },
-  { time: '00:33', kind: 'msg', who: 'mvega' },
-  { time: '00:35', kind: 'msg', who: 'diego' },
-  { time: '00:36', kind: 'msg', who: 'mvega' },
-  { time: '00:37', kind: 'join', who: 'amara' },
-  { time: '00:38', kind: 'msg', who: 'amara' },
-  { time: '00:39', kind: 'mute', who: 'amara' },
-  { time: '00:41', kind: 'msg', who: 'sofia' },
-  { time: '00:42', kind: 'msg', who: 'diego' },
-  { time: '00:43', kind: 'msg', who: 'mvega' },
-];
 
 /** One row of the participants column. Everything here is language-neutral. */
 export interface PeerRow {
@@ -35,19 +15,17 @@ export interface PeerRow {
   tag?: string;
   speaking?: boolean;
   selected?: boolean;
-  /** `↑128k` or `↓384k`, as the app draws it. */
+  /** `↑128k` or `↓2480k`, as the app draws it. */
   rate?: string;
   latencyMs?: number;
   /** Not shown when the peer is at 100%. */
   volume?: string;
 }
 
-export const YOU: PeerRow = { who: 'mvega', tag: 'c', rate: '↑128k' };
-
+/** The two other people in the room `--demo` opens: one sharing a screen, one muted. */
 export const PEERS: PeerRow[] = [
-  { who: 'sofia', tag: 'S', speaking: true, selected: true, rate: '↓2500k', latencyMs: 38 },
-  { who: 'diego', tag: 'C', rate: '↓128k', latencyMs: 96 },
-  { who: 'amara', tag: 'm', rate: '↓128k', latencyMs: 155, volume: '70%' },
+  { who: 'Mario', tag: 'S', selected: true, rate: '↓2480k', latencyMs: 41 },
+  { who: 'amara', tag: 'm', rate: '↓128k', latencyMs: 156, volume: '70%' },
 ];
 
 /**
@@ -68,6 +46,7 @@ export const STACK = [
   'Opus · libopus',
   'H.264 · VideoToolbox / NVENC',
   'miniaudio · CoreAudio / WASAPI',
+  'SCTP data channels',
   'Bubble Tea',
   'ffmpeg',
   'Express 5 + ws',

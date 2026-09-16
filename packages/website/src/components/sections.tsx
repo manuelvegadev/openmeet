@@ -77,7 +77,7 @@ const WIDEST_INSTALL = Math.max(...INSTALL_SIZES.map((r) => r.mb));
 
 export function Stories() {
   const c = useCopy();
-  const { account, audio, video, perf } = c.stories;
+  const { account, audio, video, files, perf } = c.stories;
   return (
     <div className="wrap">
       <section className="story" id="no-account">
@@ -134,6 +134,15 @@ export function Stories() {
           </div>
         </Pane>
         <Prose story={video} />
+      </section>
+
+      <section className="story" id="files">
+        <Pane title={files.pane.title} caption={files.pane.caption}>
+          {files.pane.rows.map((row) => (
+            <SettingRow key={row.k} row={row} />
+          ))}
+        </Pane>
+        <Prose story={files} />
       </section>
 
       <section className="story" id="performance">

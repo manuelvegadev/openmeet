@@ -6,20 +6,22 @@ export const en: Copy = {
   meta: {
     title: 'OpenMeet — voice, screen and chat from the terminal, no account',
     description:
-      'Open-source, peer-to-peer meetings from a terminal: Opus audio, screen and webcam sharing as hardware H.264, chat. One 12 MB binary, no account, no browser, self-hostable. macOS and Windows.',
+      'Open-source, peer-to-peer meetings from a terminal: Opus audio, screen and webcam sharing as hardware H.264, chat and file transfer. One 12 MB binary, no account, no browser, self-hostable. macOS and Windows.',
     ogAlt:
       'OpenMeet running in a terminal: the conversation on the left, the participants with their state tags on the right',
     summary:
-      'OpenMeet is an open-source terminal app for audio calls, screen and webcam sharing and chat, in one 12 MB binary. Media travels peer to peer over WebRTC; the server only relays the handshake. No account is needed and the server can be self-hosted.',
+      'OpenMeet is an open-source terminal app for audio calls, screen and webcam sharing, chat and file transfer, in one 12 MB binary. Media and files travel peer to peer over WebRTC; the server only relays the handshake. No account is needed and the server can be self-hosted.',
     features: [
       'Opus audio at 48 kHz with in-band FEC, encoded once for the whole room',
       'Screen sharing in the screen’s own aspect ratio, up to 1080 px tall at 30 fps',
       'Webcam sharing up to 720 px, on its own track beside the screen, both as hardware H.264',
       'Text chat with room events in one stream',
+      'Peer-to-peer file transfer over a data channel, never through the server',
       'Per-peer volume, speaking indicators and latency estimates',
       'No account: a name and a colour, chosen once',
       'Peer-to-peer WebRTC mesh, up to six participants',
       'Self-hostable signaling server with no database',
+      'Keeps itself up to date from GitHub Releases',
     ],
   },
   nav: {
@@ -33,7 +35,7 @@ export const en: Copy = {
   hero: {
     titlePlain: 'No account. No browser. Just a terminal, a room ',
     titleAccent: 'and your voice.',
-    lead: 'Opus calls, screen and webcam sharing and chat, peer to peer, from a terminal. Open source, self-hostable, one 12 MB binary, and light enough to forget it is running.',
+    lead: 'Opus calls, screen and webcam sharing, chat and files, peer to peer, from a terminal. Open source, self-hostable, one 12 MB binary, and light enough to forget it is running.',
     mac: 'macOS detected',
     windows: 'Windows detected',
     other: 'Other platforms',
@@ -56,37 +58,8 @@ export const en: Copy = {
     note: 'Kept in this browser. The app has the same five, plus a transparent background.',
   },
   tui: {
-    title: 'openmeet · room standup · 4 participants',
-    leave: 'leave',
-    room: 'Room',
-    messages: {
-      '00:25': 'morning — did the Windows build ever finish?',
-      '00:26': 'yeah, under a minute — it cross-builds from the mac now',
-      '00:28': 'hey. audio is clean on my end this time, no robot voice',
-      '00:30': 'good. the dropouts are gone on my side too',
-      '00:31': 'let me put the trace up',
-      '00:33':
-        'that spike at the end is the camera opening — it holds the device for a moment after SIGTERM, which is why a preview right after a call used to fail',
-      '00:35': 'so we wait for the exit instead of a timer?',
-      '00:36': 'already in — stopCapture only resolves once the grabber is really gone',
-      '00:38': 'sorry, late. my mic was on the wrong device again',
-      '00:41': 'no worries, we are still on the capture path',
-      '00:42': 'looks good to me',
-      '00:43': 'one more pass on the docs and I will tag it',
-    },
-    events: { join: 'joined the room', screen: 'started screen sharing', mute: 'muted' },
-    keys: {
-      mute: 'mute',
-      devices: 'devices',
-      share: 'share',
-      stopCam: 'stop cam',
-      select: 'select',
-      vol: 'vol',
-      cam: 'cam',
-      screen: 'screen',
-      chat: 'chat',
-    },
-    placeholder: 'Type message...',
+    alt: 'OpenMeet running in a terminal: a call with two other people, the conversation on the left and the participants on the right.',
+    keys: { cam: 'cam', screen: 'screen', select: 'select', vol: 'vol' },
   },
   pillars: [
     {
@@ -103,6 +76,11 @@ export const en: Copy = {
       eyebrow: '03 · Performance',
       title: 'One binary, not a browser tab.',
       text: 'The audio callbacks run in C, straight against CoreAudio and WASAPI, and the microphone is encoded once for the whole room. No Electron, no Chromium, no runtime to install, no web page pretending to be an app.',
+    },
+    {
+      eyebrow: '04 · The interface',
+      title: 'A terminal app you can click.',
+      text: 'Messages are bubbles, files are cards, and the mouse works: click a key, scroll a pane, drag across the conversation to select and copy it. Colours, tone, background and borders are yours — the panel in the corner of this page is the same five settings.',
     },
   ],
   stories: {
@@ -170,6 +148,30 @@ export const en: Copy = {
         caption: 'Video opens in its own window, at the sender’s resolution.',
       },
     },
+    files: {
+      eyebrow: 'Files',
+      title: 'Send a file without sending it anywhere.',
+      paragraphs: [
+        'Drag a file onto the composer, or press ctrl+v to attach whatever is on the clipboard — a file copied in the Finder, or an image, which is how a screenshot gets shared. The room sees a card with its name, its size and its SHA-256.',
+        'Nothing is pushed and nothing is uploaded. The description travels over the signaling connection; the file itself moves only when somebody asks for it, over a data channel on the peer connection you already have. The server never holds one, never sees one, and keeps no record that one existed.',
+      ],
+      note: 'Arrives in ~/Downloads/openmeet, written to .part until the digest checks out.',
+      pane: {
+        title: 'settings · file transfer',
+        rows: [
+          {
+            k: 'voice first',
+            v: 'default',
+            tone: 'ok',
+            note: '— takes what is spare, gives it back when the call suffers',
+          },
+          { k: 'unlimited', v: 'as fast as it goes', note: '— never gives it back' },
+          { k: 'capped', v: '2 Mbps', note: '— a flat ceiling' },
+        ],
+        caption:
+          'A transfer and the voice ride one socket, so no network priority mark can tell them apart. Watching the call\u2019s round trip is the only thing that can:',
+      },
+    },
     perf: {
       eyebrow: 'Performance',
       title: 'No browser in the loop.',
@@ -195,8 +197,13 @@ export const en: Copy = {
     title: 'macOS and Windows, today.',
     head: ['Platform', 'Status', 'What works'],
     rows: [
-      { name: 'macOS 15 or later', status: 'Supported', ok: true, features: 'Audio, chat, webcam, screen share' },
-      { name: 'Windows 11', status: 'Supported', ok: true, features: 'Audio, chat, screen share' },
+      {
+        name: 'macOS 15 or later',
+        status: 'Supported',
+        ok: true,
+        features: 'Audio, chat, files, webcam, screen share',
+      },
+      { name: 'Windows 11', status: 'Supported', ok: true, features: 'Audio, chat, files, screen share' },
       { name: 'Linux', status: 'Limited', ok: false, features: 'Runs, best effort, not tested' },
     ],
     roadmapEyebrow: 'Roadmap',
@@ -229,6 +236,14 @@ export const en: Copy = {
       {
         q: 'Do I need ffmpeg?',
         a: 'Only to share a screen or a camera. The binary talks to CoreAudio and WASAPI itself, so a call needs nothing else.',
+      },
+      {
+        q: 'Can I send a file?',
+        a: 'Yes, and it never goes through the server. Drag it onto the composer or press ctrl+v to attach what is on the clipboard; the room sees a card, and the file itself moves only when somebody asks for it, over a data channel on the connection you already have with that person. It lands in ~/Downloads/openmeet once its SHA-256 checks out.',
+      },
+      {
+        q: 'How do I update it?',
+        a: 'You do not. The client asks GitHub Releases on every start, downloads the new binary beside itself, checks it runs, and swaps it in when you quit. You can set it to ask first, or not to look at all.',
       },
       {
         q: 'Is it free?',

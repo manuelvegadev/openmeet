@@ -6,7 +6,6 @@ $bp-phone: 760px;
 
 $wrap: 1120px;
 $gutter: 24px;
-$people-width: 372px;
 
 @mixin below($width) {
   @media (max-width: $width) {

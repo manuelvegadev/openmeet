@@ -6,20 +6,22 @@ export const es: Copy = {
   meta: {
     title: 'OpenMeet — voz, pantalla y chat desde la terminal, sin cuenta',
     description:
-      'Reuniones de código abierto y entre pares desde la terminal: audio Opus, pantalla y cámara compartidas en H.264 por hardware, chat. Un solo binario de 12 MB, sin cuenta, sin navegador, con servidor propio si quieres. macOS y Windows.',
+      'Reuniones de código abierto y entre pares desde la terminal: audio Opus, pantalla y cámara compartidas en H.264 por hardware, chat y archivos. Un solo binario de 12 MB, sin cuenta, sin navegador, con servidor propio si quieres. macOS y Windows.',
     ogAlt:
       'OpenMeet en una terminal: la conversación a la izquierda, los participantes con sus etiquetas de estado a la derecha',
     summary:
-      'OpenMeet es una aplicación de terminal de código abierto para llamadas de audio, pantalla y cámara compartidas y chat, en un solo binario de 12 MB. El audio y el vídeo viajan de par a par por WebRTC; el servidor solo transmite la negociación. No hace falta cuenta y el servidor se puede alojar en casa.',
+      'OpenMeet es una aplicación de terminal de código abierto para llamadas de audio, pantalla y cámara compartidas, chat y envío de archivos, en un solo binario de 12 MB. El audio, el vídeo y los archivos viajan de par a par por WebRTC; el servidor solo transmite la negociación. No hace falta cuenta y el servidor se puede alojar en casa.',
     features: [
       'Audio Opus a 48 kHz con FEC en banda, codificado una sola vez para toda la sala',
       'Pantalla compartida en su propia proporción, hasta 1080 px de alto a 30 fps',
       'Cámara compartida hasta 720 px, en su propia pista junto a la pantalla, ambas en H.264 por hardware',
       'Chat de texto con los eventos de la sala en un solo hilo',
+      'Transferencia de archivos entre pares por canal de datos, nunca a través del servidor',
       'Volumen por participante, indicador de voz y latencia estimada',
       'Sin cuenta: un nombre y un color, elegidos una vez',
       'Malla WebRTC entre pares, hasta seis participantes',
       'Servidor de señalización sin base de datos, alojable en casa',
+      'Se mantiene al día solo, desde GitHub Releases',
     ],
   },
   nav: {
@@ -33,7 +35,7 @@ export const es: Copy = {
   hero: {
     titlePlain: 'Sin cuenta. Sin navegador. Solo una terminal, una sala ',
     titleAccent: 'y tu voz.',
-    lead: 'Llamadas Opus, pantalla y cámara compartidas y chat, de par a par, desde una terminal. Código abierto, con servidor propio si quieres, un solo binario de 12 MB, y tan ligera que olvidas que está abierta.',
+    lead: 'Llamadas Opus, pantalla y cámara compartidas, chat y archivos, de par a par, desde una terminal. Código abierto, con servidor propio si quieres, un solo binario de 12 MB, y tan ligera que olvidas que está abierta.',
     mac: 'macOS detectado',
     windows: 'Windows detectado',
     other: 'Otras plataformas',
@@ -56,37 +58,8 @@ export const es: Copy = {
     note: 'Se guarda en este navegador. La app tiene los mismos cinco, m\u00e1s un fondo transparente.',
   },
   tui: {
-    title: 'openmeet · sala standup · 4 participantes',
-    leave: 'salir',
-    room: 'Sala',
-    messages: {
-      '00:25': 'buenas — ¿terminó la build de Windows?',
-      '00:26': 'sí, menos de un minuto — ahora se compila cruzado desde el mac',
-      '00:28': 'hola. esta vez el audio llega limpio, nada de voz de robot',
-      '00:30': 'bien. por aquí también desaparecieron los cortes',
-      '00:31': 'os enseño la traza',
-      '00:33':
-        'ese pico del final es la cámara abriéndose — retiene el dispositivo un momento tras el SIGTERM, por eso fallaba una vista previa justo después de una llamada',
-      '00:35': '¿entonces esperamos a que salga en vez de un temporizador?',
-      '00:36': 'ya está — stopCapture solo resuelve cuando el capturador se ha ido de verdad',
-      '00:38': 'perdón, llego tarde. otra vez tenía el micro en el dispositivo equivocado',
-      '00:41': 'tranquila, seguimos con la ruta de captura',
-      '00:42': 'por mí bien',
-      '00:43': 'una pasada más a la documentación y etiqueto la versión',
-    },
-    events: { join: 'entró en la sala', screen: 'empezó a compartir pantalla', mute: 'silenciado' },
-    keys: {
-      mute: 'silenciar',
-      devices: 'dispositivos',
-      share: 'compartir',
-      stopCam: 'parar cámara',
-      select: 'elegir',
-      vol: 'vol',
-      cam: 'cámara',
-      screen: 'pantalla',
-      chat: 'chat',
-    },
-    placeholder: 'Escribe un mensaje...',
+    alt: 'OpenMeet en una terminal: una llamada con otras dos personas, la conversación a la izquierda y los participantes a la derecha.',
+    keys: { cam: 'cámara', screen: 'pantalla', select: 'elegir', vol: 'vol' },
   },
   pillars: [
     {
@@ -103,6 +76,11 @@ export const es: Copy = {
       eyebrow: '03 · Rendimiento',
       title: 'Un binario, no una pestaña del navegador.',
       text: 'Las llamadas del audio corren en C, directo contra CoreAudio y WASAPI, y el micrófono se codifica una sola vez para toda la sala. Sin Electron, sin Chromium, sin runtime que instalar, sin una página web haciéndose pasar por aplicación.',
+    },
+    {
+      eyebrow: '04 · La interfaz',
+      title: 'Una app de terminal en la que puedes hacer clic.',
+      text: 'Los mensajes son burbujas, los archivos son tarjetas, y el ratón funciona: haz clic en una tecla, desplaza un panel, arrastra sobre la conversación para seleccionar y copiar. El color, el tono, el fondo y los bordes son tuyos — el panel de la esquina de esta página son esos mismos cinco ajustes.',
     },
   ],
   stories: {
@@ -175,6 +153,30 @@ export const es: Copy = {
         caption: 'El vídeo se abre en su propia ventana, a la resolución de quien lo envía.',
       },
     },
+    files: {
+      eyebrow: 'Archivos',
+      title: 'Env\u00eda un archivo sin enviarlo a ninguna parte.',
+      paragraphs: [
+        'Arrastra un archivo al compositor, o pulsa ctrl+v para adjuntar lo que haya en el portapapeles \u2014 un archivo copiado en el Finder, o una imagen, que es como se comparte una captura. La sala ve una tarjeta con su nombre, su tama\u00f1o y su SHA-256.',
+        'Nada se empuja y nada se sube. La descripci\u00f3n viaja por la conexi\u00f3n de se\u00f1alizaci\u00f3n; el archivo se mueve solo cuando alguien lo pide, por un canal de datos de la conexi\u00f3n que ya ten\u00edas con esa persona. El servidor nunca lo guarda, nunca lo ve, y no queda constancia de que existi\u00f3.',
+      ],
+      note: 'Llega a ~/Downloads/openmeet, escrito en .part hasta que el resumen cuadra.',
+      pane: {
+        title: 'ajustes \u00b7 transferencia',
+        rows: [
+          {
+            k: 'la voz primero',
+            v: 'por defecto',
+            tone: 'ok',
+            note: '\u2014 usa lo que sobra y lo devuelve en cuanto la llamada sufre',
+          },
+          { k: 'sin l\u00edmite', v: 'lo que d\u00e9 el enlace', note: '\u2014 nunca lo devuelve' },
+          { k: 'limitado', v: '2 Mbps', note: '\u2014 un techo fijo' },
+        ],
+        caption:
+          'La transferencia y la voz van por el mismo socket, as\u00ed que ninguna marca de prioridad de red las distingue. Mirar el tiempo de ida y vuelta de la llamada es lo \u00fanico que puede:',
+      },
+    },
     perf: {
       eyebrow: 'Rendimiento',
       title: 'Sin navegador de por medio.',
@@ -204,9 +206,9 @@ export const es: Copy = {
         name: 'macOS 15 o posterior',
         status: 'Compatible',
         ok: true,
-        features: 'Audio, chat, cámara, pantalla compartida',
+        features: 'Audio, chat, archivos, cámara, pantalla compartida',
       },
-      { name: 'Windows 11', status: 'Compatible', ok: true, features: 'Audio, chat, pantalla compartida' },
+      { name: 'Windows 11', status: 'Compatible', ok: true, features: 'Audio, chat, archivos, pantalla compartida' },
       { name: 'Linux', status: 'Limitado', ok: false, features: 'Funciona, sin garantías, sin pruebas' },
     ],
     roadmapEyebrow: 'Hoja de ruta',
@@ -239,6 +241,14 @@ export const es: Copy = {
       {
         q: '¿Necesito ffmpeg?',
         a: 'Solo para compartir pantalla o cámara. El binario habla con CoreAudio y WASAPI por sí mismo, así que una llamada no necesita nada más.',
+      },
+      {
+        q: '¿Puedo enviar un archivo?',
+        a: 'Sí, y nunca pasa por el servidor. Arrástralo al compositor o pulsa ctrl+v para adjuntar lo que haya en el portapapeles; la sala ve una tarjeta, y el archivo se mueve solo cuando alguien lo pide, por un canal de datos de la conexión que ya tienes con esa persona. Llega a ~/Downloads/openmeet en cuanto cuadra su SHA-256.',
+      },
+      {
+        q: '¿Cómo lo actualizo?',
+        a: 'No lo actualizas. El cliente pregunta a GitHub Releases en cada arranque, descarga el binario nuevo a su lado, comprueba que arranca y lo cambia al salir. Puedes pedirle que avise antes, o que no mire.',
       },
       {
         q: '¿Es gratis?',
