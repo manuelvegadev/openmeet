@@ -1,5 +1,6 @@
 import { Footer } from './components/footer';
 import { Hero } from './components/hero';
+import { Look } from './components/look';
 import { Nav } from './components/nav';
 import { Faq, Pillars, Platforms, SelfHostAndStack, Stories } from './components/sections';
 import { Tui } from './components/tui';
@@ -20,6 +21,7 @@ export function App({ lang }: { lang: Lang }) {
         <Faq />
       </main>
       <Footer />
+      <Look />
     </CopyProvider>
   );
 }

@@ -3,6 +3,7 @@ import type { Lang } from './content/types';
 import { installCopyHandler } from './lib/copy';
 import { COPY, LANGS } from './lib/i18n';
 import { APP_VERSION, AUTHOR, CF_BEACON_TOKEN, GITHUB_URL, PATHS, RELEASES_URL, SITE_URL } from './lib/site';
+import { installSavedLook, installThemePanel } from './lib/theme';
 
 /**
  * Everything a crawler, a link unfurler or an answer engine reads before the body: title and
@@ -70,6 +71,13 @@ export function Head({ lang, noindex }: { lang: Lang; noindex?: boolean }) {
       <meta name="description" content={c.meta.description} />
       <meta name="robots" content={noindex ? 'noindex' : 'index, follow, max-image-preview:large, max-snippet:-1'} />
       <meta name="theme-color" content="#0B0B0B" />
+      {/* Before the first paint, and nowhere else it could be: a visitor who chose green on
+          white must not be shown a yellow-on-black page first. It only replays what the panel
+          already worked out and saved, so it carries no colour rules of its own. */}
+      <script
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: our own source, serialized from lib/theme.ts
+        dangerouslySetInnerHTML={{ __html: `(${installSavedLook})()` }}
+      />
       <meta name="author" content={AUTHOR.name} />
       <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
       <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -126,11 +134,11 @@ export function Document({ lang, noindex }: { lang: Lang; noindex?: boolean }) {
         <div id="root">
           <App lang={lang} />
         </div>
-        {/* The page's only script of its own: the copy buttons, from the same function the dev
-            server runs. */}
+        {/* The page's own behaviour, from the same functions the dev server runs: the copy
+            buttons, and the Look panel. */}
         <script
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: our own source, serialized from lib/copy.ts
-          dangerouslySetInnerHTML={{ __html: `(${installCopyHandler})()` }}
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: our own source, serialized from lib/{copy,theme}.ts
+          dangerouslySetInnerHTML={{ __html: `(${installCopyHandler})();(${installThemePanel})()` }}
         />
         {/* Visits, counted without cookies. In `Document` rather than `Head` because `Head` is
             what the dev server renders, and localhost is not a visitor. Deferred, so it is the

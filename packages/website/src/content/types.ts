@@ -62,6 +62,20 @@ export interface Copy {
     note: string;
   };
   copy: { label: string; done: string };
+  look: {
+    title: string;
+    lead: string;
+    accent: string;
+    tone: string;
+    tones: Record<'base' | 'vivid' | 'pastel', string>;
+    background: string;
+    backgrounds: Record<'black' | 'white', string>;
+    borders: string;
+    borderNames: Record<'single' | 'double', string>;
+    corners: string;
+    cornerNames: Record<'rounded' | 'square', string>;
+    note: string;
+  };
   tui: {
     title: string;
     leave: string;

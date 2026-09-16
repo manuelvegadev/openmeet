@@ -1,7 +1,7 @@
 @use 'tokens' as *;
 
 // The app's palette, copied by hand: the chrome and state colours and the name colours
-// (--yellow/--blue/--purple/--fuchsia), plus the greys this page needs and the app does not.
+// (--yellow/--blue/--cyan/--purple/--fuchsia), plus the greys this page needs and the app does not.
 // The client is a Go binary, so there is nothing here to import from — the values live in
 // packages/go/internal/tui/theme.go (ThemeAccent and the rest, ColorForName for the names),
 // which is itself a copy of the retired Node client's theme.ts. Keep them in step by hand.
@@ -16,10 +16,34 @@
   --warn: #fb923c;
   --danger: #f87171;
   --info: #7dd3fc;
-  --purple: #c084fc;
-  --yellow: #facc15;
-  --blue: #60a5fa;
-  --fuchsia: #e879f9;
+  // What the accent is not: the alternate the app pairs with it, the selection band under it,
+  // and the thirteen a name can be. The script sets --accent, --accent-alt, --on-accent and
+  // --selection inline once it knows which accent is chosen; these are what the page is drawn
+  // in before it does, which is the default the app ships in.
+  --accent-alt: #c084fc;
+  --selection: #392f09;
+
+  // NamePalette, in its order. A name's colour belongs to the person rather than to the
+  // window, so it is the one thing on screen the accent does not move.
+  --n-white: #e8e8e8;
+  --n-red: #f87171;
+  --n-orange: #fb923c;
+  --n-yellow: #facc15;
+  --n-lime: #a3e635;
+  --n-green: #4ade80;
+  --n-teal: #2dd4bf;
+  --n-cyan: #22d3ee;
+  --n-blue: #60a5fa;
+  --n-indigo: #818cf8;
+  --n-purple: #c084fc;
+  --n-fuchsia: #e879f9;
+  --n-pink: #f472b6;
+
+  --purple: var(--n-purple);
+  --yellow: var(--n-yellow);
+  --blue: var(--n-blue);
+  --cyan: var(--n-cyan);
+  --fuchsia: var(--n-fuchsia);
 
   --text-2: #b5b5b5;
   --text-3: #cfcfcf;

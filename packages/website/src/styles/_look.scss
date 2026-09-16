@@ -1,0 +1,228 @@
+@use 'tokens' as *;
+
+// The floating Look panel, and the light palette it can switch the page to.
+//
+// The ground is CSS: `data-background` on <html> swaps the whole set of custom properties, so
+// nothing in the page has to know a theme exists. The accent is not, because it is computed
+// from the accent, the tone and the ground by the same rules the app uses (lib/theme.ts), so
+// the script sets --accent, --accent-alt, --on-accent and --selection as inline properties on
+// the same element — which is why they beat the ones declared here.
+
+:root {
+  // The frame's shape, as the app's Borders and Corners rows mean it.
+  --frame-w: 1px;
+  --frame-style: solid;
+  --radius: 6px;
+}
+
+:root[data-borders='double'] {
+  // `border-style: double` needs three pixels to be able to draw two lines and the gap.
+  --frame-w: 3px;
+  --frame-style: double;
+}
+
+:root[data-corners='square'] {
+  --radius: 0;
+}
+
+// The light ground. The semantic colours are the app's light set, and the name colours are the
+// wire colours darkened the way ColorForName darkens them on a light background — 55% of the
+// original, which keeps the hue you recognise somebody by and changes only what it takes to
+// read it (packages/go/internal/tui/theme.go).
+:root[data-background='white'] {
+  color-scheme: light;
+
+  --bg: #f5f5f5;
+  --text: #1a1a1a;
+  --muted: #6b6b6b;
+  --surface: #dedede;
+  --ok: #15803d;
+  --warn: #c2410c;
+  --danger: #dc2626;
+  --info: #0369a1;
+  // ColorForName darkens the whole palette to 55% on a light ground: it keeps the hue you
+  // recognise somebody by and changes only what it takes to read it.
+  --n-white: #808080;
+  --n-red: #883e3e;
+  --n-orange: #8a5021;
+  --n-yellow: #8a700c;
+  --n-lime: #5a7f1d;
+  --n-green: #297a46;
+  --n-teal: #197569;
+  --n-cyan: #137483;
+  --n-blue: #355b8a;
+  --n-indigo: #474d88;
+  --n-purple: #6a498b;
+  --n-fuchsia: #804389;
+  --n-pink: #863f64;
+
+  --text-2: #4a4a4a;
+  --text-3: #2e2e2e;
+  --panel: #ffffff;
+  --panel-2: #ececec;
+  --line: #dcdcdc;
+  --line-strong: #c9c9c9;
+}
+
+::selection {
+  background: var(--selection, #3a2f00);
+}
+
+.look {
+  // `display: flex` on a class beats the user agent's `[hidden] { display: none }`, so the
+  // panel has to hide itself: it ships hidden and only `installThemePanel` shows it, which is
+  // the whole point — nothing here works without that script.
+  &[hidden] {
+    display: none;
+  }
+
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+
+  @include below($bp-phone) {
+    right: 12px;
+    bottom: 12px;
+  }
+
+  &__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font: inherit;
+    color: var(--text-2);
+    background: var(--panel-2);
+    border: var(--frame-w) var(--frame-style) var(--line-strong);
+    border-radius: var(--radius);
+    padding: 7px 12px;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+  }
+
+  // The accent itself, as the button's own mark: what the panel is for, said without a word.
+  &__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex: none;
+  }
+
+  &__body {
+    width: 300px;
+    max-width: calc(100vw - 24px);
+    background: var(--panel);
+    border: var(--frame-w) var(--frame-style) var(--line-strong);
+    border-radius: var(--radius);
+    padding: 14px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+    order: -1;
+  }
+
+  &__lead {
+    margin: 0 0 12px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  &__note {
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  // A fieldset, because a group of choices is what it is — and its legend floated, because a
+  // <legend> is not an ordinary flex item in any browser.
+  //
+  // `flow-root` and not `overflow: hidden` to contain that float: both make a block formatting
+  // context, but hidden also clips, and what it clipped was the ring around the chosen colour
+  // and every focus outline in the panel.
+  &__row {
+    display: flow-root;
+    border: 0;
+    margin: 0 0 9px;
+    padding: 0;
+    min-inline-size: 0;
+  }
+
+  &__label {
+    float: left;
+    width: 68px;
+    padding: 0;
+    line-height: 20px;
+    color: var(--muted);
+  }
+
+  &__options,
+  &__swatches {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    margin-left: 78px;
+    min-height: 20px;
+  }
+
+  // The ring around the chosen colour is drawn 4 px outside the dot, so the dots are spaced
+  // to leave it that room in both directions and the group is inset by it. Without this the
+  // ring runs into its neighbours and is cut off at the panel's edge.
+  &__swatches {
+    gap: 9px;
+    padding: 4px;
+    margin-left: 74px;
+  }
+
+  // A choice reads as a chip the way the app's settings rows do: the chosen one filled with
+  // the accent, the rest on the surface.
+  &__opt {
+    font: inherit;
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 0;
+    border-radius: 2px;
+    padding: 3px 7px;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--text);
+    }
+
+    &[aria-pressed='true'] {
+      background: var(--accent);
+      color: var(--on-accent);
+      font-weight: 600;
+    }
+  }
+
+  // The thirteen, each drawn in the colour it would give you — the app's accent row, in dots.
+  &__swatch {
+    width: 15px;
+    height: 15px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--swatch);
+    cursor: pointer;
+    outline-offset: 2px;
+
+    &[aria-pressed='true'] {
+      outline: 2px solid var(--text);
+    }
+
+    &:hover {
+      outline: 2px solid var(--muted);
+    }
+  }
+}

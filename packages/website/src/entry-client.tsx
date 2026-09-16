@@ -4,6 +4,7 @@ import { App } from './app';
 import { Head } from './document';
 import { installCopyHandler } from './lib/copy';
 import { langFromPath } from './lib/i18n';
+import { installSavedLook, installThemePanel } from './lib/theme';
 import './styles/site.scss';
 
 // Dev only. The published pages are static HTML from entry-server.tsx with no React on the
@@ -20,4 +21,14 @@ createRoot(root).render(
   </StrictMode>,
 );
 
+installSavedLook();
 installCopyHandler();
+
+// The panel's markup has to exist before it can be wired. On the published page that is free —
+// the script is the last thing in the body — but here React renders when it is ready, so wait
+// for the element rather than guessing at a delay.
+const whenPanelExists = () => {
+  if (document.querySelector('.look')) installThemePanel();
+  else requestAnimationFrame(whenPanelExists);
+};
+requestAnimationFrame(whenPanelExists);

@@ -38,7 +38,7 @@
 
 .chip {
   display: inline-block;
-  border: 1px solid #2e2e2e;
+  border: var(--frame-w) var(--frame-style) var(--line-strong);
   padding: 3px 10px;
   font-size: 12px;
   color: var(--text-3);
@@ -54,17 +54,21 @@
 .name {
   white-space: nowrap;
 
+  // The colours `--demo` gives its cast, and the ones the older panes still use.
   &[data-who='mvega'] {
     color: var(--yellow);
+  }
+  &[data-who='Mario'] {
+    color: var(--cyan);
+  }
+  &[data-who='amara'] {
+    color: var(--fuchsia);
   }
   &[data-who='sofia'] {
     color: var(--blue);
   }
   &[data-who='diego'] {
     color: var(--ok);
-  }
-  &[data-who='amara'] {
-    color: var(--fuchsia);
   }
 }
 
@@ -118,7 +122,7 @@
   align-items: center;
   gap: 12px;
   background: var(--panel-2);
-  border: 1px solid var(--line-strong);
+  border: var(--frame-w) var(--frame-style) var(--line-strong);
   padding: 14px 18px;
   font-size: 15px;
   min-width: 0;
@@ -191,7 +195,7 @@
   font-size: 12px;
   color: var(--muted);
   background: none;
-  border: 1px solid #333;
+  border: var(--frame-w) var(--frame-style) var(--line-strong);
   padding: 2px 8px;
   cursor: pointer;
   white-space: nowrap;
