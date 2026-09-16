@@ -58,8 +58,12 @@ func AssetName() string {
 }
 
 // Exe is the running binary's real path.
+// exePath is os.Executable, indirected so the swap can be tested against a directory rather
+// than against the test binary itself — the swap is the part that broke in the field.
+var exePath = os.Executable
+
 func Exe() (string, error) {
-	p, err := os.Executable()
+	p, err := exePath()
 	if err != nil {
 		return "", err
 	}
@@ -238,7 +242,12 @@ func Check(ctx context.Context, policy, current string, st Store, mode Mode, log
 }
 
 func download(ctx context.Context, version, to string) error {
-	url := fmt.Sprintf("https://github.com/%s/releases/download/v%s/%s", repo, version, AssetName())
+	return downloadFrom(ctx, fmt.Sprintf("https://github.com/%s/releases/download/v%s/%s", repo, version, AssetName()), to)
+}
+
+// downloadFrom is the fetch itself, named apart from where the asset lives so the path that
+// failed in the field — write, make durable, rename — can be tested end to end.
+func downloadFrom(ctx context.Context, url, to string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -262,7 +271,32 @@ func download(ctx context.Context, version, to string) error {
 		_ = os.Remove(to)
 		return err
 	}
-	return f.Close()
+	// On disk before anything renames it, and the directory entry too. A rename is atomic
+	// for the metadata and says nothing about the data: without this the new binary can be
+	// in place while its pages are not, and macOS answers that by killing the process —
+	// SIGKILL, "Code Signature Invalid", because the pages it faults in do not match what
+	// the signature says they should be. Measured as three crashes in a row after an
+	// update, on a binary that was perfectly good by the time anyone looked at it.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(to)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(to))
+}
+
+// syncDir makes a directory's own entries durable, which is the half of an atomic replace
+// that fsyncing the file does not cover.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // Pending is the staged binary's path when one is waiting, "" otherwise.
@@ -287,18 +321,33 @@ func Apply() error {
 	if _, err := os.Stat(pending); err != nil {
 		return err
 	}
+	// The one that is running is kept until the new one has proved it runs from where it
+	// now lives. Windows cannot replace a running exe at all, so the rename is not an
+	// optimisation there; everywhere else it is what makes the roll-back possible.
+	_ = os.Remove(old(exe))
+	if err := os.Rename(exe, old(exe)); err != nil {
+		return err
+	}
+	if err := os.Rename(pending, exe); err != nil {
+		_ = os.Rename(old(exe), exe)
+		return err
+	}
+	if err := syncDir(filepath.Dir(exe)); err != nil {
+		return err
+	}
 	if runtime.GOOS == "windows" {
-		_ = os.Remove(old(exe))
-		if err := os.Rename(exe, old(exe)); err != nil {
-			return err
-		}
-		if err := os.Rename(pending, exe); err != nil {
-			_ = os.Rename(old(exe), exe) // put it back
-			return err
-		}
+		// Nothing can run the new exe here yet: the old one is this process.
 		return nil
 	}
-	return os.Rename(pending, exe)
+	// Verified again, in place. The check before the rename says the download is a good
+	// binary; this one says the thing at the path we are about to relaunch is.
+	if out, err := exec.Command(exe, "--version").Output(); err != nil || strings.TrimSpace(string(out)) == "" {
+		_ = os.Rename(exe, pending)
+		_ = os.Rename(old(exe), exe)
+		return fmt.Errorf("the new binary does not run from %s (%v); kept the one that does", exe, err)
+	}
+	_ = os.Remove(old(exe))
+	return nil
 }
 
 // Relaunch starts the (new) binary with the same arguments and returns; the caller exits.
