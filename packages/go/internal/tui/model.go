@@ -297,9 +297,11 @@ type Model struct {
 	lastScreen string
 	// The files the room has seen, in order. The log's entries point at these same structs,
 	// so a transfer moving updates the row and the list at once.
-	files      []*FileInfo
-	attach     []Attachment
-	draft      textField
+	files  []*FileInfo
+	attach []Attachment
+	draft  textField
+	// What a Draft event last wrote into the composer: see the case that handles one.
+	scripted   string
 	anchor     int
 	clearArmed bool
 	leaveArmed bool
@@ -436,6 +438,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		e := ChatEntry(msg)
 		e.Text, e.Who = Clean(e.Text), Clean(e.Who)
 		m.rs.Entries = append(m.rs.Entries, e)
+		return m, nil
+	case Draft:
+		// Only while the composer is still saying what the script last put there. `--demo` is
+		// where the interface is judged, and some of that is typing in it; the moment somebody
+		// does, the script stops writing over them and does not start again.
+		if m.draft.value != m.scripted {
+			return m, nil
+		}
+		m.rs.InputFocused = true
+		m.draft.clear()
+		m.draft.insert(Clean(msg.Text))
+		m.scripted = m.draft.value
 		return m, nil
 	case DebugLine:
 		msg.Text = Clean(msg.Text)

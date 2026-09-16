@@ -24,6 +24,11 @@ type Snapshot struct {
 // Line is one chat entry to append.
 type Line ChatEntry
 
+// Draft is the composer written into from outside. The only thing that sends one is the
+// scripted demo, which types its own messages so the interface can be watched being used
+// rather than only being read; a real room never puts words in your composer.
+type Draft struct{ Text string }
+
 // DebugLine is one `[DBG]` line for the panel.
 type DebugLine ChatEntry
 
