@@ -144,6 +144,9 @@ type RoomState struct {
 	CopyKey   string
 	// The chord that attaches what is on the clipboard, by the name this terminal can send.
 	AttachKey string
+	// Whether a window of logs can be opened here, and in what.
+	CanOpenLogs  bool
+	LogsTerminal string
 }
 
 // FormatClock is HH:MM, or HH:MM:SS.
@@ -695,7 +698,15 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		}
 		c.Set(c.W-1, y, '┤', ruleStyle)
 		y++
-		c.Put(x, y, "Debug", Style{Bold: true}, right)
+		title := []Span{{"Debug", Style{Bold: true}}}
+		if s.CanOpenLogs {
+			// The panel is a glance; the window is the record. Only offered where there is a
+			// terminal this knows a way into.
+			title = append(title, Span{" ", Plain})
+			title = append(title, ChipSpans(KeyHint{Key: "l", Label: "window"})...)
+		}
+		c.PutSpans(x, y, title, right)
+		HotChips(c, x+Width("Debug")+1, y, title[1:])
 		avail := blockTop - (y + 1)
 		// Wrapped, not clipped. This pane is thirty-odd cells wide and a debug line is a
 		// sentence, so clipping meant most of one was simply not there. What it costs is the

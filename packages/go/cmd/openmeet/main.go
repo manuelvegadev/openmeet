@@ -25,6 +25,7 @@ import (
 	"github.com/manuelvegadev/openmeet/packages/go/internal/engine"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/files"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/keyboard"
+	"github.com/manuelvegadev/openmeet/packages/go/internal/logs"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/settings"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/tui"
 	"github.com/manuelvegadev/openmeet/packages/go/internal/update"
@@ -705,6 +706,9 @@ func main() {
 		debug    = flag.Bool("debug", false, "start with the debug panel on")
 		profile  = flag.String("cpuprofile", "", "write a CPU profile here until exit")
 		version  = flag.Bool("version", false, "print the version and exit")
+		showLogs = flag.Bool("logs", false, "follow the debug log in this window and exit on ctrl-c; --grep narrows it")
+		grep     = flag.String("grep", "", "with --logs: only lines containing this")
+		allLogs  = flag.Bool("all", false, "with --logs: from the beginning of the file, not the last few hundred lines")
 		headless = flag.Bool("headless", false, "no interface: join --room, log to stdout, quit on ctrl-c (for measuring)")
 		sendFile = flag.String("send-file", "", "with --headless: share this file with the room once joined")
 		takeFile = flag.Bool("accept-files", false, "with --headless: download every file the room offers (there is no keyboard to ask)")
@@ -821,7 +825,31 @@ func main() {
 	name, features := platformSupport()
 
 	events := make(chan tea.Msg, 512)
+	// The debug log on disk, written only when asked for. It is where a report comes from,
+	// and what `--logs` follows in a window of your own — the panel in the room is a glance,
+	// this is the record.
+	var logfile *logs.Writer
+	if *debug {
+		var err error
+		if logfile, err = logs.Open(logs.Path(settings.Dir()), Version); err != nil {
+			log.Printf("debug log: %v", err)
+		} else {
+			defer logfile.Close()
+		}
+	}
 	emit := func(msg interface{}) {
+		switch m := msg.(type) {
+		case tui.DebugLine:
+			logfile.Print(m.Text)
+		case tui.Line:
+			// Room events, never what anybody said: a log is for reporting a fault, and a
+			// conversation is not part of one.
+			if m.Kind != tui.KindMessage {
+				logfile.Print(string(m.Kind) + ": " + m.Who + " " + m.Text)
+			}
+		case tui.Toast:
+			logfile.Print(m.Kind + ": " + m.Text)
+		}
 		select {
 		case events <- msg:
 		default:
@@ -851,6 +879,14 @@ func main() {
 		Attach:          attach,
 		AttachClipboard: attachClipboard,
 		AttachKey:       attachKey(),
+		LogsTerminal:    logsTerminal(*debug),
+		OpenLogs: func() error {
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			return logs.OpenWindow(exe)
+		},
 		Join: func(roomID, name, color, input, output string) (tui.Room, error) {
 			// The setting decides the macOS path unless a flag said otherwise for this run.
 			if !*noVPIO && !*vpBypass {
@@ -881,6 +917,16 @@ func main() {
 		},
 	}
 
+	if *showLogs {
+		// A window of your own, showing the file. Not a second interface: the terminal
+		// already has the scrollback, the search and the selection (internal/logs).
+		path := logs.Path(settings.Dir())
+		fmt.Fprintf(os.Stderr, "%s\n", path)
+		if err := logs.Follow(path, os.Stdout, *grep, isTTY(os.Stdout), *allLogs); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if *headless {
 		if *room == "" {
 			log.Fatal("--headless needs --room")
@@ -1015,4 +1061,20 @@ func main() {
 			fmt.Fprintln(os.Stderr, "update installed; it runs next time you start openmeet")
 		}
 	}
+}
+
+// logsTerminal is the terminal a log window could open in, and "" when there is nothing to
+// open — no log being written, a session over SSH where the window would be on the wrong
+// machine, or a terminal with no way in from outside.
+func logsTerminal(debug bool) string {
+	if !debug || clip.Remote() {
+		return ""
+	}
+	return logs.Terminal()
+}
+
+// isTTY: colour is for a window, not for a pipe into a file or a grep.
+func isTTY(f *os.File) bool {
+	st, err := f.Stat()
+	return err == nil && st.Mode()&os.ModeCharDevice != 0
 }

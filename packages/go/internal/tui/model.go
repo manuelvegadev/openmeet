@@ -84,6 +84,11 @@ type Host struct {
 	// application, and on Windows Terminal neither does Ctrl+V, so which key it is is not
 	// something this package can know.
 	AttachKey string
+	// Open the debug log in a window of this same terminal, and the name of that terminal
+	// ("" when it is not one we know a way into). The string a failure returns is the
+	// command to run instead, which the room offers on the clipboard.
+	OpenLogs     func() error
+	LogsTerminal string
 	// Where to start: the room to join straight away, if the CLI said so.
 	InitialRoom string
 	InputFlag   string
@@ -414,7 +419,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FileUpdate:
 		for _, f := range m.files {
 			if f.ID == msg.ID {
-				f.State, f.Done, f.Error = msg.State, msg.Done, msg.Error
+				f.State, f.Done, f.Rate, f.Error = msg.State, msg.Done, msg.Rate, msg.Error
 				if msg.Saved != "" {
 					f.Saved = msg.Saved
 				}
@@ -1211,6 +1216,11 @@ func (m *Model) keyRoom(msg tea.KeyMsg) tea.Cmd {
 				m.modal, m.modalItems, m.modalIdx = "camera", cams, 0
 			}
 		}
+	case isRune(msg, "l") && m.rs.Debug && m.host.OpenLogs != nil:
+		if err := m.host.OpenLogs(); err != nil {
+			return m.toast("warn", err.Error())
+		}
+		return m.toast("ok", "Logs opened in a new window")
 	case isRune(msg, "f") && len(m.files) > 0:
 		m.modal, m.modalIdx = "files", len(m.files)-1
 	case isRune(msg, "w") && m.rs.VideoEnabled && m.room != nil:
@@ -1364,6 +1374,7 @@ func (m *Model) View() string {
 		rs.CopyKey = m.copyKey
 		rs.Attachments = m.attach
 		rs.AttachKey = m.host.AttachKey
+		rs.CanOpenLogs, rs.LogsTerminal = m.host.OpenLogs != nil && m.host.LogsTerminal != "", m.host.LogsTerminal
 		rs.FileCount = len(m.files)
 		DrawRoom(c, rs)
 		if m.modal == "files" {
