@@ -391,16 +391,28 @@ func TestTheDebugPanelIsItsOwnSelectableRegion(t *testing.T) {
 	m.View()
 
 	rows := m.frame.TextRows("debug")
-	if len(rows) != 1 {
-		t.Fatalf("the debug panel marked %d rows, want 1", len(rows))
+	if len(rows) < 2 {
+		t.Fatalf("a line of %d cells took %d rows in a pane %d wide — it is not wrapping",
+			Width(long), len(rows), rows[0].MaxX-rows[0].X)
+	}
+	// Every row is one of the same entry, and together they are the whole of it.
+	last := rows[len(rows)-1]
+	for _, r := range rows {
+		if r.Src != 0 {
+			t.Fatalf("a row came from entry %d", r.Src)
+		}
 	}
 	click(m, rows[0].X, rows[0].Y)
-	m.mouse(tea.MouseEvent{X: rows[0].X + 400, Y: rows[0].Y, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m.mouse(tea.MouseEvent{X: last.MaxX + 400, Y: last.Y, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
 	if m.sel.region != "debug" {
 		t.Fatalf("the selection is in %q, want the debug panel", m.sel.region)
 	}
+	// Wrapped over several rows, copied as the one line it is.
 	if got := m.SelectedText(); !strings.HasSuffix(got, long) {
-		t.Errorf("copied %q, which is not the whole clipped line", got)
+		t.Errorf("copied %q, which is not the whole line", got)
+	}
+	if strings.Count(m.SelectedText(), "\n") != 0 {
+		t.Error("a wrapped line copied as several")
 	}
 	// And it painted no further than the pane it was drawn in.
 	if m.frame.StyleAt(m.frame.W-1, rows[0].Y).BG == ThemeSelection {

@@ -697,24 +697,39 @@ func drawPeople(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		y++
 		c.Put(x, y, "Debug", Style{Bold: true}, right)
 		avail := blockTop - (y + 1)
-		lines := s.DebugLines
-		if len(lines) > avail {
-			lines = lines[len(lines)-avail:]
+		// Wrapped, not clipped. This pane is thirty-odd cells wide and a debug line is a
+		// sentence, so clipping meant most of one was simply not there. What it costs is the
+		// bookkeeping the conversation already does: a row remembers which entry it came
+		// from and how far into it it starts (WrapOffsets), so a line that took four rows
+		// still copies as the one line it is.
+		type dbgRow struct {
+			spans []Span
+			src   int
+			off   int
 		}
-		dy := blockTop - len(lines)
-		if len(lines) == 0 {
+		var rows []dbgRow
+		// Newest first, stopping once the pane is full: an older line that does not fit is
+		// not drawn at all rather than drawn with its beginning missing.
+		for i := len(s.DebugLines) - 1; i >= 0 && len(rows) < avail; i-- {
+			wrapped, offs := WrapOffsets(debugSpans(s.DebugLines[i]), w)
+			if len(rows)+len(wrapped) > avail {
+				break
+			}
+			var block []dbgRow
+			for j, line := range wrapped {
+				block = append(block, dbgRow{line, i, offs[j]})
+			}
+			rows = append(block, rows...)
+		}
+		dy := blockTop - len(rows)
+		if len(rows) == 0 {
 			c.Put(x, blockTop-1, "Nothing yet", Muted, right)
 		} else {
-			c.Hot(Rect{x, dy, w, len(lines)}, Action{Kind: ActText, ID: "debug"})
+			c.Hot(Rect{x, dy, w, len(rows)}, Action{Kind: ActText, ID: "debug"})
 		}
-		// The panel shows the tail of a ring, so a row's index is into the whole of it.
-		base := len(s.DebugLines) - len(lines)
-		for i, l := range lines {
-			spans := debugSpans(l)
-			c.PutSpans(x, dy, spans, right)
-			// A debug line is drawn clipped rather than wrapped, so what is copied is the
-			// whole line and what is painted stops at the pane.
-			c.MarkText("debug", TextRow{X: x, Y: dy, MaxX: right, Spans: spans, Src: base + i})
+		for _, r := range rows {
+			c.PutSpans(x, dy, r.spans, right)
+			c.MarkText("debug", TextRow{X: x, Y: dy, MaxX: right, Spans: r.spans, Src: r.src, Off: r.off})
 			dy++
 		}
 	}
