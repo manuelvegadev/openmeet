@@ -17,5 +17,10 @@ export default defineConfig({
     emptyOutDir: true,
     // prerender.mjs reads it to find the stylesheet and the JS to drop.
     manifest: true,
+    // A font is never inlined, whatever its size. The terminal's glyph subset is under Vite's
+    // default 4 KB threshold, and inlining it wrote 5 KB of base64 into the stylesheet — which
+    // is in every page, does not compress, since a woff2 already is compressed, and is fetched
+    // again for the second language. As a file it is one request, cached once, for both.
+    assetsInlineLimit: (file) => (/\.(woff2?|ttf|otf)$/.test(file) ? false : undefined),
   },
 });
