@@ -20,30 +20,30 @@ const (
 	NoCeiling  = 0
 )
 
-// Progress is called as bytes move, already thinned: a whole percent must have changed *and*
-// a fifth of a second have passed, because a repaint costs more than the byte it reports
-// (gotcha 24) and a transfer over a local network passes a hundred percent marks in a
-// second. The final call is always made, so a row never stops short of where it got to.
+// Progress is called as bytes move, thinned to five times a second — which is the rate a
+// speed can be read at, and the reason the clock alone decides rather than the percentage:
+// on a slow transfer the percentage barely moves while the speed is the thing worth
+// watching. Five repaints a second is a price (gotcha 24), paid deliberately and only while
+// something is actually in flight. The final call is always made, so a row never stops
+// short of where it got to.
 type Progress func(done int64)
 
+// progressEvery is the five frames a second the interface draws a transfer at.
+const progressEvery = 200 * time.Millisecond
+
 type throttle struct {
-	report  Progress
-	total   int64
-	lastPct int
-	lastAt  time.Time
+	report Progress
+	total  int64
+	lastAt time.Time
 }
 
 func (t *throttle) tick(done int64) {
 	if t.report == nil {
 		return
 	}
-	pct := 0
-	if t.total > 0 {
-		pct = int(done * 100 / t.total)
-	}
 	now := time.Now()
-	if pct != t.lastPct && now.Sub(t.lastAt) > 200*time.Millisecond {
-		t.lastPct, t.lastAt = pct, now
+	if now.Sub(t.lastAt) >= progressEvery {
+		t.lastAt = now
 		t.report(done)
 	}
 }
@@ -64,7 +64,7 @@ func Send(path string, w io.Writer, rate func() int, size int64, report Progress
 	defer f.Close()
 
 	buf := make([]byte, ChunkSize)
-	t := &throttle{report: report, total: size, lastPct: -1}
+	t := &throttle{report: report, total: size}
 	var sent int64
 	// A token bucket, filled as time passes: it smooths a transfer rather than sending a
 	// second's worth and sleeping, which would show up in the call as a second of jitter.
@@ -129,7 +129,7 @@ func Receive(r io.Reader, size int64, sum, dst string, report Progress) error {
 
 	h := sha256.New()
 	buf := make([]byte, 64*1024)
-	t := &throttle{report: report, total: size, lastPct: -1}
+	t := &throttle{report: report, total: size}
 	var got int64
 	for got < size {
 		n, rerr := r.Read(buf)

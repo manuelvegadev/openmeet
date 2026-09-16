@@ -231,3 +231,38 @@ func TestNothingBelowTheScrollIsDrawn(t *testing.T) {
 		t.Errorf("blocks = %d, want all 3", n)
 	}
 }
+
+// The bar is drawn in eighth blocks, which is what gives twenty cells the resolution to say
+// anything: a percent that moves by one has to be visible somewhere.
+func TestTheProgressBarHasEighthResolution(t *testing.T) {
+	seen := map[string]bool{}
+	for pct := 0; pct <= 100; pct++ {
+		f := FileInfo{ID: "a", Kind: "zip", Size: 1000, Done: int64(pct) * 10, State: FileReceiving}
+		seen[PlainText(fileButtonSpansFor(f))] = true
+	}
+	// Twenty cells at eight steps each is 160 distinguishable positions, so a hundred
+	// percentages must all look different. A whole-block bar would give twenty-one.
+	if len(seen) < 100 {
+		t.Errorf("%d distinguishable bars across 101 percentages — the eighths are not being used", len(seen))
+	}
+}
+
+// The speed sits beside it, and goes when the transfer does.
+func TestTheSpeedIsShownWhileItMoves(t *testing.T) {
+	moving := PlainText(fileButtonSpansFor(FileInfo{Size: 1000, Done: 250, Rate: 1887436, State: FileReceiving}))
+	if !strings.Contains(moving, "1.8 MB/s") {
+		t.Errorf("no speed on a transfer in flight: %q", moving)
+	}
+	still := PlainText(fileButtonSpansFor(FileInfo{Size: 1000, Done: 250, State: FileReceiving}))
+	if strings.Contains(still, "/s") {
+		t.Errorf("a speed with nothing to measure: %q", still)
+	}
+}
+
+func fileButtonSpansFor(f FileInfo) []Span {
+	var out []Span
+	for _, b := range fileButtons(f) {
+		out = append(out, b.span)
+	}
+	return out
+}

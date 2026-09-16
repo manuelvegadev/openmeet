@@ -32,12 +32,18 @@ type fileEntry struct {
 	offer signal.FileOffer
 	mine  bool
 	// Ours: where the file is on this disk. Never sent, and never built from what a peer said.
-	path    string
-	state   string
-	done    int64
-	saved   string
-	errMsg  string
-	sending int
+	path  string
+	state string
+	done  int64
+	// The speed, and what it was measured from. Smoothed a little: a transfer's rate over a
+	// fifth of a second jumps around enough to be unreadable, and the number is there to be
+	// read rather than to be exact.
+	rate     int64
+	lastDone int64
+	lastAt   time.Time
+	saved    string
+	errMsg   string
+	sending  int
 }
 
 // fileByID hands back a *copy*. Everything that reads a file's state runs on its own
@@ -53,6 +59,26 @@ func (e *Engine) fileByID(id string) (fileEntry, bool) {
 	return *f, true
 }
 
+// measure turns bytes into a speed, once per progress report. Called with e.mu held.
+func (f *fileEntry) measure() {
+	now := time.Now()
+	if f.lastAt.IsZero() || f.done < f.lastDone {
+		f.lastAt, f.lastDone, f.rate = now, f.done, 0
+		return
+	}
+	dt := now.Sub(f.lastAt).Seconds()
+	if dt < 0.05 {
+		return
+	}
+	sample := int64(float64(f.done-f.lastDone) / dt)
+	if f.rate == 0 {
+		f.rate = sample
+	} else {
+		f.rate = (f.rate*2 + sample) / 3
+	}
+	f.lastAt, f.lastDone = now, f.done
+}
+
 // update changes a file's state and tells the interface, which finds the row by id.
 func (e *Engine) updateFile(id string, apply func(*fileEntry)) {
 	e.mu.Lock()
@@ -62,7 +88,7 @@ func (e *Engine) updateFile(id string, apply func(*fileEntry)) {
 		return
 	}
 	apply(f)
-	msg := tui.FileUpdate{ID: id, State: f.state, Done: f.done, Saved: f.saved, Error: f.errMsg}
+	msg := tui.FileUpdate{ID: id, State: f.state, Done: f.done, Rate: f.rate, Saved: f.saved, Error: f.errMsg}
 	e.mu.Unlock()
 	e.Emit(msg)
 }
@@ -217,18 +243,19 @@ func (e *Engine) serveFile(peerID, id string) {
 	// a call the right answer changes as the call does (fileBudget). Either way this is a
 	// goroutine of its own and the 20 ms pump never waits on it.
 	e.logf("sending %s to %s (%s)", f.offer.Name, rtc.Short(peerID), e.budgetName(peerID))
-	e.updateFile(id, func(f *fileEntry) { f.sending++; f.state = tui.FileSending; f.done = 0 })
+	e.updateFile(id, func(f *fileEntry) {
+		f.sending++
+		f.state, f.done, f.rate, f.lastAt = tui.FileSending, 0, 0, time.Time{}
+	})
 	err = files.Send(f.path, s, func() int { return e.fileBudget(peerID) }, f.offer.Size, func(n int64) {
-		e.updateFile(id, func(f *fileEntry) { f.done = n })
+		e.updateFile(id, func(f *fileEntry) { f.done = n; f.measure() })
 	})
 	s.Drain(30 * time.Second)
 	_ = s.Close()
 	e.updateFile(id, func(f *fileEntry) {
 		f.sending--
 		if f.sending <= 0 {
-			f.sending = 0
-			f.state = tui.FileOffered
-			f.done = 0
+			f.sending, f.state, f.done, f.rate = 0, tui.FileOffered, 0, 0
 		}
 	})
 	if err != nil {
@@ -252,12 +279,14 @@ func (e *Engine) onFileStream(peerID, id string, s *rtc.Stream) {
 		var dst string
 		dst, err = files.Destination(dir, f.offer.Name)
 		if err == nil {
-			e.updateFile(id, func(f *fileEntry) { f.state, f.done = tui.FileReceiving, 0 })
+			e.updateFile(id, func(f *fileEntry) { f.state, f.done, f.rate, f.lastAt = tui.FileReceiving, 0, 0, time.Time{} })
 			err = files.Receive(s, f.offer.Size, f.offer.SHA256, dst, func(n int64) {
-				e.updateFile(id, func(f *fileEntry) { f.done = n })
+				e.updateFile(id, func(f *fileEntry) { f.done = n; f.measure() })
 			})
 			if err == nil {
-				e.updateFile(id, func(f *fileEntry) { f.state, f.saved, f.done = tui.FileSaved, dst, f.offer.Size })
+				e.updateFile(id, func(f *fileEntry) {
+					f.state, f.saved, f.done, f.rate = tui.FileSaved, dst, f.offer.Size, 0
+				})
 				e.Emit(tui.Toast{Kind: "ok", Text: "Saved to " + dst})
 				_ = s.Close()
 				return

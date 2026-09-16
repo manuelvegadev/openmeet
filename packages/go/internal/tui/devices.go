@@ -36,19 +36,33 @@ func DrawMicBar(c *Canvas, x, y int, level float64) {
 // DrawBar is every bar in the app: eighth-blocks in one colour over the surface grey, so a
 // partial cell is the same two colours as its neighbours. frac is clamped to 0..1.
 func DrawBar(c *Canvas, x, y, width int, frac float64, fg string) {
+	for i, r := range barRunes(width, frac) {
+		c.Set(x+i, y, r, Style{FG: fg, BG: ThemeSurface})
+	}
+}
+
+// BarSpans is the same bar as something to compose rather than paint — a file card is built
+// as spans and drawn later, and a bar drawn two different ways is two bars.
+func BarSpans(width int, frac float64, fg string) []Span {
+	return []Span{{string(barRunes(width, frac)), Style{FG: fg, BG: ThemeSurface}}}
+}
+
+// barRunes is the vocabulary: full blocks, then one eighth for the remainder, so a bar has
+// eight times the resolution of its own cells.
+func barRunes(width int, frac float64) []rune {
 	frac = min(1, max(0, frac))
 	units := int(frac*float64(width*8) + 0.5)
 	full, part := units/8, units%8
-	st := Style{FG: fg, BG: ThemeSurface}
-	for i := range width {
-		r := ' '
+	out := make([]rune, width)
+	for i := range out {
+		out[i] = ' '
 		if i < full {
-			r = '█'
+			out[i] = '█'
 		} else if i == full && part > 0 {
-			r = eighths[part]
+			out[i] = eighths[part]
 		}
-		c.Set(x+i, y, r, st)
 	}
+	return out
 }
 
 func DrawDevices(c *Canvas, s DevicesState) {

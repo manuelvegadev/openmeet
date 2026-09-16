@@ -61,6 +61,7 @@ type FileUpdate struct {
 	ID    string
 	State string
 	Done  int64
+	Rate  int64
 	Saved string
 	Error string
 }

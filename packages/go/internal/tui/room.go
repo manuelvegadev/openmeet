@@ -53,6 +53,7 @@ type FileInfo struct {
 	Mine  bool
 	State string
 	Done  int64  // bytes moved so far
+	Rate  int64  // and how fast, in bytes a second; 0 when it is not moving
 	Saved string // where it landed, once it has
 	Error string
 }
@@ -318,7 +319,10 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		boxTop--
 	}
 	noticeY := boxTop - 1
-	logRows := noticeY - pane.Y
+	// One row of air between the conversation and the notice: the notice belongs to the
+	// composer, not to the last thing anybody said, and with the log running right up to it
+	// they read as one block.
+	logRows := max(1, noticeY-pane.Y-1)
 
 	// The log: blocks up to the anchor, bottom-aligned, the newest at the bottom. A block is
 	// a bubble, a file or an event (bubbles.go); it is laid out whole and never split, so a
@@ -353,7 +357,10 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	logArea := Rect{textX, pane.Y, textW, logRows}
 	c.Hot(logArea, Action{Kind: ActScroll, ID: "chat"})
 	c.Hot(logArea, Action{Kind: ActText, ID: "chat"})
-	y := noticeY - len(lines)
+	// One row of air above the notice. The log is bottom-aligned, so this is what actually
+	// opens the gap — taking a row off logRows only shortens the history and leaves the last
+	// line sitting on the notice exactly as before.
+	y := noticeY - 1 - len(lines)
 	for _, line := range lines {
 		c.PutSpans(textX, y, line.spans, textX+textW)
 		if line.src >= 0 {

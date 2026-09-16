@@ -384,7 +384,7 @@ func poseFiles() (RoomState, []*FileInfo) {
 	s := poseRoom()
 	at := s.JoinedAt.Add(20 * time.Minute)
 	files := []*FileInfo{
-		{ID: "1", Name: "trace.zip", Size: 4718592, Kind: "zip", From: "sofia", State: FileReceiving, Done: 1179648},
+		{ID: "1", Name: "trace.zip", Size: 4718592, Kind: "zip", From: "sofia", State: FileReceiving, Done: 1179648, Rate: 1887436},
 		{ID: "2", Name: "nota.m4a", Size: 1572864, Kind: "aud", From: "diego", State: FileSaved, Saved: "/Users/mvega/Downloads/openmeet/nota.m4a"},
 		{ID: "3", Name: "capture.mov", Size: 20971520, Kind: "vid", From: "mvega", Mine: true, State: FileOffered},
 	}

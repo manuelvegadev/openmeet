@@ -108,6 +108,15 @@ func NewID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// FormatRate is a transfer's speed. Same scale as a size, per second — what somebody reads
+// to know whether to wait or to go and do something else.
+func FormatRate(bytesPerSec int64) string {
+	if bytesPerSec <= 0 {
+		return ""
+	}
+	return FormatSize(bytesPerSec) + "/s"
+}
+
 // FormatSize is what a row shows. Three significant figures is what fits and what anyone
 // reads: 1.2 MB, 950 KB, 14 B.
 func FormatSize(n int64) string {

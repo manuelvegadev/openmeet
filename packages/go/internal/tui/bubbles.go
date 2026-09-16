@@ -300,10 +300,15 @@ func fileButtons(f FileInfo) []fileButton {
 	pill := func(s, id string) fileButton { return fileButton{Span{" " + s + " ", chipLabel}, id} }
 	switch f.State {
 	case FileReceiving, FileSending:
-		return []fileButton{
-			{Span{progressBar(f.Percent(), 20), Style{FG: ThemeInfo}}, ""},
-			{Span{" " + itoa(f.Percent()) + "%", Style{FG: ThemeInfo}}, ""},
+		out := []fileButton{}
+		for _, sp := range BarSpans(barCells, float64(f.Done)/float64(max(1, int(f.Size))), ThemeInfo) {
+			out = append(out, fileButton{sp, ""})
 		}
+		out = append(out, fileButton{Span{" " + itoa(f.Percent()) + "%", Style{FG: ThemeInfo}}, ""})
+		if r := files.FormatRate(f.Rate); r != "" {
+			out = append(out, fileButton{Span{"  " + r, Muted}, ""})
+		}
+		return out
 	case FileWaiting:
 		return []fileButton{{Span{"asking…", Muted}, ""}}
 	case FileGone:
@@ -326,10 +331,10 @@ func fileButtons(f FileInfo) []fileButton {
 // A var rather than the constant it mirrors, so a test can draw either platform's card.
 var HasPreview = files.HasPreview
 
-func progressBar(pct, width int) string {
-	n := clampInt(pct*width/100, 0, width)
-	return strings.Repeat("█", n) + strings.Repeat("░", width-n)
-}
+// barCells is the bar's width. Eighth blocks give it eight times that in resolution, which
+// is what the retired VU meter was drawn with and the only reason a bar this short says
+// anything at all.
+const barCells = 20
 
 // logRowsUpTo lays the conversation out, oldest first, up to and including entry `end` —
 // where the room has been scrolled to, or the last entry when it is following the tail; -1
