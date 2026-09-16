@@ -41,6 +41,8 @@ type Canvas struct {
 	barrier      int
 	texts        map[string][]TextRow
 	textsBlocked bool
+	// Named rectangles a screen drew, for the website's exporter: see Region below.
+	regions map[string]Rect
 }
 
 func NewCanvas(w, h int) *Canvas {
@@ -436,3 +438,69 @@ func (c *Canvas) Text() string {
 
 // StyleAt is the style of a cell, for the colour checks in tests.
 func (c *Canvas) StyleAt(x, y int) Style { return c.cells[y][x].st }
+
+// ── regions ─────────────────────────────────────────────────────────────────
+
+// Region records where a screen drew something, under a name. It is the same idea as the hit
+// map — the screen says what it did as it does it — for a reader that is not the mouse: the
+// website's exporter, which needs the conversation's rectangle and the draft's without
+// recomputing a layout it would then have to keep in step by hand.
+//
+// Nothing in the application reads these, and drawing is not allowed to depend on them.
+func (c *Canvas) Region(name string, r Rect) {
+	if c.regions == nil {
+		c.regions = map[string]Rect{}
+	}
+	c.regions[name] = r
+}
+
+// RegionOf is where the last frame drew that region, and whether it drew it at all.
+func (c *Canvas) RegionOf(name string) (Rect, bool) {
+	r, ok := c.regions[name]
+	return r, ok
+}
+
+// SpansIn is a rectangle of the canvas as rows of spans, runs of one style merged. A cell
+// nobody painted comes back as a space in the zero style, which is what it looks like.
+//
+// The second half of a two-cell character is dropped rather than written as a blank: the
+// caller is laying these out as text, where the character takes both cells by itself.
+func (c *Canvas) SpansIn(r Rect) [][]Span {
+	out := make([][]Span, 0, max(0, r.H))
+	for y := r.Y; y < r.Y+r.H; y++ {
+		var row []Span
+		if y < 0 || y >= c.H {
+			out = append(out, row)
+			continue
+		}
+		var run strings.Builder
+		cur := Style{}
+		flush := func() {
+			if run.Len() > 0 {
+				row = append(row, Span{Text: run.String(), St: cur})
+				run.Reset()
+			}
+		}
+		for x := r.X; x < r.X+r.W; x++ {
+			if x < 0 || x >= c.W {
+				continue
+			}
+			cl := c.cells[y][x]
+			if cl.wide {
+				continue
+			}
+			if cl.st != cur {
+				flush()
+				cur = cl.st
+			}
+			if cl.r == 0 {
+				run.WriteRune(' ')
+			} else {
+				run.WriteRune(cl.r)
+			}
+		}
+		flush()
+		out = append(out, row)
+	}
+	return out
+}

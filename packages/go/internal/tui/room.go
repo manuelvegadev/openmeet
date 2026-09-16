@@ -189,6 +189,7 @@ func DrawRoom(c *Canvas, s RoomState) {
 	bottom := c.H - 1
 
 	drawRoomHeader(c, inner, s)
+	c.Region("header", Rect{inner.X, inner.Y, inner.W, 1})
 	Rule(c, inner.Y+1, false, dividerX)
 	// The divider: the chat pane's right border, from under the rule to the bottom edge.
 	for y := inner.Y + 2; y < bottom; y++ {
@@ -199,7 +200,9 @@ func DrawRoom(c *Canvas, s RoomState) {
 
 	panes := Rect{inner.X, inner.Y + 2, chatW, bottom - (inner.Y + 2)}
 	drawChat(c, panes, dividerX, s)
-	drawPeople(c, Rect{peopleX, panes.Y, ParticipantsWidth, panes.H}, dividerX, s)
+	people := Rect{peopleX, panes.Y, ParticipantsWidth, panes.H}
+	c.Region("people", people)
+	drawPeople(c, people, dividerX, s)
 
 	if s.Error != "" {
 		// Ink put it under the panes; with the panes reaching the edge it lands on the last
@@ -326,6 +329,9 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	// composer, not to the last thing anybody said, and with the log running right up to it
 	// they read as one block.
 	logRows := max(1, noticeY-pane.Y-1)
+	// The notice row and the composer under it, as one: they move together and they are the
+	// part of the pane that is not the conversation.
+	c.Region("composer", Rect{textX, noticeY, textW, pane.Y + pane.H - noticeY})
 
 	// The log: blocks up to the anchor, bottom-aligned, the newest at the bottom. A block is
 	// a bubble, a file or an event (bubbles.go); it is laid out whole and never split, so a
@@ -358,6 +364,9 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 		lines = lines[len(lines)-logRows:]
 	}
 	logArea := Rect{textX, pane.Y, textW, logRows}
+	// Where the conversation is, for the website's exporter: it stacks the blocks itself, so
+	// it needs the rectangle they are stacked in rather than the rows already stacked.
+	c.Region("log", logArea)
 	c.Hot(logArea, Action{Kind: ActScroll, ID: "chat"})
 	c.Hot(logArea, Action{Kind: ActText, ID: "chat"})
 	// One row of air above the notice. The log is bottom-aligned, so this is what actually
@@ -448,6 +457,7 @@ func drawChat(c *Canvas, pane Rect, dividerX int, s RoomState) {
 	// The draft is text too, and its own selectable region: a click in it moves the caret,
 	// a drag selects, and what is selected is replaced by the next thing typed or pasted.
 	c.Hot(Rect{textX + 4, inputTop, draftW, shown}, Action{Kind: ActText, ID: "input"})
+	c.Region("draft", Rect{textX + 4, inputTop, draftW, shown})
 	placeholder := ""
 	if s.Draft == "" {
 		placeholder = "Type message..."
